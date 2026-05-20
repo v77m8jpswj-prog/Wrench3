@@ -432,4 +432,28 @@ def make_brain_router(db, get_user):
         doc.pop("_id", None)
         return doc
 
+    @router.post("/cases/search")
+    async def cases_search_for_voice(body: Dict[str, Any], user=Depends(get_user)):
+        """Wrench's voice tool uses this — same as /brain/ask but scoped to user's shop, no bearer token needed."""
+        shop_id = user.get("shop_id") or DEFAULT_SHOP_ID
+        symptom = body.get("symptom") or ""
+        vehicle = body.get("vehicle") or {
+            "year": body.get("year",""), "make": body.get("make",""),
+            "model": body.get("model",""), "engine": body.get("engine",""),
+        }
+        dtc = body.get("dtc_codes") or []
+        query_text = "\n".join([
+            f"{vehicle.get('year','')} {vehicle.get('make','')} {vehicle.get('model','')} {vehicle.get('engine','')}".strip(),
+            f"SYMPTOM: {symptom}",
+            f"DTC: {', '.join(dtc)}",
+        ])
+        q_emb = await embed_text(query_text)
+        all_cases = await db.brain_cases.find({"shop_id": shop_id}, {"_id": 0}).to_list(20000)
+        scored = [(cosine(q_emb, c.get("embedding") or []), c) for c in all_cases if c.get("embedding")]
+        scored.sort(key=lambda x: x[0], reverse=True)
+        k = max(1, min(5, body.get("k", 3)))
+        matches = [case_doc_to_match(c, s) for s, c in scored[:k] if s > 0.2]
+        conf = "empty" if not matches else "high" if matches[0].similarity >= 0.78 else "medium" if matches[0].similarity >= 0.55 else "low"
+        return {"matches": [m.model_dump() for m in matches], "confidence": conf, "total_cases_in_brain": len(all_cases)}
+
     return router

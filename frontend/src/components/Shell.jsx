@@ -1,12 +1,13 @@
 import React, { useEffect, useState } from "react";
 import { NavLink, useNavigate, useLocation } from "react-router-dom";
-import { MessageSquare, Grid3x3, BookOpen, Truck, Activity, Brain, Settings as Cog, LogOut, Wrench, Menu, X, Phone, KeyRound, FolderArchive } from "lucide-react";
+import { MessageSquare, Grid3x3, BookOpen, Truck, Activity, Brain, Settings as Cog, LogOut, Wrench, Menu, X, Phone, KeyRound, FolderArchive, Users } from "lucide-react";
 import { clearToken } from "@/api";
 import { useApp } from "@/AppContext";
 
 const NAV = [
   { to: "/call", icon: Phone, label: "CALL", id: "nav-call" },
   { to: "/", icon: MessageSquare, label: "CHAT", id: "nav-chat" },
+  { to: "/team", icon: Users, label: "TEAM", id: "nav-team" },
   { to: "/cases", icon: FolderArchive, label: "CASES", id: "nav-cases" },
   { to: "/charts", icon: Grid3x3, label: "CHARTS", id: "nav-charts" },
   { to: "/library", icon: BookOpen, label: "LIBRARY", id: "nav-library" },

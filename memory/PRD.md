@@ -54,7 +54,9 @@
 - [x] **Cases brain (RAG over closed repairs)** — new `brain_cases` Mongo collection. Vehicle + symptom + DTC + root cause + repair + parts + outcome + photos. Embedded via OpenAI `text-embedding-3-small` (1536-dim, Doc's OpenAI key). Cosine sim in-memory.
 - [x] **Cases UI** — `/cases` page with full CRUD, outcome badges. "SAVE AS CASE" button on chat sessions auto-drafts a case from the conversation.
 - [x] **External brain API** (bearer-token gated, multi-tenant from day 1): `/api/brain/ask`, `/api/brain/learn`, `/api/brain/stats`, `/api/brain/feedback`
-- [x] **Cross-project reply letter** drafted for Dr. Underhood Live Assist agent (Robert's iOS app) → `/app/memory/REPLY_TO_DR_UNDERHOOD_AGENT.md`
+- [x] **Team Chat (intra-shop messaging)** — `/team` sidebar tab. `#SHOP` channel for everyone + DMs between any two techs. Auto-poll every 8s. Per-thread unread badges. "ABSORB → BRAIN" button ingests last 50 messages as a searchable case so future Wrench answers can recall shop conversations.
+- [x] **Voice-call brain tool** — `find_similar_cases` tool registered in the OpenAI Realtime API tool list. When Doc says "have I fixed this before?" on a hands-free voice call, Wrench hits `/api/cases/search` and reads the top match aloud + drops a copy-able note with the full details (vehicle, root cause, repair, parts).
+- [x] **Cross-project reply letter** drafted for Dr. Underhood Live Assist agent → `/app/memory/REPLY_TO_DR_UNDERHOOD_AGENT.md` (clean, no boxes, one-finger thumb-copy)
 
 ## Phase 2.5 — Backlog
 - **P0** Outlook 365 + Gmail OAuth for shop email

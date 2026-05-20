@@ -1106,6 +1106,7 @@ async def realtime_session(user=Depends(get_user)):
         "• When Doc adds info about the current truck ('add headers to mods', 'note it's on E85'), CALL update_active_vehicle.\n"
         "• When Doc asks about something in his library/books/manuals, CALL search_library FIRST before answering from memory.\n"
         "• When Doc asks 'what's my login for [site]' or 'pull up the password for X' or 'log into X for me', CALL lookup_credentials with the site name.\n"
+        "• When Doc describes a problem and asks 'has the shop seen this before' / 'have I fixed this before' / 'check my cases' / 'pull up similar repairs', CALL find_similar_cases with the symptom and vehicle. Then read the top match out loud (year/make/model, root cause, what we did).\n"
         "• ALWAYS confirm tool actions out loud after calling. Doc has greasy hands and can't always look at the screen.\n"
         "• Be proactive — if you mention a part number, send it as a note. If you mention a manual section, send the link.\n"
         "\n\nINTERRUPT / SHUT-UP RULES (CRITICAL):\n"
@@ -1262,6 +1263,23 @@ async def realtime_session(user=Depends(get_user)):
                         "required": ["site"],
                     },
                 },
+                {
+                    "type": "function",
+                    "name": "find_similar_cases",
+                    "description": "Search the shop's BRAIN for past repairs that match the current symptom + vehicle. Returns the top 1-3 most similar closed cases with vehicle, root cause, repair done, parts used, and outcome. Use whenever Doc says 'have I fixed this before', 'check the brain', 'what did we do last time on a ...', or any time you'd guess at a fix — the brain has Doc's actual repair history. ALSO send a note with the matches so Doc can read details.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "symptom": {"type": "string", "description": "Customer's complaint or DTC description (e.g. 'rough idle when cold smells like fuel')"},
+                            "year": {"type": "string", "description": "Vehicle year"},
+                            "make": {"type": "string", "description": "Vehicle make"},
+                            "model": {"type": "string", "description": "Vehicle model"},
+                            "engine": {"type": "string", "description": "Engine (e.g. '5.3L L83')"},
+                            "dtc_codes": {"type": "array", "items": {"type": "string"}, "description": "OBD-II codes if known (e.g. ['P0300'])"},
+                        },
+                        "required": ["symptom"],
+                    },
+                },
             ],
             "tool_choice": "auto",
         }
@@ -1346,9 +1364,12 @@ async def techs_delete(tech_id: str, owner=Depends(require_owner)):
 
 
 # ============ Brain router (RAG cases / cross-project integration) ============
-from brain import make_brain_router  # noqa: E402
+from brain import make_brain_router, embed_text as _brain_embed, case_text_blob as _brain_case_blob  # noqa: E402
+from team_chat import make_team_chat_router  # noqa: E402
 brain_router = make_brain_router(db, get_user)
 api.include_router(brain_router)
+team_chat_router = make_team_chat_router(db, get_user, embed_text=_brain_embed, case_text_blob=_brain_case_blob)
+api.include_router(team_chat_router)
 
 
 # ============ Register router ============

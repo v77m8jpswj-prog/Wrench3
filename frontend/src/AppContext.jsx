@@ -204,6 +204,35 @@ export function AppProvider({ children }) {
         });
         transcriptNote = `✓ CHART EDITED → ${r.data.changed_cells?.length || 0} cells changed · note sent`;
         output = { ok: true, changed_cells: r.data.changed_cells?.length || 0, notes: r.data.notes };
+      } else if (name === "find_similar_cases") {
+        const r = await api.post("/cases/search", {
+          symptom: args.symptom || "",
+          year: args.year || "", make: args.make || "", model: args.model || "", engine: args.engine || "",
+          dtc_codes: args.dtc_codes || [],
+          k: 3,
+        });
+        const matches = r.data?.matches || [];
+        const conf = r.data?.confidence || "empty";
+        if (matches.length === 0) {
+          transcriptNote = `✗ NO SIMILAR CASES IN BRAIN (${r.data?.total_cases_in_brain || 0} total)`;
+          output = { ok: true, matches: [], confidence: "empty", message: "Brain has no similar cases yet. This is a new one for the shop." };
+        } else {
+          // Send a note so Doc can read details
+          const body = matches.map((m, i) =>
+            `${i+1}. ${m.vehicle_summary} (${(m.similarity*100).toFixed(0)}% match, outcome: ${m.outcome})\n` +
+            `   SYMPTOM: ${m.symptom}\n` +
+            `   CAUSE: ${m.root_cause}\n` +
+            `   REPAIR: ${m.repair_summary}\n` +
+            (m.parts?.length ? `   PARTS: ${m.parts.join(", ")}\n` : "") +
+            (m.technician ? `   BY: ${m.technician}\n` : "")
+          ).join("\n");
+          addArtifact({ type: "note", title: `Brain match (${conf})`, body });
+          transcriptNote = `✓ BRAIN → ${matches.length} match${matches.length>1?"es":""} · top: ${(matches[0].similarity*100).toFixed(0)}% · ${matches[0].root_cause.slice(0,60)}`;
+          output = { ok: true, confidence: conf, matches: matches.slice(0, 3).map(m => ({
+            vehicle: m.vehicle_summary, similarity: m.similarity, symptom: m.symptom,
+            root_cause: m.root_cause, repair: m.repair_summary, parts: m.parts, outcome: m.outcome,
+          })) };
+        }
       } else if (name === "lookup_credentials") {
         const r = await api.get(`/credentials/lookup?q=${encodeURIComponent(args.site || "")}`);
         const matches = r.data?.matches || [];

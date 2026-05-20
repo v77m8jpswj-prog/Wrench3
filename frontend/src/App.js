@@ -13,6 +13,7 @@ import Datalog from "@/pages/Datalog";
 import Memory from "@/pages/Memory";
 import Vault from "@/pages/Vault";
 import Cases from "@/pages/Cases";
+import TeamChat from "@/pages/TeamChat";
 import Settings from "@/pages/Settings";
 import Shell from "@/components/Shell";
 
@@ -51,6 +52,7 @@ function App() {
                 <Route path="/memory" element={<Protected><Memory /></Protected>} />
                 <Route path="/vault" element={<Protected><Vault /></Protected>} />
                 <Route path="/cases" element={<Protected><Cases /></Protected>} />
+                <Route path="/team" element={<Protected><TeamChat /></Protected>} />
                 <Route path="/settings" element={<Protected><Settings /></Protected>} />
                 <Route path="*" element={<Navigate to="/" />} />
               </Routes>
