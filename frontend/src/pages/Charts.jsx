@@ -70,13 +70,18 @@ export default function Charts() {
         fd.append("instruction", instruction);
         fd.append("table_label", label);
         if (vehicleId) fd.append("vehicle_id", vehicleId);
-        r = await api.post("/chart/edit-image", fd, { headers: { "Content-Type": "multipart/form-data" }});
+        r = await api.post("/chart/edit-image", fd, { headers: { "Content-Type": "multipart/form-data" }, timeout: 90000 });
+      } else if (mode === "text" && tableText.trim()) {
+        r = await api.post("/chart/edit", { table_text: tableText, instruction, table_label: label }, { timeout: 90000 });
       } else {
-        r = await api.post("/chart/edit", { table_text: tableText, instruction, table_label: label });
+        throw new Error(mode === "image" ? "Upload or paste an image first." : "Paste a table first.");
       }
+      if (!r?.data?.modified_grid) throw new Error("Empty response from server.");
       setResult(r.data);
     } catch (e) {
-      setErr(e?.response?.data?.detail || e.message);
+      console.error("Chart edit failed:", e);
+      const detail = e?.response?.data?.detail || e?.message || "Unknown error — check browser console.";
+      setErr(typeof detail === "string" ? detail : JSON.stringify(detail));
     } finally { setBusy(false); }
   };
 

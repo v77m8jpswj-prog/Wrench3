@@ -668,6 +668,54 @@ async def lib_delete(item_id: str, user=Depends(get_user)):
 
 
 # ============ Vehicles ============
+@api.get("/vin/decode/{vin}")
+async def vin_decode(vin: str, user=Depends(get_user)):
+    """Decode a VIN using NHTSA's free public API. Returns year/make/model/engine info."""
+    vin = (vin or "").strip().upper()
+    if len(vin) < 11:  # accept partial VINs too
+        raise HTTPException(400, f"VIN too short ({len(vin)}). Need at least 11 characters.")
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.get(f"https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVin/{vin}?format=json")
+        if r.status_code != 200:
+            raise HTTPException(502, f"NHTSA: {r.status_code}")
+        data = r.json()
+        # NHTSA returns a flat Results list of {Variable, Value, ...}
+        flat = {item.get("Variable", ""): (item.get("Value") or "") for item in data.get("Results", [])}
+        def g(k):
+            v = flat.get(k, "")
+            return (v or "").strip()
+        out = {
+            "vin": vin,
+            "year": g("Model Year"),
+            "make": g("Make"),
+            "model": g("Model"),
+            "trim": g("Trim"),
+            "body": g("Body Class"),
+            "engine_cyl": g("Engine Number of Cylinders"),
+            "engine_displacement_l": g("Displacement (L)"),
+            "engine_config": g("Engine Configuration"),
+            "fuel": g("Fuel Type - Primary"),
+            "transmission": g("Transmission Style"),
+            "drive": g("Drive Type"),
+            "manufacturer": g("Manufacturer Name"),
+            "plant_country": g("Plant Country"),
+            "error_text": g("Error Text"),
+        }
+        # Build a nice "engine" summary string
+        cyl = out["engine_cyl"]
+        disp = out["engine_displacement_l"]
+        cfg = out["engine_config"]
+        engine_summary_parts = []
+        if disp: engine_summary_parts.append(f"{disp}L")
+        if cfg and cyl: engine_summary_parts.append(f"{cfg[0]}{cyl}" if cfg else f"{cyl}cyl")
+        elif cyl: engine_summary_parts.append(f"{cyl}cyl")
+        out["engine_summary"] = " ".join(engine_summary_parts).strip()
+        return out
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"VIN lookup failed: {e}")
+
+
 @api.post("/vehicles")
 async def vehicle_create(body: VehicleReq, user=Depends(get_user)):
     vid = str(uuid.uuid4())
