@@ -674,6 +674,20 @@ async def lib_upload(file: UploadFile = File(...), user=Depends(get_user)):
     if lower.endswith(".pdf"):
         kind = "pdf"
         text = extract_pdf(raw)
+    elif lower.endswith((".png", ".jpg", ".jpeg", ".webp", ".gif")):
+        # Image — run through GPT-5.2 vision to extract text & describe, store as searchable
+        kind = "image"
+        try:
+            img_b64 = base64.b64encode(raw).decode()
+            sys = "You are reading an image uploaded to a mechanic's knowledge base. Extract ALL visible text (part numbers, labels, callouts, table values, wire colors, torque specs, page numbers). Then describe the diagram/schematic/photo (components, connections, what the image shows). Be thorough — this is going into a searchable knowledge base for an automotive technician."
+            chat_obj = LlmChat(api_key=EMERGENT_KEY, session_id=f"img-{uuid.uuid4()}", system_message=sys).with_model("openai", "gpt-5.2")
+            text = await chat_obj.send_message(UserMessage(
+                text=f"Filename: {name}. Extract all text and describe this image for the knowledge base.",
+                file_contents=[ImageContent(image_base64=img_b64)],
+            ))
+        except Exception as e:
+            log.exception("image OCR failed")
+            text = f"[Image upload — OCR failed: {e}]"
     elif lower.endswith((".txt", ".md", ".csv", ".log")):
         kind = "text" if not lower.endswith(".csv") else "csv"
         try:
@@ -878,6 +892,70 @@ async def mem_del(fid: str, user=Depends(get_user)):
     return {"ok": True}
 
 
+# ============ Credentials Vault (logins/passwords/notes per site) ============
+class CredReq(BaseModel):
+    site: str
+    url: Optional[str] = ""
+    username: Optional[str] = ""
+    password: Optional[str] = ""
+    notes: Optional[str] = ""
+
+@api.get("/credentials")
+async def cred_list(user=Depends(get_user)):
+    cur = db.credentials.find({"user_id": user["id"]}, {"_id": 0}).sort("site", 1)
+    return await cur.to_list(500)
+
+@api.post("/credentials")
+async def cred_add(body: CredReq, user=Depends(get_user)):
+    doc = {
+        "id": str(uuid.uuid4()),
+        "user_id": user["id"],
+        "site": body.site,
+        "url": body.url or "",
+        "username": body.username or "",
+        "password": body.password or "",
+        "notes": body.notes or "",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.credentials.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+@api.put("/credentials/{cid}")
+async def cred_update(cid: str, body: CredReq, user=Depends(get_user)):
+    await db.credentials.update_one(
+        {"id": cid, "user_id": user["id"]},
+        {"$set": body.model_dump()},
+    )
+    return {"ok": True}
+
+@api.delete("/credentials/{cid}")
+async def cred_del(cid: str, user=Depends(get_user)):
+    await db.credentials.delete_one({"id": cid, "user_id": user["id"]})
+    return {"ok": True}
+
+@api.get("/credentials/lookup")
+async def cred_lookup(q: str, user=Depends(get_user)):
+    """Fuzzy match a credential by site/url."""
+    q = (q or "").lower().strip()
+    cur = db.credentials.find({"user_id": user["id"]}, {"_id": 0})
+    items = await cur.to_list(500)
+    if not q: return {"matches": items[:5]}
+    scored = []
+    for it in items:
+        hay = f"{it.get('site','')} {it.get('url','')} {it.get('notes','')}".lower()
+        score = 0
+        if q in hay: score = 100 - hay.index(q)
+        else:
+            # token overlap
+            qt = set(q.split())
+            ht = set(hay.split())
+            score = len(qt & ht) * 10
+        if score > 0: scored.append((score, it))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return {"matches": [s[1] for s in scored[:5]]}
+
+
 # ============ Settings ============
 class SettingsReq(BaseModel):
     voice: Optional[str] = None
@@ -908,11 +986,16 @@ async def realtime_session(user=Depends(get_user)):
     sys_prompt += "\n\nYOU ARE NOW IN VOICE CALL MODE. Keep replies tight — 1 to 3 sentences usually. If Doc asks for the long version, give it but pause naturally. Speak like a real mechanic on a phone call."
     sys_prompt += (
         "\n\nYOU HAVE TOOLS — USE THEM PROACTIVELY:\n"
-        "• When Doc reads a VIN out loud (e.g. '1GCPYBEH8MZ...'), CALL save_vehicle_from_vin immediately, then say out loud 'Got it — 2019 Silverado, set as active' or whatever it was.\n"
-        "• When Doc asks for a link / URL / part source / spec sheet / video / manual / web page, CALL send_link with a real URL. Then say 'Link sent to your chat tab' out loud.\n"
-        "• When Doc asks for something to copy (torque spec, part number, table, calculation, recommendation list), CALL send_note. Then say 'Sent the note over' out loud.\n"
+        "• When Doc reads a VIN out loud, CALL save_vehicle_from_vin immediately, then say 'Got it' out loud.\n"
+        "• When Doc asks for a link / URL / part source / spec sheet / video / manual / web page, CALL send_link with a real URL. NEVER, EVER spell out the URL character-by-character — Doc will lose his mind. Just CALL send_link, then say 'Link sent.'\n"
+        "• When Doc asks for something to copy (torque spec, part number, table, calculation, recommendation list), CALL send_note. Then say 'Sent the note over.'\n"
         "• When Doc says 'switch to the [other vehicle]', CALL set_active_vehicle.\n"
-        "• When Doc says 'remember' or shares a permanent shop rule / preference, CALL save_to_memory.\n"
+        "• When Doc says 'remember' or shares a permanent shop rule, CALL save_to_memory.\n"
+        "• When Doc asks 'what's in the garage', CALL list_vehicles.\n"
+        "• When Doc asks 'what truck am I on', CALL get_active_vehicle.\n"
+        "• When Doc adds info about the current truck ('add headers to mods', 'note it's on E85'), CALL update_active_vehicle.\n"
+        "• When Doc asks about something in his library/books/manuals, CALL search_library FIRST before answering from memory.\n"
+        "• When Doc asks 'what's my login for [site]' or 'pull up the password for X' or 'log into X for me', CALL lookup_credentials with the site name.\n"
         "• ALWAYS confirm tool actions out loud after calling. Doc has greasy hands and can't always look at the screen.\n"
         "• Be proactive — if you mention a part number, send it as a note. If you mention a manual section, send the link.\n"
         "\n\nINTERRUPT / SHUT-UP RULES (CRITICAL):\n"
@@ -920,6 +1003,7 @@ async def realtime_session(user=Depends(get_user)):
         "• If Doc starts talking while you are talking, STOP. Listen. Do not fight him for the floor.\n"
         "• NEVER lecture. NEVER repeat yourself. NEVER fill silence. If you've answered, shut up.\n"
         "• Keep replies under 2 sentences UNLESS Doc explicitly asks for the long version.\n"
+        "• When sending a URL via the send_link tool, just say 'Link sent.' or 'Sent the link.' — DO NOT read the URL out loud.\n"
     )
 
     body = {
@@ -1054,6 +1138,18 @@ async def realtime_session(user=Depends(get_user)):
                             "table_label": {"type": "string", "description": "What kind of table (spark / VE / MAF / AFR)"},
                         },
                         "required": ["table_text", "instruction"],
+                    },
+                },
+                {
+                    "type": "function",
+                    "name": "lookup_credentials",
+                    "description": "Look up Doc's saved login credentials for a website or service. Returns username, password, URL, and notes. Use when Doc asks 'what's my password for X', 'pull up my HP Tuners login', or 'log into X for me'. ALSO send a note to chat with the credentials so Doc can copy-paste them.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "site": {"type": "string", "description": "Site name or URL (e.g. 'HP Tuners', 'RockAuto', 'NHTSA')"},
+                        },
+                        "required": ["site"],
                     },
                 },
             ],

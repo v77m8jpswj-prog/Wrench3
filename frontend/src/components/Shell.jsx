@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { NavLink, useNavigate, useLocation } from "react-router-dom";
-import { MessageSquare, Grid3x3, BookOpen, Truck, Activity, Brain, Settings as Cog, LogOut, Wrench, Menu, X, Phone } from "lucide-react";
+import { MessageSquare, Grid3x3, BookOpen, Truck, Activity, Brain, Settings as Cog, LogOut, Wrench, Menu, X, Phone, KeyRound } from "lucide-react";
 import { clearToken } from "@/api";
 import { useApp } from "@/AppContext";
 
@@ -12,6 +12,7 @@ const NAV = [
   { to: "/datalog", icon: Activity, label: "DATALOG", id: "nav-datalog" },
   { to: "/vehicles", icon: Truck, label: "VEHICLES", id: "nav-vehicles" },
   { to: "/memory", icon: Brain, label: "MEMORY", id: "nav-memory" },
+  { to: "/vault", icon: KeyRound, label: "VAULT", id: "nav-vault" },
   { to: "/settings", icon: Cog, label: "SETTINGS", id: "nav-settings" },
 ];
 

@@ -11,6 +11,7 @@ import Library from "@/pages/Library";
 import Vehicles from "@/pages/Vehicles";
 import Datalog from "@/pages/Datalog";
 import Memory from "@/pages/Memory";
+import Vault from "@/pages/Vault";
 import Settings from "@/pages/Settings";
 import Shell from "@/components/Shell";
 
@@ -47,6 +48,7 @@ function App() {
                 <Route path="/vehicles" element={<Protected><Vehicles /></Protected>} />
                 <Route path="/datalog" element={<Protected><Datalog /></Protected>} />
                 <Route path="/memory" element={<Protected><Memory /></Protected>} />
+                <Route path="/vault" element={<Protected><Vault /></Protected>} />
                 <Route path="/settings" element={<Protected><Settings /></Protected>} />
                 <Route path="*" element={<Navigate to="/" />} />
               </Routes>

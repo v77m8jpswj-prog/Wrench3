@@ -204,6 +204,24 @@ export function AppProvider({ children }) {
         });
         transcriptNote = `✓ CHART EDITED → ${r.data.changed_cells?.length || 0} cells changed · note sent`;
         output = { ok: true, changed_cells: r.data.changed_cells?.length || 0, notes: r.data.notes };
+      } else if (name === "lookup_credentials") {
+        const r = await api.get(`/credentials/lookup?q=${encodeURIComponent(args.site || "")}`);
+        const matches = r.data?.matches || [];
+        if (matches.length === 0) {
+          transcriptNote = `✗ NO CREDENTIALS FOUND FOR "${args.site}"`;
+          output = { ok: false, error: `No saved credentials matching "${args.site}". Tell Doc to add it in the VAULT tab.` };
+        } else {
+          const top = matches[0];
+          // Send note with credentials so Doc can copy-paste
+          addArtifact({
+            type: "note",
+            title: `Login: ${top.site}`,
+            body: `URL: ${top.url || "—"}\nUsername: ${top.username || "—"}\nPassword: ${top.password || "—"}${top.notes ? "\nNotes: " + top.notes : ""}`,
+          });
+          transcriptNote = `✓ CREDENTIALS PULLED → ${top.site} · sent to chat`;
+          // Return to Wrench but redact the password in the model's view so he doesn't say it out loud
+          output = { ok: true, site: top.site, url: top.url, username: top.username, password_visible_in_chat_only: true };
+        }
       }
     } catch (e) {
       output = { ok: false, error: e?.response?.data?.detail || e?.message || String(e) };
@@ -220,6 +238,25 @@ export function AppProvider({ children }) {
       }));
       dcRef.current.send(JSON.stringify({ type: "response.create" }));
     } catch {}
+  };
+
+  // Manually halt Wrench's voice (Doc taps a button)
+  const haltWrench = () => {
+    try { if (audioElRef.current) { audioElRef.current.pause(); audioElRef.current.currentTime = 0; } } catch {}
+    try { dcRef.current?.send(JSON.stringify({ type: "response.cancel" })); } catch {}
+  };
+
+  // Auto-extract URLs from Wrench's transcript so links never get spelled out without a clickable link backup
+  const URL_RE = /\bhttps?:\/\/[^\s)"'<>]+/gi;
+  const autoExtractUrls = (txt) => {
+    const seen = new Set();
+    let m;
+    while ((m = URL_RE.exec(txt)) !== null) {
+      const url = m[0].replace(/[).,;!?]+$/, "");
+      if (seen.has(url)) continue;
+      seen.add(url);
+      addArtifact({ type: "link", url, label: url.replace(/^https?:\/\//, "").slice(0, 50) });
+    }
   };
 
   const stopTick = () => { if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; } };
@@ -346,6 +383,7 @@ export function AppProvider({ children }) {
       if (txt) {
         setCallTranscript(arr => [...arr, { who: "wrench", text: txt }]);
         appendToChatSession("assistant", txt);
+        autoExtractUrls(txt);
       }
     }
     if (t === "response.output_audio_transcript.done") {
@@ -354,6 +392,7 @@ export function AppProvider({ children }) {
       if (txt) {
         setCallTranscript(arr => [...arr, { who: "wrench", text: txt }]);
         appendToChatSession("assistant", txt);
+        autoExtractUrls(txt);
       }
     }
     if (t === "response.function_call_arguments.done") {
