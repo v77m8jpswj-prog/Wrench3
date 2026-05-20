@@ -26,11 +26,15 @@ export default function Chat() {
   const endRef = useRef(null);
   const streamRef = useRef(null);
   const inputRef = useRef(null);
+  const speechRecRef = useRef(null);
+
+  // Detect Web Speech API (Safari/Chrome both support webkit prefix on iOS)
+  const SR = (typeof window !== "undefined") && (window.SpeechRecognition || window.webkitSpeechRecognition);
+  const hasNativeSpeech = !!SR;
 
   useEffect(() => {
     api.get("/vehicles").then(r => setVehicles(r.data || [])).catch(()=>{});
     refreshSessions();
-    // Auto-focus text input so Doc can type immediately
     setTimeout(() => inputRef.current?.focus(), 300);
   }, []);
 
@@ -104,8 +108,79 @@ export default function Chat() {
     return ""; // let browser pick
   };
 
-  const startRecord = async () => {
+  const startRecord = () => {
+    // Reset error state
     setMicError(""); setShowMicHelp(false);
+
+    // Primary path: native Web Speech API (Safari/Chrome on iOS, Chrome on desktop/Android)
+    // This is dramatically more reliable on iOS than MediaRecorder+Whisper
+    if (hasNativeSpeech) {
+      return startNativeSpeech();
+    }
+    // Fallback: MediaRecorder + server-side Whisper
+    return startMediaRecorder();
+  };
+
+  const startNativeSpeech = () => {
+    try {
+      const rec = new SR();
+      rec.lang = "en-US";
+      rec.interimResults = true;
+      rec.continuous = false;
+      rec.maxAlternatives = 1;
+
+      let finalText = "";
+      rec.onstart = () => {
+        setRecording(true);
+        setStatus("LISTENING", "#FF5722");
+      };
+      rec.onresult = (event) => {
+        let interim = "";
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const r = event.results[i];
+          if (r.isFinal) finalText += r[0].transcript;
+          else interim += r[0].transcript;
+        }
+        // Show live interim text in the input box
+        setInput((finalText + interim).trim());
+      };
+      rec.onerror = (e) => {
+        setRecording(false);
+        setStatus("IDLE", "#52525B");
+        const err = e?.error || "unknown";
+        if (err === "not-allowed" || err === "service-not-allowed" || err === "permission-denied") {
+          setMicError("Mic permission denied by browser.");
+          setShowMicHelp(true);
+        } else if (err === "no-speech") {
+          setMicError("Didn't catch anything — try again, talk closer to the phone.");
+        } else if (err === "audio-capture") {
+          setMicError("Can't capture audio. Plug in headphones or check your mic.");
+        } else if (err === "aborted") {
+          // user cancelled — no error
+        } else {
+          setMicError(`Voice error: ${err}`);
+        }
+      };
+      rec.onend = () => {
+        setRecording(false);
+        setStatus("IDLE", "#52525B");
+        const text = finalText.trim();
+        if (text) {
+          setInput("");
+          send(text);
+        }
+      };
+
+      speechRecRef.current = rec;
+      rec.start();
+    } catch (e) {
+      setMicError(`Voice failed to start: ${e?.message || e?.name || "unknown"}`);
+      setShowMicHelp(true);
+      setRecording(false);
+    }
+  };
+
+  const startMediaRecorder = async () => {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       setMicError("This browser can't access the mic.");
       setShowMicHelp(true);
@@ -149,18 +224,26 @@ export default function Chat() {
       setStatus("LISTENING", "#FF5722");
     } catch (e) {
       const msg = (e && e.name) || "";
+      const detail = e?.message || msg || "unknown";
       if (msg === "NotAllowedError" || msg === "PermissionDeniedError") {
-        setMicError("Mic permission is BLOCKED.");
+        setMicError(`Mic BLOCKED [${msg}]`);
         setShowMicHelp(true);
       } else if (msg === "NotFoundError") {
-        setMicError("No microphone found on this device.");
+        setMicError(`No mic found [${msg}]`);
       } else {
-        setMicError("Mic error: " + (e?.message || msg || "unknown"));
+        setMicError(`Mic error [${msg || "unknown"}]: ${detail}`);
+        setShowMicHelp(true);
       }
     }
   };
 
   const stopRecord = () => {
+    // Stop native speech recognition if active
+    if (speechRecRef.current) {
+      try { speechRecRef.current.stop(); } catch {}
+      speechRecRef.current = null;
+    }
+    // Stop MediaRecorder if active
     try {
       if (recRef.current && recRef.current.state !== "inactive") recRef.current.stop();
     } catch {}
