@@ -27,6 +27,25 @@ export default function Chat() {
   const streamRef = useRef(null);
   const inputRef = useRef(null);
   const speechRecRef = useRef(null);
+  const audioElRef = useRef(null);
+  const audioUnlockedRef = useRef(false);
+
+  // Unlock iOS audio playback — must be called inside a user gesture
+  const unlockAudio = () => {
+    if (audioUnlockedRef.current) return;
+    try {
+      const el = audioElRef.current;
+      if (!el) return;
+      el.muted = true;
+      const p = el.play();
+      if (p && p.then) {
+        p.then(() => { el.pause(); el.currentTime = 0; el.muted = false; audioUnlockedRef.current = true; })
+         .catch(() => { /* will retry on next gesture */ });
+      } else {
+        el.pause(); el.muted = false; audioUnlockedRef.current = true;
+      }
+    } catch {}
+  };
 
   // Detect Web Speech API (Safari/Chrome both support webkit prefix on iOS)
   const SR = (typeof window !== "undefined") && (window.SpeechRecognition || window.webkitSpeechRecognition);
@@ -52,6 +71,7 @@ export default function Chat() {
   const newSession = () => { setSessionId(null); setMessages([]); setShowOptions(false); };
 
   const send = async (text) => {
+    unlockAudio();
     const t = (text ?? input).trim();
     if (!t) return;
     setInput("");
@@ -80,22 +100,33 @@ export default function Chat() {
       if (!res.ok) throw new Error("tts failed");
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
-      if (audioRef.current) { audioRef.current.pause(); }
-      const a = new Audio(url);
-      audioRef.current = a;
-      a.onended = () => { setSpeaking(false); setStatus("IDLE", "#52525B"); };
-      a.onerror = () => { setSpeaking(false); setStatus("IDLE", "#52525B"); };
-      try { await a.play(); } catch (e) {
-        // iOS requires user gesture; user can tap the speak-again button
-        setSpeaking(false); setStatus("IDLE", "#52525B");
+      const el = audioElRef.current;
+      if (!el) { setSpeaking(false); setStatus("IDLE", "#52525B"); return; }
+      try { el.pause(); el.currentTime = 0; } catch {}
+      el.src = url;
+      el.onended = () => { setSpeaking(false); setStatus("IDLE", "#52525B"); };
+      el.onerror = () => { setSpeaking(false); setStatus("IDLE", "#52525B"); };
+      try {
+        await el.play();
+      } catch (e) {
+        // iOS may still block — surface a "tap to play" button via status
+        setSpeaking(false); setStatus("TAP TO HEAR", "#FFC107");
       }
     } catch {
       setSpeaking(false); setStatus("IDLE", "#52525B");
     }
   };
 
+  const playLast = () => {
+    const el = audioElRef.current;
+    if (el && el.src) {
+      try { el.play(); setSpeaking(true); setStatus("SPEAKING", "#FFC107"); } catch {}
+    }
+  };
+
   const stopSpeak = () => {
-    if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
+    const el = audioElRef.current;
+    if (el) { try { el.pause(); } catch {} }
     setSpeaking(false); setStatus("IDLE", "#52525B");
   };
 
@@ -109,6 +140,7 @@ export default function Chat() {
   };
 
   const startRecord = () => {
+    unlockAudio();
     // Reset error state
     setMicError(""); setShowMicHelp(false);
 
@@ -254,6 +286,8 @@ export default function Chat() {
 
   return (
     <div className="flex h-full flex-col" style={{minHeight:"calc(100dvh - 90px)"}}>
+      {/* Hidden audio element for TTS playback — must be in DOM for iOS to allow play() */}
+      <audio ref={audioElRef} playsInline preload="auto" data-testid="tts-audio" />
       {/* Desktop-only header */}
       <div className="hidden md:flex border-b border-line px-6 py-3 items-center justify-between bg-bg-2" data-testid="chat-header">
         <div className="flex items-center gap-3">
@@ -362,7 +396,12 @@ export default function Chat() {
         </div>
         <div className="mt-1.5 text-[10px] text-ink-3 uppercase tracking-[0.15em] flex justify-between">
           <span>{recording ? "● RECORDING — tap mic to stop" : speaking ? "● SPEAKING — tap to halt" : "READY"}</span>
-          {speaking && <button onClick={stopSpeak} className="text-rust">HALT VOICE</button>}
+          <div className="flex items-center gap-3">
+            {audioElRef.current && audioElRef.current.src && !speaking && (
+              <button onClick={playLast} className="text-amber2 hover:text-rust" data-testid="replay-voice">▶ HEAR LAST</button>
+            )}
+            {speaking && <button onClick={stopSpeak} className="text-rust">HALT VOICE</button>}
+          </div>
         </div>
       </div>
 
