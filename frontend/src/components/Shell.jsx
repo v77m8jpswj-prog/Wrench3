@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { NavLink, useNavigate, useLocation } from "react-router-dom";
 import { MessageSquare, Grid3x3, BookOpen, Truck, Activity, Brain, Settings as Cog, LogOut, Wrench, Menu, X, Phone } from "lucide-react";
 import { clearToken } from "@/api";
+import { useApp } from "@/AppContext";
 
 const NAV = [
   { to: "/call", icon: Phone, label: "CALL", id: "nav-call" },
@@ -17,6 +18,7 @@ const NAV = [
 export default function Shell({ user, setUser, children }) {
   const nav = useNavigate();
   const loc = useLocation();
+  const app = useApp();
   const [status, setStatus] = useState({ label: "IDLE", color: "#52525B" });
   const [libCount, setLibCount] = useState(0);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -159,7 +161,11 @@ export default function Shell({ user, setUser, children }) {
         )}
 
         {/* Main */}
-        <main className="flex-1 overflow-auto relative z-10 min-w-0">{children}</main>
+        <main className="flex-1 overflow-auto relative z-10 min-w-0">
+          {/* Persistent context bar — active vehicle + active call */}
+          <ContextBar app={app} />
+          {children}
+        </main>
       </div>
 
       {/* Status bar */}
@@ -175,6 +181,58 @@ export default function Shell({ user, setUser, children }) {
           <span className="text-rust animate-blink">●</span>
         </div>
       </footer>
+    </div>
+  );
+}
+
+function ContextBar({ app }) {
+  const nav = useNavigate();
+  if (!app) return null;
+  const { vehicles, activeVehicleId, setActiveVehicleId, activeVehicle, callState, callSeconds } = app;
+  const onCall = callState === "connected" || callState === "connecting";
+  if (vehicles.length === 0 && !onCall) return null;
+  const mm = String(Math.floor(callSeconds / 60)).padStart(2, "0");
+  const ss = String(callSeconds % 60).padStart(2, "0");
+  return (
+    <div className="border-b border-line bg-bg-2 px-3 md:px-4 py-2 flex items-center justify-between flex-wrap gap-2" data-testid="context-bar">
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-[10px] uppercase tracking-widest text-ink-3">ACTIVE VEHICLE:</span>
+        {vehicles.length === 0 ? (
+          <button onClick={()=>nav("/vehicles")} className="text-[11px] text-rust uppercase tracking-widest underline">ADD ONE →</button>
+        ) : (
+          <>
+            <select
+              data-testid="active-vehicle-select"
+              value={activeVehicleId}
+              onChange={e=>setActiveVehicleId(e.target.value)}
+              className="bg-bg-1 border border-line text-white text-xs px-2 py-1 font-mono focus:border-rust outline-none"
+            >
+              <option value="">— NONE —</option>
+              {vehicles.map(v => (
+                <option key={v.id} value={v.id}>
+                  {[v.year, v.make, v.model].filter(Boolean).join(" ") || v.id.slice(0,8)}
+                </option>
+              ))}
+            </select>
+            {activeVehicle && activeVehicle.engine && (
+              <span className="text-[10px] text-amber2 uppercase tracking-widest hidden md:inline">{activeVehicle.engine}</span>
+            )}
+            {activeVehicle && activeVehicle.mods && (
+              <span className="text-[10px] text-ink-3 uppercase tracking-widest truncate max-w-[300px] hidden lg:inline">MODS: {activeVehicle.mods}</span>
+            )}
+            <button onClick={()=>nav("/vehicles")} className="text-[10px] text-ink-3 uppercase tracking-widest underline hover:text-rust">EDIT</button>
+          </>
+        )}
+      </div>
+      {onCall && (
+        <button
+          onClick={()=>nav("/call")}
+          data-testid="active-call-pill"
+          className="flex items-center gap-2 bg-rust text-black px-3 py-1 text-[11px] uppercase tracking-widest font-bold animate-pulseRust"
+        >
+          <Phone size={12}/> ON CALL · {mm}:{ss}
+        </button>
+      )}
     </div>
   );
 }

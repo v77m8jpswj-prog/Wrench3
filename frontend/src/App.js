@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, Link, useLocation } from "react-router-dom";
 import "@/App.css";
 import api, { setToken, getToken, clearToken } from "@/api";
+import { AppProvider } from "@/AppContext";
 import Login from "@/pages/Login";
 import Chat from "@/pages/Chat";
 import Call from "@/pages/Call";
@@ -36,15 +37,21 @@ function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<Login />} />
-          <Route path="/" element={<Protected><Chat /></Protected>} />
-          <Route path="/call" element={<Protected><Call /></Protected>} />
-          <Route path="/charts" element={<Protected><Charts /></Protected>} />
-          <Route path="/library" element={<Protected><Library /></Protected>} />
-          <Route path="/vehicles" element={<Protected><Vehicles /></Protected>} />
-          <Route path="/datalog" element={<Protected><Datalog /></Protected>} />
-          <Route path="/memory" element={<Protected><Memory /></Protected>} />
-          <Route path="/settings" element={<Protected><Settings /></Protected>} />
-          <Route path="*" element={<Navigate to="/" />} />
+          <Route path="/*" element={
+            <AppProvider>
+              <Routes>
+                <Route path="/" element={<Protected><Chat /></Protected>} />
+                <Route path="/call" element={<Protected><Call /></Protected>} />
+                <Route path="/charts" element={<Protected><Charts /></Protected>} />
+                <Route path="/library" element={<Protected><Library /></Protected>} />
+                <Route path="/vehicles" element={<Protected><Vehicles /></Protected>} />
+                <Route path="/datalog" element={<Protected><Datalog /></Protected>} />
+                <Route path="/memory" element={<Protected><Memory /></Protected>} />
+                <Route path="/settings" element={<Protected><Settings /></Protected>} />
+                <Route path="*" element={<Navigate to="/" />} />
+              </Routes>
+            </AppProvider>
+          } />
         </Routes>
       </BrowserRouter>
     </div>

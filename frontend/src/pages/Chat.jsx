@@ -1,16 +1,18 @@
 import React, { useState, useRef, useEffect } from "react";
-import { Mic, Send, Volume2, VolumeX, ChevronRight, Square, History, Settings2, X } from "lucide-react";
+import { Mic, Send, Volume2, VolumeX, ChevronRight, Square, History, Settings2, X, Paperclip } from "lucide-react";
 import api, { API, getToken } from "@/api";
+import { useApp } from "@/AppContext";
 
 const setStatus = (label, color) => window.dispatchEvent(new CustomEvent("wrench-status", { detail: { label, color } }));
 
 export default function Chat() {
+  const app = useApp();
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
-  const [sessionId, setSessionId] = useState(null);
+  const [sessionId, setSessionId] = useState(() => localStorage.getItem("dw_chat_session") || null);
   const [mode, setMode] = useState("direct");
   const [voiceOn, setVoiceOn] = useState(true);
-  const [vehicleId, setVehicleId] = useState("");
+  const [vehicleId, setVehicleId] = useState(app?.activeVehicleId || "");
   const [vehicles, setVehicles] = useState([]);
   const [sessions, setSessions] = useState([]);
   const [showSessions, setShowSessions] = useState(false);
@@ -59,6 +61,27 @@ export default function Chat() {
     setTimeout(() => inputRef.current?.focus(), 300);
   }, []);
 
+  // Sync vehicle with global active vehicle
+  useEffect(() => {
+    if (app?.activeVehicleId) setVehicleId(app.activeVehicleId);
+  }, [app?.activeVehicleId]);
+
+  // Persist session id + restore messages on mount
+  useEffect(() => {
+    if (sessionId) {
+      localStorage.setItem("dw_chat_session", sessionId);
+      // load messages if we don't have them yet
+      if (messages.length === 0) {
+        api.get(`/chat/sessions/${sessionId}`).then(r => {
+          setMessages((r.data.messages || []).map(m => ({ role: m.role, content: m.content })));
+        }).catch(()=>{ localStorage.removeItem("dw_chat_session"); setSessionId(null); });
+      }
+    } else {
+      localStorage.removeItem("dw_chat_session");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId]);
+
   const refreshSessions = () => api.get("/chat/sessions").then(r => setSessions(r.data || [])).catch(()=>{});
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, thinking]);
@@ -72,29 +95,47 @@ export default function Chat() {
 
   const newSession = () => { setSessionId(null); setMessages([]); setShowOptions(false); };
 
-  const send = async (text) => {
+  const send = async (text, attachmentNote) => {
     unlockAudio();
     const t = (text ?? input).trim();
-    if (!t) return;
+    const note = attachmentNote || "";
+    const finalText = t + (note ? (t ? "\n\n" : "") + note : "");
+    if (!finalText) return;
     setInput("");
-    setMessages(m => [...m, { role: "user", content: t }]);
+    setMessages(m => [...m, { role: "user", content: finalText }]);
     setThinking(true); setStatus("THINKING", "#FF5722");
     try {
-      const r = await api.post("/chat", { message: t, session_id: sessionId, mode, vehicle_id: vehicleId || null });
+      const r = await api.post("/chat", { message: finalText, session_id: sessionId, mode, vehicle_id: vehicleId || null });
       setSessionId(r.data.session_id);
       const reply = r.data.reply || "";
       setMessages(m => [...m, { role: "assistant", content: reply, citations: r.data.citations, heat: r.data.heat_detected }]);
       refreshSessions();
       if (voiceOn || callModeRef.current) await speak(reply);
       else if (callModeRef.current) {
-        // shouldn't happen, but loop the mic regardless if call mode is on
         setTimeout(() => callModeRef.current && startNativeSpeech(), 400);
       }
     } catch (e) {
       setMessages(m => [...m, { role: "assistant", content: `[ ERROR ] ${e?.response?.data?.detail || e.message}` }]);
-      // even on error, resume listening if call mode is on
       if (callModeRef.current) setTimeout(() => callModeRef.current && startNativeSpeech(), 800);
     } finally { setThinking(false); if (!callModeRef.current) setStatus("IDLE", "#52525B"); }
+  };
+
+  const attachRef = useRef(null);
+  const onAttach = async (file) => {
+    if (!file) return;
+    try {
+      // Upload to library which auto-extracts content for the AI to reference
+      const fd = new FormData();
+      fd.append("file", file);
+      const r = await api.post("/library/upload", fd, { headers: { "Content-Type": "multipart/form-data" }, timeout: 120000 });
+      const item = r.data;
+      const note = `[ATTACHED FILE → ${item.name} · ${item.kind.toUpperCase()} · ${item.chunk_count} chunks indexed. Wrench can now reference it.]`;
+      // If empty input, just send a note saying it's attached. Otherwise let user keep typing.
+      if (!input.trim()) send("", note);
+      else setMessages(m => [...m, { role: "system", content: note }]);
+    } catch (e) {
+      alert("Attach failed: " + (e?.response?.data?.detail || e.message));
+    }
   };
 
   const speak = async (text) => {
@@ -433,6 +474,16 @@ export default function Chat() {
             className={`w-14 h-14 border-2 ${callMode ? "border-rust bg-rust text-black animate-pulseRust" : recording ? "border-rust bg-rust/10 animate-pulseRust text-rust" : "border-rust text-rust"} active:bg-rust active:text-black flex items-center justify-center flex-shrink-0`}>
             {callMode ? <Square size={20} fill="currentColor"/> : <Mic size={22}/>}
           </button>
+          <button
+            data-testid="attach-button"
+            onClick={()=>attachRef.current?.click()}
+            aria-label="Attach file"
+            className="w-14 h-14 border-2 border-line text-ink-2 hover:border-rust hover:text-rust active:bg-rust/10 flex items-center justify-center flex-shrink-0"
+            title="Attach a file (PDF, CSV, log, .hpt tune)"
+          >
+            <Paperclip size={22}/>
+          </button>
+          <input ref={attachRef} type="file" hidden accept=".pdf,.txt,.md,.csv,.log,.hpt,.hpl,.bin,.tune,.png,.jpg,.jpeg" onChange={e=>{ const f = e.target.files?.[0]; if (f) onAttach(f); e.target.value=""; }} data-testid="attach-input"/>
           <textarea
             ref={inputRef}
             data-testid="chat-input"

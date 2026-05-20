@@ -616,8 +616,17 @@ async def lib_upload(file: UploadFile = File(...), user=Depends(get_user)):
             text = raw.decode("utf-8", errors="ignore")
         except Exception:
             text = ""
+    elif lower.endswith((".hpt", ".hpl", ".bin", ".tune")):
+        # Proprietary tune binary — we can't decode the tables, but we store the file
+        # and extract any human-readable ASCII strings for context (VIN, ECU type, OS, etc.)
+        kind = "tune"
+        try:
+            # Pull readable ASCII runs (4+ chars) — often surfaces VIN, OS, calibration ID
+            strings = re.findall(rb"[\x20-\x7E]{4,}", raw)
+            text = "TUNE FILE METADATA (extracted ASCII strings):\n" + "\n".join(s.decode('utf-8', 'ignore') for s in strings[:200])
+        except Exception:
+            text = ""
     else:
-        # try utf-8 anyway
         try:
             text = raw.decode("utf-8", errors="ignore")
         except Exception:

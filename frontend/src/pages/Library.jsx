@@ -49,7 +49,7 @@ export default function Library() {
           <p className="text-ink-2 text-xs mt-1 uppercase tracking-widest">DROP MANUALS, NOTES, LOGS — WRENCH CITES THEM</p>
         </div>
         <button data-testid="upload-btn" onClick={()=>fileRef.current?.click()} className="btn-rust flex items-center gap-2"><Upload size={16}/>UPLOAD</button>
-        <input ref={fileRef} type="file" hidden accept=".pdf,.txt,.md,.csv,.log" onChange={e=>e.target.files?.[0]&&upload(e.target.files[0])} data-testid="file-input"/>
+        <input ref={fileRef} type="file" hidden accept=".pdf,.txt,.md,.csv,.log,.hpt,.hpl,.bin,.tune" onChange={e=>e.target.files?.[0]&&upload(e.target.files[0])} data-testid="file-input"/>
       </div>
 
       <div
@@ -59,9 +59,13 @@ export default function Library() {
         className="border-2 border-dashed border-line p-8 text-center mb-6 hover:border-rust transition-colors">
         <Upload size={28} className="mx-auto text-ink-3 mb-2"/>
         <div className="heading text-xl">DROP FILES HERE</div>
-        <div className="text-ink-3 text-xs uppercase tracking-widest mt-1">PDF · TXT · MD · CSV · LOG</div>
+        <div className="text-ink-3 text-xs uppercase tracking-widest mt-1">PDF · TXT · MD · CSV · LOG · <span className="text-rust">.HPT / .HPL TUNE FILES</span></div>
         {busy && <div className="text-rust mt-2 animate-blink text-xs">PROCESSING...</div>}
         {err && <div className="text-danger mt-2 text-xs">ERR: {err}</div>}
+        <div className="text-[10px] text-ink-3 uppercase tracking-widest mt-3 max-w-xl mx-auto">
+          NOTE ON .HPT: HP TUNERS' BINARY FORMAT IS PROPRIETARY · WRENCH STORES THE FILE + EXTRACTS METADATA (VIN, OS, CALIBRATION ID).<br/>
+          FOR TABLE EDITS, USE THE <span className="text-rust">CHARTS</span> TAB — SCREENSHOT OR PASTE THE SPECIFIC TABLE.
+        </div>
       </div>
 
       <div className="panel">
