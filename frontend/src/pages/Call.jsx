@@ -86,8 +86,9 @@ export default function Call() {
           "Content-Type": "application/sdp",
         },
       });
-      if (!sdpResp.ok) throw new Error(`SDP failed: ${sdpResp.status} ${await sdpResp.text()}`);
-      const answer = { type: "answer", sdp: await sdpResp.text() };
+      const sdpText = await sdpResp.text();
+      if (!sdpResp.ok) throw new Error(`SDP failed: ${sdpResp.status} ${sdpText}`);
+      const answer = { type: "answer", sdp: sdpText };
       await pc.setRemoteDescription(answer);
     } catch (e) {
       const msg = e?.response?.data?.detail || e?.message || String(e);
