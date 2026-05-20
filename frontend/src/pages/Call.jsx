@@ -86,8 +86,12 @@ export default function Call() {
           "Content-Type": "application/sdp",
         },
       });
-      const sdpText = await sdpResp.text();
+      // Clone defensively — some browsers/extensions/analytics read the body stream early
+      let sdpText = "";
+      try { sdpText = await sdpResp.clone().text(); }
+      catch { try { sdpText = await sdpResp.text(); } catch {} }
       if (!sdpResp.ok) throw new Error(`SDP failed: ${sdpResp.status} ${sdpText}`);
+      if (!sdpText) throw new Error("Empty SDP response from OpenAI");
       const answer = { type: "answer", sdp: sdpText };
       await pc.setRemoteDescription(answer);
     } catch (e) {
