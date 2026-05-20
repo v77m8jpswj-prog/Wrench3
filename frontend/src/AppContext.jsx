@@ -51,6 +51,62 @@ export function AppProvider({ children }) {
     else if (audioElRef.current) audioElRef.current.volume = Math.min(1, callVolume);
   }, [callVolume]);
 
+  // ============ Tool / Function calling — execute Wrench's tool calls ============
+  // Some Realtime events arrive as response.output_item.done with item.type === "function_call"
+  const handleFunctionCall = async (callId, name, argsJson) => {
+    let args = {};
+    try { args = JSON.parse(argsJson || "{}"); } catch { args = {}; }
+    let output = { ok: false, error: "unknown tool" };
+    try {
+      if (name === "save_vehicle_from_vin") {
+        const vin = (args.vin || "").replace(/\s/g, "").toUpperCase();
+        let decoded = {};
+        try { decoded = (await api.get(`/vin/decode/${encodeURIComponent(vin)}`)).data || {}; } catch {}
+        const payload = {
+          vin,
+          year: decoded.year || "",
+          make: decoded.make || "",
+          model: [decoded.model, decoded.trim].filter(Boolean).join(" ") || "",
+          engine: decoded.engine_summary || "",
+          mods: args.mods || "",
+          notes: args.notes || "",
+        };
+        const v = (await api.post("/vehicles", payload)).data;
+        await refreshVehicles();
+        setActiveVehicleId(v.id);
+        addArtifact({ type: "vehicle", label: `${v.year} ${v.make} ${v.model}`.trim() || vin, vehicle_id: v.id, vin });
+        output = { ok: true, vehicle: v };
+      } else if (name === "send_link") {
+        addArtifact({ type: "link", url: args.url, label: args.label || args.url });
+        output = { ok: true };
+      } else if (name === "send_note") {
+        addArtifact({ type: "note", title: args.title || "Note", body: args.body || "" });
+        output = { ok: true };
+      } else if (name === "set_active_vehicle") {
+        const q = (args.query || "").toLowerCase();
+        const match = vehicles.find(v => {
+          const s = `${v.year} ${v.make} ${v.model} ${v.engine}`.toLowerCase();
+          return s.includes(q);
+        });
+        if (match) { setActiveVehicleId(match.id); output = { ok: true, vehicle_id: match.id, label: `${match.year} ${match.make} ${match.model}` }; }
+        else output = { ok: false, error: "No matching vehicle in garage" };
+      } else if (name === "save_to_memory") {
+        await api.post("/memory", { fact: args.fact || "" });
+        output = { ok: true };
+      }
+    } catch (e) {
+      output = { ok: false, error: e?.response?.data?.detail || e?.message || String(e) };
+    }
+    // Send result back through the data channel so Wrench can continue
+    try {
+      dcRef.current.send(JSON.stringify({
+        type: "conversation.item.create",
+        item: { type: "function_call_output", call_id: callId, output: JSON.stringify(output) },
+      }));
+      dcRef.current.send(JSON.stringify({ type: "response.create" }));
+    } catch {}
+  };
+
   const stopTick = () => { if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; } };
   const tick = () => { timerRef.current = setInterval(() => setCallSeconds(s => s + 1), 1000); };
 
@@ -152,6 +208,13 @@ export function AppProvider({ children }) {
       pendingAssistantRef.current = "";
       if (txt) setCallTranscript(arr => [...arr, { who: "wrench", text: txt }]);
     }
+    // Function / tool calls from Wrench
+    if (t === "response.function_call_arguments.done") {
+      handleFunctionCall(evt.call_id, evt.name, evt.arguments);
+    }
+    if (t === "response.output_item.done" && evt.item?.type === "function_call") {
+      handleFunctionCall(evt.item.call_id, evt.item.name, evt.item.arguments);
+    }
     if (t === "error") setCallError(evt.error?.message || "Realtime error");
   };
 
@@ -198,8 +261,8 @@ export function AppProvider({ children }) {
       activeVehicleId, setActiveVehicleId, activeVehicle,
       callState, callError, callTranscript, callMuted, callSeconds, callVolume,
       setCallVolume, startCall, endCall, sendCallText, toggleCallMute,
+      callArtifacts, addArtifact, markArtifactsSeen, clearArtifact, clearAllArtifacts,
     }}>
-      {/* Persistent audio sink — lives at root so navigation never tears down the call */}
       <audio ref={audioElRef} playsInline autoPlay style={{display:"none"}} />
       {children}
     </AppCtx.Provider>

@@ -842,6 +842,16 @@ async def realtime_session(user=Depends(get_user)):
     memory_facts = [m["fact"] for m in mem_docs]
     sys_prompt = build_system_prompt(user, "direct", False, None, memory_facts, [])
     sys_prompt += "\n\nYOU ARE NOW IN VOICE CALL MODE. Keep replies tight — 1 to 3 sentences usually. If Doc asks for the long version, give it but pause naturally. Speak like a real mechanic on a phone call."
+    sys_prompt += (
+        "\n\nYOU HAVE TOOLS — USE THEM PROACTIVELY:\n"
+        "• When Doc reads a VIN out loud (e.g. '1GCPYBEH8MZ...'), CALL save_vehicle_from_vin immediately, then say out loud 'Got it — 2019 Silverado, set as active' or whatever it was.\n"
+        "• When Doc asks for a link / URL / part source / spec sheet / video / manual / web page, CALL send_link with a real URL. Then say 'Link sent to your chat tab' out loud.\n"
+        "• When Doc asks for something to copy (torque spec, part number, table, calculation, recommendation list), CALL send_note. Then say 'Sent the note over' out loud.\n"
+        "• When Doc says 'switch to the [other vehicle]', CALL set_active_vehicle.\n"
+        "• When Doc says 'remember' or shares a permanent shop rule / preference, CALL save_to_memory.\n"
+        "• ALWAYS confirm tool actions out loud after calling. Doc has greasy hands and can't always look at the screen.\n"
+        "• Be proactive — if you mention a part number, send it as a note. If you mention a manual section, send the link.\n"
+    )
 
     body = {
         "session": {
@@ -851,6 +861,73 @@ async def realtime_session(user=Depends(get_user)):
             "audio": {
                 "output": {"voice": "ash"},
             },
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "save_vehicle_from_vin",
+                    "description": "Decode a VIN using NHTSA and save it as a new vehicle in Doc's garage, then set it as the active vehicle. Use this anytime Doc reads or says a VIN out loud. Confirm what was saved out loud after calling.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "vin": {"type": "string", "description": "17-character VIN (can be partial if Doc only said part of it)"},
+                            "mods": {"type": "string", "description": "Optional: mods on this vehicle (cam, headers, injectors, tune, etc.)"},
+                            "notes": {"type": "string", "description": "Optional: any notes Doc mentioned about this vehicle"},
+                        },
+                        "required": ["vin"],
+                    },
+                },
+                {
+                    "type": "function",
+                    "name": "send_link",
+                    "description": "Send Doc a clickable link he can tap in the CHAT tab later. Use this anytime Doc asks for a URL, parts source, spec sheet, calibration ID, video, manual, etc. The link will be saved and visible in the Chat tab. Tell Doc out loud it's been sent.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "url": {"type": "string", "description": "Full URL starting with https://"},
+                            "label": {"type": "string", "description": "Short description of what the link is (e.g. 'GM L83 cam recommendations')"},
+                        },
+                        "required": ["url", "label"],
+                    },
+                },
+                {
+                    "type": "function",
+                    "name": "send_note",
+                    "description": "Send Doc a text note (torque spec, part number, table values, recommendation, calculation) he can copy from the CHAT tab. Use for anything Doc would want to reference later or copy-paste. Tell Doc out loud you sent the note.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "title": {"type": "string", "description": "Short title for the note"},
+                            "body": {"type": "string", "description": "The actual content — torque spec, part number, table, recommendation, etc. Use plain text and tab-separated grids for tables."},
+                        },
+                        "required": ["body"],
+                    },
+                },
+                {
+                    "type": "function",
+                    "name": "set_active_vehicle",
+                    "description": "Switch the active vehicle in Doc's garage by year/make/model. Use when Doc says 'switch to the Silverado' or 'work on the Camaro now' or similar.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string", "description": "Year, make, model, or any portion (e.g. 'silverado', '2019', 'camaro ss')"},
+                        },
+                        "required": ["query"],
+                    },
+                },
+                {
+                    "type": "function",
+                    "name": "save_to_memory",
+                    "description": "Pin a fact to long-term memory. Use when Doc says 'remember this' or shares a personal preference / shop rule / setup detail that should apply to future conversations.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "fact": {"type": "string", "description": "The fact to remember"},
+                        },
+                        "required": ["fact"],
+                    },
+                },
+            ],
+            "tool_choice": "auto",
         }
     }
 

@@ -85,6 +85,7 @@ export default function Shell({ user, setUser, children }) {
           <nav className="flex-1 py-3">
             {NAV.map(n => {
               const Icon = n.icon;
+              const unread = (n.to === "/" && app?.callArtifacts) ? app.callArtifacts.filter(a => !a.seen).length : 0;
               return (
                 <NavLink
                   key={n.to}
@@ -96,7 +97,10 @@ export default function Shell({ user, setUser, children }) {
                      ${isActive ? "border-rust bg-bg-3 text-white" : "border-transparent text-ink-2 hover:text-white hover:bg-bg-3"}`}
                 >
                   <Icon size={16} strokeWidth={2} />
-                  <span className="font-head font-bold">{n.label}</span>
+                  <span className="font-head font-bold flex-1">{n.label}</span>
+                  {unread > 0 && (
+                    <span className="bg-rust text-black text-[10px] font-bold px-1.5 py-0.5 leading-none">{unread}</span>
+                  )}
                 </NavLink>
               );
             })}

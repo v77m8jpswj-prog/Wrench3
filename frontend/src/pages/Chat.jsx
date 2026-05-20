@@ -17,6 +17,21 @@ export default function Chat() {
   const [sessions, setSessions] = useState([]);
   const [showSessions, setShowSessions] = useState(false);
   const [showOptions, setShowOptions] = useState(false);
+  const [copiedNoteId, setCopiedNoteId] = useState("");
+
+  // Mark artifacts as seen when chat opens
+  useEffect(() => {
+    if (app?.callArtifacts?.some(a => !a.seen)) app.markArtifactsSeen();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const copyNote = async (id, body) => {
+    try {
+      await navigator.clipboard.writeText(body);
+      setCopiedNoteId(id);
+      setTimeout(()=>setCopiedNoteId(""), 1500);
+    } catch {}
+  };
   const [recording, setRecording] = useState(false);
   const [thinking, setThinking] = useState(false);
   const [speaking, setSpeaking] = useState(false);
@@ -422,6 +437,55 @@ export default function Chat() {
 
       {/* Messages */}
       <div className="flex-1 overflow-auto" data-testid="messages-area">
+        {/* Call artifacts panel — links/notes/vehicles Wrench sent during a call */}
+        {app?.callArtifacts && app.callArtifacts.length > 0 && (
+          <div className="border-b border-line bg-bg-3 px-3 md:px-6 py-3" data-testid="artifacts-panel">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[11px] uppercase tracking-widest text-amber2 font-bold">
+                FROM WRENCH ({app.callArtifacts.length})
+              </span>
+              <button onClick={()=>app.clearAllArtifacts()} className="text-[10px] text-ink-3 hover:text-rust uppercase tracking-widest">CLEAR ALL</button>
+            </div>
+            <div className="space-y-2 max-h-[280px] overflow-auto">
+              {app.callArtifacts.map(a => (
+                <div key={a.id} className="border border-line bg-bg-1 p-2 flex items-start gap-2" data-testid={`artifact-${a.id}`}>
+                  {a.type === "link" && (
+                    <>
+                      <span className="text-rust text-xs uppercase tracking-widest font-bold w-14 flex-shrink-0 mt-0.5">LINK</span>
+                      <a href={a.url} target="_blank" rel="noopener noreferrer" className="text-amber2 underline break-all flex-1 text-sm">
+                        {a.label} <span className="text-ink-3 text-[11px]">→ {a.url}</span>
+                      </a>
+                    </>
+                  )}
+                  {a.type === "note" && (
+                    <>
+                      <span className="text-rust text-xs uppercase tracking-widest font-bold w-14 flex-shrink-0 mt-0.5">NOTE</span>
+                      <div className="flex-1 min-w-0">
+                        {a.title && <div className="font-bold text-sm">{a.title}</div>}
+                        <pre className="text-xs text-ink whitespace-pre-wrap font-mono break-words">{a.body}</pre>
+                      </div>
+                      <button onClick={()=>copyNote(a.id, a.body)} className={`btn-ghost text-xs px-2 py-1 flex-shrink-0 ${copiedNoteId===a.id?"!border-ok !text-ok":""}`}>
+                        {copiedNoteId === a.id ? "COPIED" : "COPY"}
+                      </button>
+                    </>
+                  )}
+                  {a.type === "vehicle" && (
+                    <>
+                      <span className="text-rust text-xs uppercase tracking-widest font-bold w-14 flex-shrink-0 mt-0.5">VEHICLE</span>
+                      <div className="flex-1">
+                        <div className="text-sm font-bold">{a.label}</div>
+                        {a.vin && <div className="text-[10px] text-ink-3 font-mono">VIN: {a.vin}</div>}
+                      </div>
+                      <button onClick={()=>app.setActiveVehicleId(a.vehicle_id)} className="btn-ghost text-xs px-2 py-1 flex-shrink-0">SET ACTIVE</button>
+                    </>
+                  )}
+                  <button onClick={()=>app.clearArtifact(a.id)} className="text-ink-3 hover:text-danger ml-1 flex-shrink-0"><X size={14}/></button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {messages.length === 0 ? (
           <div className="min-h-full flex flex-col items-center justify-center px-4 py-6 text-center">
             <VoiceButton callMode={callMode} recording={recording} thinking={thinking} speaking={speaking} onClick={toggleCall} />
