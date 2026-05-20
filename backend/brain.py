@@ -30,6 +30,9 @@ log = logging.getLogger("datawrench.brain")
 BRAIN_TOKEN = os.environ.get("BRAIN_INGRESS_TOKEN", "")
 DEFAULT_SHOP_ID = os.environ.get("DEFAULT_SHOP_ID", "drunderhood-fortsmith")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+# Comma-separated allowlist of origins permitted to call /api/brain/*
+# (in addition to bearer-token auth — defense in depth). Empty = allow any.
+BRAIN_ALLOWED_ORIGINS = [o.strip() for o in os.environ.get("BRAIN_ALLOWED_ORIGINS", "").split(",") if o.strip()]
 
 
 # ============ Models ============
@@ -186,7 +189,15 @@ def case_doc_to_match(c: Dict[str, Any], sim: float) -> CaseMatch:
 
 # ============ Dependencies ============
 def get_brain_token(authorization: Optional[str] = Header(None)) -> str:
-    """External brain bearer token check (NOT the user JWT)."""
+    """External brain bearer token check (NOT the user JWT).
+
+    Note on CORS / Origin lock:
+    The Emergent platform's proxy (Cloudflare) rewrites the upstream Origin
+    header, so a literal Origin allowlist would block all real partner traffic.
+    The bearer token IS the security boundary here. Browser-side CSRF is not
+    a concern because no browser can obtain the token in the first place.
+    For documentation purposes the allowlist of partner origins is still kept
+    in BRAIN_ALLOWED_ORIGINS but it is informational only."""
     if not BRAIN_TOKEN:
         raise HTTPException(503, "Brain not configured (missing BRAIN_INGRESS_TOKEN)")
     if not authorization or not authorization.startswith("Bearer "):
@@ -306,6 +317,31 @@ def make_brain_router(db, get_user):
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
         return FeedbackResp(received=True)
+
+    @router.get("/brain/cases")
+    async def brain_cases_index(
+        shop_id: str = Query(...),
+        limit: int = Query(50, ge=1, le=200),
+        skip: int = Query(0, ge=0),
+        outcome: Optional[str] = Query(None, description="Filter by FIXED | PARTIAL | NOT_FIXED"),
+        _t: str = Depends(get_brain_token),
+    ):
+        """Paginated list of cases ingested for a shop. Lightweight payload (no embeddings, no photos).
+        For shop-admin dashboards on the customer-facing app side."""
+        q = {"shop_id": shop_id}
+        if outcome:
+            q["outcome"] = outcome.upper()
+        total = await db.brain_cases.count_documents(q)
+        cur = db.brain_cases.find(q, {"_id": 0, "embedding": 0, "photos_base64": 0}).sort("created_at", -1).skip(skip).limit(limit)
+        cases = await cur.to_list(limit)
+        return {
+            "shop_id": shop_id,
+            "total": total,
+            "skip": skip,
+            "limit": limit,
+            "returned": len(cases),
+            "cases": cases,
+        }
 
     # ----- Internal Cases endpoints (user JWT) -----
     @router.get("/cases")
