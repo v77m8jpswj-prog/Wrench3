@@ -37,6 +37,35 @@ export function AppProvider({ children }) {
   const [callSeconds, setCallSeconds] = useState(0);
   const [callVolume, setCallVolume] = useState(1.5);
 
+  // Call Artifacts (links/notes/vehicles Wrench sends during a call)
+  const [callArtifacts, setCallArtifacts] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("dw_call_artifacts") || "[]"); }
+    catch { return []; }
+  });
+  const persistArtifacts = (arr) => {
+    setCallArtifacts(arr);
+    try { localStorage.setItem("dw_call_artifacts", JSON.stringify(arr.slice(0, 200))); } catch {}
+  };
+  const addArtifact = (a) => {
+    setCallArtifacts(prev => {
+      const item = { id: Date.now() + "-" + Math.random().toString(36).slice(2,8), at: new Date().toISOString(), seen: false, ...a };
+      const next = [item, ...prev];
+      try { localStorage.setItem("dw_call_artifacts", JSON.stringify(next.slice(0, 200))); } catch {}
+      return next;
+    });
+  };
+  const markArtifactsSeen = () => setCallArtifacts(prev => {
+    const next = prev.map(a => ({ ...a, seen: true }));
+    try { localStorage.setItem("dw_call_artifacts", JSON.stringify(next)); } catch {}
+    return next;
+  });
+  const clearArtifact = (id) => setCallArtifacts(prev => {
+    const next = prev.filter(a => a.id !== id);
+    try { localStorage.setItem("dw_call_artifacts", JSON.stringify(next)); } catch {}
+    return next;
+  });
+  const clearAllArtifacts = () => { setCallArtifacts([]); try { localStorage.removeItem("dw_call_artifacts"); } catch {} };
+
   const pcRef = useRef(null);
   const dcRef = useRef(null);
   const localStreamRef = useRef(null);
