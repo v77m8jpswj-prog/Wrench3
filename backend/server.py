@@ -303,8 +303,6 @@ async def chat(body: ChatReq, user=Depends(get_user)):
 
     chat_obj = LlmChat(api_key=EMERGENT_KEY, session_id=session_id, system_message=sys_prompt).with_model("openai", "gpt-5.2")
 
-    # replay prior turns so the conversation has memory within session
-    # (LlmChat starts fresh; we feed last few turns as context block in system instead to keep it simple)
     if prior:
         recap = "\n\nRECENT CONVERSATION:\n" + "\n".join(
             f"[{t['role'].upper()}]: {t['content'][:400]}" for t in prior[-12:]
@@ -321,20 +319,86 @@ async def chat(body: ChatReq, user=Depends(get_user)):
     now = datetime.now(timezone.utc).isoformat()
     await db.chat_messages.insert_many([
         {"id": str(uuid.uuid4()), "user_id": user["id"], "session_id": session_id,
-         "role": "user", "content": body.message, "created_at": now, "heat": heat, "mode": body.mode},
+         "role": "user", "content": body.message, "created_at": now, "heat": heat, "mode": body.mode, "source": "chat"},
         {"id": str(uuid.uuid4()), "user_id": user["id"], "session_id": session_id,
-         "role": "assistant", "content": reply_text, "created_at": now},
+         "role": "assistant", "content": reply_text, "created_at": now, "source": "chat"},
     ])
     # ensure session record
+    existing = await db.chat_sessions.find_one({"id": session_id, "user_id": user["id"]})
+    title_update = {"last_message_at": now, "preview": body.message[:120]}
+    if not existing or not existing.get("title"):
+        # Auto-generate a smart short title using the first message
+        title = await _generate_title(body.message, reply_text)
+        title_update["title"] = title
     await db.chat_sessions.update_one(
         {"id": session_id, "user_id": user["id"]},
-        {"$setOnInsert": {"id": session_id, "user_id": user["id"], "created_at": now, "title": body.message[:60]},
-         "$set": {"last_message_at": now, "preview": body.message[:120]}},
+        {"$setOnInsert": {"id": session_id, "user_id": user["id"], "created_at": now},
+         "$set": title_update},
         upsert=True,
     )
 
     citations = [{"source": c.get("source"), "snippet": c.get("text","")[:240]} for c in lib_chunks]
     return ChatResp(session_id=session_id, reply=reply_text, citations=citations, heat_detected=heat)
+
+
+async def _generate_title(user_msg: str, reply: str) -> str:
+    """Use a tiny LLM call to generate a 3-6 word title for a chat session."""
+    try:
+        sys = "Generate a 3-6 word title for this conversation. Be specific to the topic (vehicle, problem, table). Use Title Case. NO quotes. NO trailing punctuation. Just the title."
+        prompt = f"Tech said: {user_msg[:300]}\nWrench replied: {reply[:300]}\n\nTitle:"
+        chat_obj = LlmChat(api_key=EMERGENT_KEY, session_id=f"title-{uuid.uuid4()}", system_message=sys).with_model("openai", "gpt-5-mini")
+        title = (await chat_obj.send_message(UserMessage(text=prompt))).strip().strip('"').strip()
+        return title[:70] if title else user_msg[:60]
+    except Exception:
+        return user_msg[:60]
+
+
+# ============ Call transcript -> chat session ============
+class CallAppendReq(BaseModel):
+    session_id: str
+    role: str  # "user" | "assistant"
+    content: str
+
+@api.post("/chat/sessions/{session_id}/append-call")
+async def append_call_turn(session_id: str, body: CallAppendReq, user=Depends(get_user)):
+    """Append a turn from the live voice call into the chat session so the transcript survives navigation."""
+    now = datetime.now(timezone.utc).isoformat()
+    role = body.role if body.role in ("user", "assistant") else "user"
+    await db.chat_messages.insert_one({
+        "id": str(uuid.uuid4()),
+        "user_id": user["id"],
+        "session_id": session_id,
+        "role": role,
+        "content": body.content,
+        "created_at": now,
+        "source": "call",
+    })
+    existing = await db.chat_sessions.find_one({"id": session_id, "user_id": user["id"]})
+    patch = {"last_message_at": now, "preview": body.content[:120]}
+    if not existing:
+        patch["created_at"] = now
+        # title will be set when there's enough context
+    if existing and not existing.get("title") and body.role == "user":
+        patch["title"] = body.content[:60]
+    await db.chat_sessions.update_one(
+        {"id": session_id, "user_id": user["id"]},
+        {"$setOnInsert": {"id": session_id, "user_id": user["id"], "created_at": now},
+         "$set": patch},
+        upsert=True,
+    )
+    return {"ok": True}
+
+
+class TitleReq(BaseModel):
+    title: str
+
+@api.put("/chat/sessions/{session_id}/title")
+async def rename_session(session_id: str, body: TitleReq, user=Depends(get_user)):
+    await db.chat_sessions.update_one(
+        {"id": session_id, "user_id": user["id"]},
+        {"$set": {"title": body.title[:120]}},
+    )
+    return {"ok": True}
 
 
 @api.get("/chat/sessions")
@@ -939,6 +1003,57 @@ async def realtime_session(user=Depends(get_user)):
                             "fact": {"type": "string", "description": "The fact to remember"},
                         },
                         "required": ["fact"],
+                    },
+                },
+                {
+                    "type": "function",
+                    "name": "search_library",
+                    "description": "Search Doc's uploaded library (PDFs, manuals, notes, datalogs) for a topic. Use when Doc asks 'what did the manual say about...' or 'check my notes on...'.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string", "description": "Search terms"},
+                        },
+                        "required": ["query"],
+                    },
+                },
+                {
+                    "type": "function",
+                    "name": "list_vehicles",
+                    "description": "List all vehicles in Doc's garage. Use when Doc asks 'what's in the garage' / 'what trucks do I have saved'.",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+                {
+                    "type": "function",
+                    "name": "get_active_vehicle",
+                    "description": "Get details of the currently active vehicle (year, make, model, engine, mods, notes). Useful at the start of conversation to confirm what truck Doc is working on.",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+                {
+                    "type": "function",
+                    "name": "update_active_vehicle",
+                    "description": "Update fields on the currently active vehicle. Use when Doc says 'add a cam to its mods' or 'note that the truck has E85 in the tank'.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "mods_append": {"type": "string", "description": "Text to append to the mods field"},
+                            "notes_append": {"type": "string", "description": "Text to append to the notes field"},
+                            "engine": {"type": "string", "description": "Replace engine string"},
+                        },
+                    },
+                },
+                {
+                    "type": "function",
+                    "name": "edit_chart",
+                    "description": "Apply a modification to an HP Tuners table that Doc paste-says or describes. Returns the modified grid as a note. Use when Doc says 'pull 2 degrees from 3000 to 5000 on the spark table' AFTER he pasted a table earlier in the call.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "table_text": {"type": "string", "description": "Tab-separated grid (rows x cols) Doc provided"},
+                            "instruction": {"type": "string", "description": "What to change"},
+                            "table_label": {"type": "string", "description": "What kind of table (spark / VE / MAF / AFR)"},
+                        },
+                        "required": ["table_text", "instruction"],
                     },
                 },
             ],

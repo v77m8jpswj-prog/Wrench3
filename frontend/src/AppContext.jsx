@@ -28,6 +28,19 @@ export function AppProvider({ children }) {
   useEffect(() => { refreshVehicles(); }, [refreshVehicles]);
 
   const activeVehicle = vehicles.find(v => v.id === activeVehicleId) || null;
+  const activeVehicleRef = useRef(activeVehicle);
+  useEffect(() => { activeVehicleRef.current = activeVehicle; }, [activeVehicle]);
+
+  // The chat session id this call is linked to (so the call transcript appears in chat history)
+  const linkedSessionRef = useRef(null);
+
+  const appendToChatSession = async (role, content) => {
+    const sid = linkedSessionRef.current;
+    if (!sid || !content) return;
+    try {
+      await api.post(`/chat/sessions/${sid}/append-call`, { session_id: sid, role, content });
+    } catch {}
+  };
 
   // ============ Persistent Call State ============
   const [callState, setCallState] = useState("idle"); // idle | connecting | connected | error
@@ -134,6 +147,63 @@ export function AppProvider({ children }) {
         await api.post("/memory", { fact: args.fact || "" });
         transcriptNote = `✓ MEMORY SAVED → ${args.fact}`;
         output = { ok: true };
+      } else if (name === "search_library") {
+        // Simple keyword search via the same RAG endpoint: post a "fake" chat to get citations
+        const r = await api.post("/chat", { message: args.query, mode: "direct", session_id: null });
+        // citations include the relevant chunks
+        const cites = r.data?.citations || [];
+        transcriptNote = `✓ LIBRARY SEARCH → ${cites.length} matches`;
+        output = { ok: true, matches: cites.map(c => ({ source: c.source, snippet: c.snippet })) };
+      } else if (name === "list_vehicles") {
+        const r = await api.get("/vehicles");
+        const items = (r.data || []).map(v => ({
+          id: v.id, year: v.year, make: v.make, model: v.model, engine: v.engine, mods: v.mods, vin: v.vin
+        }));
+        transcriptNote = `✓ LISTED ${items.length} VEHICLES`;
+        output = { ok: true, vehicles: items };
+      } else if (name === "get_active_vehicle") {
+        const v = activeVehicleRef.current;
+        if (v) {
+          transcriptNote = `✓ ACTIVE: ${v.year} ${v.make} ${v.model}`;
+          output = { ok: true, vehicle: v };
+        } else {
+          transcriptNote = `✗ NO ACTIVE VEHICLE`;
+          output = { ok: false, error: "No active vehicle. Doc needs to pick or save one." };
+        }
+      } else if (name === "update_active_vehicle") {
+        const v = activeVehicleRef.current;
+        if (!v) {
+          transcriptNote = `✗ NO ACTIVE VEHICLE TO UPDATE`;
+          output = { ok: false, error: "No active vehicle" };
+        } else {
+          const patch = {
+            year: v.year || "", make: v.make || "", model: v.model || "", vin: v.vin || "",
+            engine: args.engine !== undefined ? args.engine : (v.engine || ""),
+            mods: args.mods_append ? (v.mods ? v.mods + "; " + args.mods_append : args.mods_append) : (v.mods || ""),
+            notes: args.notes_append ? (v.notes ? v.notes + "; " + args.notes_append : args.notes_append) : (v.notes || ""),
+          };
+          await api.put(`/vehicles/${v.id}`, patch);
+          await refreshVehicles();
+          const parts = [];
+          if (args.engine !== undefined) parts.push("engine");
+          if (args.mods_append) parts.push("mods");
+          if (args.notes_append) parts.push("notes");
+          transcriptNote = `✓ UPDATED ${v.year} ${v.make} ${v.model} → ${parts.join(", ") || "no changes"}`;
+          output = { ok: true };
+        }
+      } else if (name === "edit_chart") {
+        const r = await api.post("/chart/edit", {
+          table_text: args.table_text,
+          instruction: args.instruction,
+          table_label: args.table_label || "table",
+        }, { timeout: 60000 });
+        addArtifact({
+          type: "note",
+          title: `Chart edit: ${args.table_label || "table"}`,
+          body: `INSTRUCTION: ${args.instruction}\n\nMODIFIED TABLE (paste into HP Tuners):\n${r.data.table_text_out}\n\nNOTES: ${r.data.notes || ""}`,
+        });
+        transcriptNote = `✓ CHART EDITED → ${r.data.changed_cells?.length || 0} cells changed · note sent`;
+        output = { ok: true, changed_cells: r.data.changed_cells?.length || 0, notes: r.data.notes };
       }
     } catch (e) {
       output = { ok: false, error: e?.response?.data?.detail || e?.message || String(e) };
@@ -141,6 +211,7 @@ export function AppProvider({ children }) {
     }
     if (transcriptNote) {
       setCallTranscript(arr => [...arr, { who: "tool", text: transcriptNote }]);
+      appendToChatSession("system", `[TOOL] ${transcriptNote}`);
     }
     try {
       dcRef.current.send(JSON.stringify({
@@ -156,7 +227,24 @@ export function AppProvider({ children }) {
 
   const startCall = async () => {
     if (callState === "connected" || callState === "connecting") return;
-    setCallError(""); setCallTranscript([]); setCallSeconds(0);
+    setCallError(""); setCallSeconds(0);
+    // Link to active chat session (or create a new one). Calls and chats share history.
+    let linkedSession = localStorage.getItem("dw_chat_session");
+    if (!linkedSession) {
+      linkedSession = (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : (Date.now() + "-" + Math.random().toString(36).slice(2));
+      localStorage.setItem("dw_chat_session", linkedSession);
+    }
+    linkedSessionRef.current = linkedSession;
+    // Preload existing session transcript into the call view
+    try {
+      const r = await api.get(`/chat/sessions/${linkedSession}`);
+      const prior = (r.data?.messages || []).map(m => ({
+        who: m.role === "user" ? "tech" : m.role === "assistant" ? "wrench" : "tool",
+        text: m.content,
+      }));
+      setCallTranscript(prior);
+    } catch { setCallTranscript([]); }
+
     setCallState("connecting"); setStatus("CONNECTING", "#FFC107");
     try {
       const tokenRes = await api.post("/realtime/session", {});
@@ -240,12 +328,14 @@ export function AppProvider({ children }) {
       try {
         if (audioElRef.current) { audioElRef.current.pause(); audioElRef.current.currentTime = 0; }
       } catch {}
-      // Tell the model to stop generating
       try { dcRef.current?.send(JSON.stringify({ type: "response.cancel" })); } catch {}
     }
     if (t === "conversation.item.input_audio_transcription.completed") {
       const txt = (evt.transcript || "").trim();
-      if (txt) setCallTranscript(arr => [...arr, { who: "tech", text: txt }]);
+      if (txt) {
+        setCallTranscript(arr => [...arr, { who: "tech", text: txt }]);
+        appendToChatSession("user", txt);
+      }
     }
     if (t === "response.output_text.delta" || t === "response.text.delta" || t === "response.output_audio_transcript.delta") {
       pendingAssistantRef.current += (evt.delta || "");
@@ -253,14 +343,19 @@ export function AppProvider({ children }) {
     if (t === "response.output_text.done" || t === "response.text.done") {
       const txt = pendingAssistantRef.current.trim();
       pendingAssistantRef.current = "";
-      if (txt) setCallTranscript(arr => [...arr, { who: "wrench", text: txt }]);
+      if (txt) {
+        setCallTranscript(arr => [...arr, { who: "wrench", text: txt }]);
+        appendToChatSession("assistant", txt);
+      }
     }
     if (t === "response.output_audio_transcript.done") {
       const txt = (evt.transcript || pendingAssistantRef.current || "").trim();
       pendingAssistantRef.current = "";
-      if (txt) setCallTranscript(arr => [...arr, { who: "wrench", text: txt }]);
+      if (txt) {
+        setCallTranscript(arr => [...arr, { who: "wrench", text: txt }]);
+        appendToChatSession("assistant", txt);
+      }
     }
-    // Function / tool calls from Wrench
     if (t === "response.function_call_arguments.done") {
       handleFunctionCall(evt.call_id, evt.name, evt.arguments);
     }
@@ -279,6 +374,7 @@ export function AppProvider({ children }) {
   const sendCallText = (text) => {
     if (!text?.trim() || !dcRef.current || dcRef.current.readyState !== "open") return false;
     setCallTranscript(arr => [...arr, { who: "tech", text }]);
+    appendToChatSession("user", text);
     try {
       dcRef.current.send(JSON.stringify({
         type: "conversation.item.create",
