@@ -18,6 +18,7 @@ from pypdf import PdfReader
 
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 from emergentintegrations.llm.openai import OpenAITextToSpeech, OpenAISpeechToText
+import httpx
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -25,6 +26,7 @@ load_dotenv(ROOT_DIR / '.env')
 MONGO_URL = os.environ['MONGO_URL']
 DB_NAME = os.environ['DB_NAME']
 EMERGENT_KEY = os.environ['EMERGENT_LLM_KEY']
+OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
 JWT_SECRET = os.environ['JWT_SECRET']
 JWT_ALG = os.environ.get('JWT_ALGORITHM', 'HS256')
 
@@ -678,6 +680,50 @@ async def settings_update(body: SettingsReq, user=Depends(get_user)):
         await db.users.update_one({"id": user["id"]}, {"$set": patch})
     u = await db.users.find_one({"id": user["id"]}, {"_id": 0, "password": 0})
     return u.get("settings", {})
+
+
+# ============ OpenAI Realtime API (WebRTC voice mode, GA endpoint) ============
+@api.post("/realtime/session")
+async def realtime_session(user=Depends(get_user)):
+    """Mint an ephemeral client_secret for the browser to use with OpenAI Realtime API over WebRTC."""
+    if not OPENAI_API_KEY:
+        raise HTTPException(503, "OpenAI Realtime not configured. Add OPENAI_API_KEY in backend env.")
+
+    # Pull context for personality
+    mem_cursor = db.memory_facts.find({"user_id": user["id"]}, {"_id": 0}).sort("created_at", -1)
+    mem_docs = await mem_cursor.to_list(30)
+    memory_facts = [m["fact"] for m in mem_docs]
+    sys_prompt = build_system_prompt(user, "direct", False, None, memory_facts, [])
+    sys_prompt += "\n\nYOU ARE NOW IN VOICE CALL MODE. Keep replies tight — 1 to 3 sentences usually. If Doc asks for the long version, give it but pause naturally. Speak like a real mechanic on a phone call."
+
+    body = {
+        "session": {
+            "type": "realtime",
+            "model": "gpt-realtime",
+            "instructions": sys_prompt,
+            "audio": {
+                "output": {"voice": "ash"},
+            },
+        }
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.post(
+                "https://api.openai.com/v1/realtime/client_secrets",
+                headers={
+                    "Authorization": f"Bearer {OPENAI_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json=body,
+            )
+        if r.status_code != 200:
+            log.error(f"Realtime client_secrets failed: {r.status_code} {r.text[:500]}")
+            raise HTTPException(r.status_code, f"OpenAI: {r.text}")
+        return r.json()
+    except httpx.HTTPError as e:
+        log.exception("Realtime session HTTP error")
+        raise HTTPException(503, f"Realtime upstream error: {e}")
 
 
 # ============ Register router ============

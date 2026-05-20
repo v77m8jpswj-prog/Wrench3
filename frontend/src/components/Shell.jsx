@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from "react";
 import { NavLink, useNavigate, useLocation } from "react-router-dom";
-import { MessageSquare, Grid3x3, BookOpen, Truck, Activity, Brain, Settings as Cog, LogOut, Wrench, Menu, X } from "lucide-react";
+import { MessageSquare, Grid3x3, BookOpen, Truck, Activity, Brain, Settings as Cog, LogOut, Wrench, Menu, X, Phone } from "lucide-react";
 import { clearToken } from "@/api";
 
 const NAV = [
+  { to: "/call", icon: Phone, label: "CALL", id: "nav-call" },
   { to: "/", icon: MessageSquare, label: "CHAT", id: "nav-chat" },
   { to: "/charts", icon: Grid3x3, label: "CHARTS", id: "nav-charts" },
   { to: "/library", icon: BookOpen, label: "LIBRARY", id: "nav-library" },
@@ -37,7 +38,7 @@ export default function Shell({ user, setUser, children }) {
 
   const logout = () => { clearToken(); nav("/login"); };
 
-  const currentLabel = (NAV.find(n => n.to === loc.pathname) || NAV[0]).label;
+  const currentLabel = (NAV.find(n => n.to === loc.pathname) || NAV[1]).label;
 
   return (
     <div className="min-h-screen flex flex-col bg-bg-1 text-ink relative">
