@@ -37,6 +37,14 @@
 - [x] Conversation history (sessions list, restore session)
 - [x] Settings (voice picker, voice on/off, default mode)
 - [x] Direct vs Dream-out-loud response modes
+- [x] **WebRTC Realtime voice calls** with tool calling (send_link, send_note, save_vehicle_from_vin, edit_chart, lookup_credentials, etc.)
+- [x] **Vault** for storing shop logins/passwords (since browsers sandbox tabs/password managers — `lookup_credentials` tool pulls them on voice command)
+
+## Phase 1.5 — DONE (Feb 2026)
+- [x] **Schematic snip vision chat** — Doc drops a wiring/pinout/dash image via paperclip, drag-drop, or Cmd-V paste → Wrench reads it via GPT-5.2 Vision (`/api/chat/vision`)
+- [x] **Anti-hallucination guardrails** — Wrench refuses to fabricate pinouts/wire colors/torque specs cold; asks for the snip first
+- [x] **Auto-clickable links inline** in chat (URLs in Wrench's replies render as `<a>` tags, not spelled out)
+- [x] Fixed duplicate `haltWrench` blocker that was preventing frontend build
 
 ## Phase 2 — Backlog (P0/P1)
 - **P0** Email control (Outlook 365 via MS Graph for doc@drunderhood.com + Gmail OAuth for personal). Read/draft/send.
@@ -57,4 +65,4 @@
 
 ## Build cost so far
 - ~9 credits (Phase 1 build through testing).
-- Login: doc@drunderhood.com / Wrench123!
+- Login: doc@drunderhood.com / wrench

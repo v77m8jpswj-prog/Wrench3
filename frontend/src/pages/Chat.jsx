@@ -138,6 +138,10 @@ export default function Chat() {
   const attachRef = useRef(null);
   const onAttach = async (file) => {
     if (!file) return;
+    const isImage = (file.type || "").startsWith("image/") || /\.(png|jpe?g|gif|webp|heic|heif|bmp)$/i.test(file.name || "");
+    if (isImage) {
+      return onAttachImage(file);
+    }
     try {
       // Upload to library which auto-extracts content for the AI to reference
       const fd = new FormData();
@@ -151,6 +155,31 @@ export default function Chat() {
     } catch (e) {
       alert("Attach failed: " + (e?.response?.data?.detail || e.message));
     }
+  };
+
+  const onAttachImage = async (file) => {
+    // Show the snip immediately in the transcript so Doc sees it land
+    const previewUrl = URL.createObjectURL(file);
+    const userText = input.trim();
+    setInput("");
+    setMessages(m => [...m, { role: "user", content: userText, imageUrl: previewUrl, imageName: file.name }]);
+    setThinking(true); setStatus("READING SNIP", "#FF5722");
+    try {
+      const fd = new FormData();
+      fd.append("image", file);
+      fd.append("message", userText);
+      if (sessionId) fd.append("session_id", sessionId);
+      fd.append("mode", mode);
+      if (vehicleId) fd.append("vehicle_id", vehicleId);
+      const r = await api.post("/chat/vision", fd, { headers: { "Content-Type": "multipart/form-data" }, timeout: 120000 });
+      setSessionId(r.data.session_id);
+      const reply = r.data.reply || "";
+      setMessages(m => [...m, { role: "assistant", content: reply, citations: r.data.citations, heat: r.data.heat_detected }]);
+      refreshSessions();
+      if (voiceOn || callModeRef.current) await speak(reply);
+    } catch (e) {
+      setMessages(m => [...m, { role: "assistant", content: `[ ERROR reading snip ] ${e?.response?.data?.detail || e.message}` }]);
+    } finally { setThinking(false); if (!callModeRef.current) setStatus("IDLE", "#52525B"); }
   };
 
   const speak = async (text) => {
@@ -395,8 +424,45 @@ export default function Chat() {
 
   const toggleCall = () => callMode ? endCall() : startCall();
 
+  const [dragOver, setDragOver] = useState(false);
+
+  // Paste-from-clipboard support — Doc can screenshot and Cmd-V directly into chat
+  useEffect(() => {
+    const onPaste = (e) => {
+      if (!e.clipboardData) return;
+      for (const item of e.clipboardData.items) {
+        if (item.kind === "file" && (item.type || "").startsWith("image/")) {
+          const f = item.getAsFile();
+          if (f) { e.preventDefault(); onAttachImage(f); return; }
+        }
+      }
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId, mode, vehicleId, input]);
+
+  const onDrop = (e) => {
+    e.preventDefault(); setDragOver(false);
+    const f = e.dataTransfer?.files?.[0];
+    if (f) onAttach(f);
+  };
+
   return (
-    <div className="flex h-full flex-col" style={{minHeight:"calc(100dvh - 90px)"}}>
+    <div
+      className="flex h-full flex-col relative"
+      style={{minHeight:"calc(100dvh - 90px)"}}
+      onDragOver={e=>{ e.preventDefault(); if (!dragOver) setDragOver(true); }}
+      onDragLeave={e=>{ if (e.currentTarget === e.target) setDragOver(false); }}
+      onDrop={onDrop}
+    >
+      {dragOver && (
+        <div className="absolute inset-0 z-40 border-4 border-dashed border-rust bg-black/70 flex items-center justify-center pointer-events-none">
+          <div className="text-rust heading text-2xl md:text-3xl text-center px-6">
+            DROP THE SNIP<br/><span className="text-amber2 text-base">Wrench will read it</span>
+          </div>
+        </div>
+      )}
       {/* Hidden audio element for TTS playback — must be in DOM for iOS to allow play() */}
       <audio ref={audioElRef} playsInline preload="auto" data-testid="tts-audio" />
       {/* Desktop-only header */}
@@ -543,11 +609,11 @@ export default function Chat() {
             onClick={()=>attachRef.current?.click()}
             aria-label="Attach file"
             className="w-14 h-14 border-2 border-line text-ink-2 hover:border-rust hover:text-rust active:bg-rust/10 flex items-center justify-center flex-shrink-0"
-            title="Attach a file (PDF, CSV, log, .hpt tune)"
+            title="Drop a schematic snip, photo, scope/dash pic, PDF manual, CSV log, or .hpt tune — Wrench will read it"
           >
             <Paperclip size={22}/>
           </button>
-          <input ref={attachRef} type="file" hidden accept=".pdf,.txt,.md,.csv,.log,.hpt,.hpl,.bin,.tune,.png,.jpg,.jpeg" onChange={e=>{ const f = e.target.files?.[0]; if (f) onAttach(f); e.target.value=""; }} data-testid="attach-input"/>
+          <input ref={attachRef} type="file" hidden accept="image/*,.pdf,.txt,.md,.csv,.log,.hpt,.hpl,.bin,.tune" onChange={e=>{ const f = e.target.files?.[0]; if (f) onAttach(f); e.target.value=""; }} data-testid="attach-input"/>
           <textarea
             ref={inputRef}
             data-testid="chat-input"
@@ -742,7 +808,15 @@ function MessageRow({ m, idx }) {
         </span>
         {m.heat && <span className="text-[9px] text-danger uppercase tracking-widest border border-danger px-1">HEAT</span>}
       </div>
-      <div className="mt-1 text-ink text-[13px] md:text-sm leading-relaxed">{m.content}</div>
+      {m.imageUrl && (
+        <div className="mt-2">
+          <img src={m.imageUrl} alt={m.imageName || "snip"} className="max-h-72 border border-line bg-black/40" data-testid={`msg-img-${idx}`} />
+          {m.imageName && <div className="text-[10px] text-ink-3 uppercase tracking-widest mt-1">SNIP: {m.imageName}</div>}
+        </div>
+      )}
+      <div className="mt-1 text-ink text-[13px] md:text-sm leading-relaxed">
+        {renderWithLinks(m.content)}
+      </div>
       {m.citations && m.citations.length > 0 && (
         <div className="mt-2 text-[10px] md:text-[11px] text-ink-3 border-l-2 border-line pl-3">
           <div className="uppercase tracking-widest text-amber2 mb-1">SOURCES</div>
@@ -751,4 +825,27 @@ function MessageRow({ m, idx }) {
       )}
     </div>
   );
+}
+
+// Render text with URLs auto-linked as clickable <a> tags
+const URL_RE = /\b(https?:\/\/[^\s<>"')]+)|(\bwww\.[^\s<>"')]+)/gi;
+function renderWithLinks(text) {
+  if (!text) return null;
+  const parts = [];
+  let last = 0;
+  let m;
+  const re = new RegExp(URL_RE.source, URL_RE.flags);
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) parts.push(text.slice(last, m.index));
+    let url = m[0].replace(/[).,;!?]+$/, "");
+    const href = url.startsWith("http") ? url : `https://${url}`;
+    parts.push(
+      <a key={m.index} href={href} target="_blank" rel="noopener noreferrer" className="text-amber2 underline break-all hover:text-rust" data-testid="msg-link">
+        {url}
+      </a>
+    );
+    last = m.index + url.length;
+  }
+  if (last < text.length) parts.push(text.slice(last));
+  return parts;
 }

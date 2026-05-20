@@ -160,12 +160,16 @@ VOICE & STYLE:
 
 HARD RULES:
 - If you don't know a torque spec, part number, wire color, or pinout COLD — say so. Ask for the manual or admit you'd be guessing.
+- NEVER fabricate pin numbers, wire colors, connector locations, or torque specs. Doc has been burned by wrong info before — he'd rather hear "I don't have that one cold, snip me the diagram you're looking at" than wrong specs that send him chasing ghosts.
+- When asked about a schematic, wiring diagram, pinout, connector, or part-specific spec you don't have memorized: TELL DOC to hit the paperclip and drop the snip in chat. Tell him exactly what page or diagram to snip if it helps. Then read what he sends.
+- When Doc DOES paste/upload an image, describe what you actually see in it — pins, colors, labels, gauge readings — don't invent details that aren't there.
 - For HP Tuners advice: cite cell coordinates (RPM x MAP/Load) and exact deltas (degrees, percent, ms).
 - For diagnostics: ranked likely causes + cheapest/fastest confirmation step first.
 - Cite the source by name when quoting from a manual, book, or prior note.
 
 VERIFY BEFORE ANSWERING:
 - If library context contradicts your general knowledge, prefer the library and call out the conflict.
+- If a question is part-specific (Ford SuperDuty 6.7L injector connector pinout, GM E38 ECM C1 connector, etc.) and you don't have a manual chunk in context, say so and ask for the snip. Don't roll the dice.
 """
 
     if heat:
@@ -416,6 +420,90 @@ async def del_session(session_id: str, user=Depends(get_user)):
     await db.chat_messages.delete_many({"session_id": session_id, "user_id": user["id"]})
     await db.chat_sessions.delete_one({"id": session_id, "user_id": user["id"]})
     return {"ok": True}
+
+
+# ============ Chat with image (vision) — Doc drops a snip/schematic ============
+@api.post("/chat/vision", response_model=ChatResp)
+async def chat_vision(
+    image: UploadFile = File(...),
+    message: str = Form(""),
+    session_id: Optional[str] = Form(None),
+    mode: str = Form("direct"),
+    vehicle_id: Optional[str] = Form(None),
+    user=Depends(get_user),
+):
+    """Doc uploads a schematic / dash photo / scope screenshot / part snip — Wrench actually reads it."""
+    raw = await image.read()
+    if not raw:
+        raise HTTPException(400, "Empty image")
+    if len(raw) > 12 * 1024 * 1024:
+        raise HTTPException(413, "Image too big (>12 MB). Crop tighter or compress it.")
+    img_b64 = base64.b64encode(raw).decode()
+
+    sid = session_id or str(uuid.uuid4())
+    heat = detect_heat(message)
+
+    # vehicle context
+    vehicle = None
+    if vehicle_id:
+        vehicle = await db.vehicles.find_one({"id": vehicle_id, "user_id": user["id"]}, {"_id": 0})
+
+    # memory + library
+    mem_docs = await db.memory_facts.find({"user_id": user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(50)
+    memory_facts = [m["fact"] for m in mem_docs]
+    lib_chunks = await retrieve_library(user["id"], message or "schematic wiring diagram", k=4)
+
+    sys_prompt = build_system_prompt(user, mode if mode in ("direct","dream") else "direct", heat, vehicle, memory_facts, lib_chunks)
+    sys_prompt += (
+        "\n\nIMAGE MODE — DOC JUST DROPPED A SNIP:\n"
+        "- Read the image carefully. State only what you can ACTUALLY see (pin numbers, colors, labels, gauge values, table cells, error codes).\n"
+        "- If the image is too blurry, cut off, or missing the legend/key, SAY SO and ask Doc to resnip with what's missing visible.\n"
+        "- Don't fill gaps from generic memory. If the diagram is partial, name what's missing.\n"
+        "- After describing what you see, answer Doc's question using that diagram as the ground truth.\n"
+    )
+
+    # prior turns
+    prior = await db.chat_messages.find({"session_id": sid, "user_id": user["id"]}, {"_id": 0}).sort("created_at", 1).to_list(40)
+    if prior:
+        sys_prompt += "\n\nRECENT CONVERSATION:\n" + "\n".join(
+            f"[{t['role'].upper()}]: {t['content'][:400]}" for t in prior[-12:]
+        )
+
+    user_msg = message.strip() or "I just dropped you a snip. Read it. Tell me what you see and what it means."
+
+    chat_obj = LlmChat(api_key=EMERGENT_KEY, session_id=f"vision-{sid}", system_message=sys_prompt).with_model("openai", "gpt-5.2")
+    try:
+        reply_text = await chat_obj.send_message(UserMessage(
+            text=user_msg,
+            file_contents=[ImageContent(image_base64=img_b64)],
+        ))
+    except Exception as e:
+        log.exception("Vision chat failed")
+        raise HTTPException(500, f"Wrench couldn't read the snip: {e}")
+
+    now = datetime.now(timezone.utc).isoformat()
+    # store user msg with image marker so the chat history shows context
+    user_content = (message.strip() + ("\n" if message.strip() else "") + f"[IMAGE ATTACHED: {image.filename or 'snip.png'}]").strip()
+    await db.chat_messages.insert_many([
+        {"id": str(uuid.uuid4()), "user_id": user["id"], "session_id": sid,
+         "role": "user", "content": user_content, "created_at": now, "heat": heat, "mode": mode, "source": "chat"},
+        {"id": str(uuid.uuid4()), "user_id": user["id"], "session_id": sid,
+         "role": "assistant", "content": reply_text, "created_at": now, "source": "chat"},
+    ])
+    existing = await db.chat_sessions.find_one({"id": sid, "user_id": user["id"]})
+    title_update = {"last_message_at": now, "preview": (message[:120] or "[snip] " + (image.filename or ""))}
+    if not existing or not existing.get("title"):
+        title = await _generate_title(message or "schematic snip", reply_text)
+        title_update["title"] = title
+    await db.chat_sessions.update_one(
+        {"id": sid, "user_id": user["id"]},
+        {"$setOnInsert": {"id": sid, "user_id": user["id"], "created_at": now},
+         "$set": title_update},
+        upsert=True,
+    )
+
+    citations = [{"source": c.get("source"), "snippet": c.get("text","")[:240]} for c in lib_chunks]
+    return ChatResp(session_id=sid, reply=reply_text, citations=citations, heat_detected=heat)
 
 
 # ============ Voice: STT + TTS ============

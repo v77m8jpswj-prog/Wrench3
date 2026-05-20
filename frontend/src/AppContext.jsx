@@ -404,12 +404,6 @@ export function AppProvider({ children }) {
     if (t === "error") setCallError(evt.error?.message || "Realtime error");
   };
 
-  // Manually halt Wrench's voice (Doc taps a button)
-  const haltWrench = () => {
-    try { if (audioElRef.current) { audioElRef.current.pause(); audioElRef.current.currentTime = 0; } } catch {}
-    try { dcRef.current?.send(JSON.stringify({ type: "response.cancel" })); } catch {}
-  };
-
   const sendCallText = (text) => {
     if (!text?.trim() || !dcRef.current || dcRef.current.readyState !== "open") return false;
     setCallTranscript(arr => [...arr, { who: "tech", text }]);
