@@ -99,7 +99,10 @@ export default function Chat() {
 
   const refreshSessions = () => api.get("/chat/sessions").then(r => setSessions(r.data || [])).catch(()=>{});
 
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, thinking]);
+  useEffect(() => {
+    const isMobile = typeof window !== "undefined" && window.matchMedia && window.matchMedia("(max-width: 767px)").matches;
+    if (!isMobile) endRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, thinking]);
 
   const loadSession = async (sid) => {
     const r = await api.get(`/chat/sessions/${sid}`);
@@ -465,8 +468,8 @@ export default function Chat() {
       )}
       {/* Hidden audio element for TTS playback — must be in DOM for iOS to allow play() */}
       <audio ref={audioElRef} playsInline preload="auto" data-testid="tts-audio" />
-      {/* Desktop-only header */}
-      <div className="hidden md:flex border-b border-line px-6 py-3 items-center justify-between bg-bg-2" data-testid="chat-header">
+      {/* Desktop-only header — order-1 on desktop */}
+      <div className="hidden md:flex order-1 border-b border-line px-6 py-3 items-center justify-between bg-bg-2" data-testid="chat-header">
         <div className="flex items-center gap-3">
           <h1 className="heading text-2xl">CHAT // <span className="text-rust">WRENCH</span></h1>
           <span className="text-ink-3 text-xs">{sessionId ? `SID: ${sessionId.slice(0,8)}` : "NEW SESSION"}</span>
@@ -488,8 +491,8 @@ export default function Chat() {
         </div>
       </div>
 
-      {/* Mobile chat header strip */}
-      <div className="md:hidden px-3 py-2 border-b border-line bg-bg-2 flex items-center justify-between gap-2">
+      {/* Mobile chat header strip — order-1 on mobile */}
+      <div className="md:hidden order-1 px-3 py-2 border-b border-line bg-bg-2 flex items-center justify-between gap-2">
         <button onClick={()=>setVoiceOn(v=>!v)} data-testid="m-voice-toggle" className={`flex items-center gap-1 text-[11px] uppercase tracking-widest border px-2 py-1 ${voiceOn?"border-rust text-rust":"border-line text-ink-2"}`}>
           {voiceOn ? <Volume2 size={12}/> : <VolumeX size={12}/>} {voiceOn ? "VOICE" : "MUTE"}
         </button>
@@ -501,8 +504,8 @@ export default function Chat() {
         <button data-testid="m-options" onClick={()=>setShowOptions(true)} className="text-[11px] uppercase tracking-widest border border-line px-2 py-1 text-ink-2 flex items-center gap-1"><Settings2 size={12}/></button>
       </div>
 
-      {/* Messages */}
-      <div className="flex-1 overflow-auto" data-testid="messages-area">
+      {/* Messages — order-3 on mobile (below input), order-2 on desktop (above input) */}
+      <div className="flex-1 overflow-auto order-3 md:order-2" data-testid="messages-area">
         {/* Call artifacts panel — links/notes/vehicles Wrench sent during a call */}
         {app?.callArtifacts && app.callArtifacts.length > 0 && (
           <div className="border-b border-line bg-bg-3 px-3 md:px-6 py-3" data-testid="artifacts-panel">
@@ -579,7 +582,7 @@ export default function Chat() {
             </div>
           </div>
         ) : (
-          <div className="font-mono text-sm pb-4">
+          <div className="font-mono text-sm pb-4 flex flex-col-reverse md:flex-col">
             {messages.map((m, i) => <MessageRow key={i} m={m} idx={i} />)}
             {thinking && (
               <div className="px-4 md:px-6 py-3 border-b border-line bg-bg-1 text-rust text-xs" data-testid="thinking-row">
@@ -591,8 +594,8 @@ export default function Chat() {
         )}
       </div>
 
-      {/* Bottom input bar */}
-      <div className="border-t border-line bg-bg-2 px-3 md:px-6 py-3 md:py-4 sticky bottom-0 z-20">
+      {/* Input bar — order-2 on mobile (top, under header), order-3 on desktop (bottom) */}
+      <div className="order-2 md:order-3 border-y md:border-y-0 md:border-t border-line bg-bg-2 px-3 md:px-6 py-3 md:py-4 md:sticky md:bottom-0 z-20">
         {micError && messages.length > 0 && (
           <MicHelpPanel error={micError} expanded={showMicHelp} onToggle={()=>setShowMicHelp(s=>!s)} onRetry={startRecord} compact />
         )}

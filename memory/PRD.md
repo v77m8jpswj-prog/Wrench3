@@ -45,6 +45,8 @@
 - [x] **Anti-hallucination guardrails** — Wrench refuses to fabricate pinouts/wire colors/torque specs cold; asks for the snip first
 - [x] **Auto-clickable links inline** in chat (URLs in Wrench's replies render as `<a>` tags, not spelled out)
 - [x] Fixed duplicate `haltWrench` blocker that was preventing frontend build
+- [x] **Mobile chat layout flipped** — input bar moved to top on mobile (thumb-reach), newest message at top via `flex-col-reverse`, hamburger menu always accessible from sticky top header
+- [x] **PWA manifest + icons** — Wrench-branded app icon for iPhone/Android home screen install, standalone display, rust theme color, custom title "Wrench"
 
 ## Phase 2 — Backlog (P0/P1)
 - **P0** Email control (Outlook 365 via MS Graph for doc@drunderhood.com + Gmail OAuth for personal). Read/draft/send.
