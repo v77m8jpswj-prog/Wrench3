@@ -48,20 +48,26 @@
 - [x] **Mobile chat layout flipped** — input bar moved to top on mobile (thumb-reach), newest message at top via `flex-col-reverse`, hamburger menu always accessible from sticky top header
 - [x] **PWA manifest + icons** — Wrench-branded app icon for iPhone/Android home screen install, standalone display, rust theme color, custom title "Wrench"
 
-## Phase 2 — Backlog (P0/P1)
-- **P0** Email control (Outlook 365 via MS Graph for doc@drunderhood.com + Gmail OAuth for personal). Read/draft/send.
-- **P0** Embeddings-based RAG (replace keyword scoring with OpenAI text-embedding-3 + vector search) for better library retrieval on big book uploads.
-- **P0** Quota-graceful error handling on /api/chat, /api/chart/edit, /api/datalog/analyze (return 503 + friendly msg on litellm budget errors instead of raw 500).
-- **P1** YouTube/video link ingestion → transcribe via Whisper → add to library.
-- **P1** HP Tuners CSV export workflow doc (VCM Scanner → CSV → Data Wrench).
-- **P1** "Pin to memory" button inside chat to capture useful exchanges as facts.
-- **P1** Tune file binary (.hpt) reverse-engineering R&D — sellable moat.
-- **P2** Multi-user / shop tech logins, role-based access.
-- **P2** SaaS launch: tenant isolation, billing, shared anonymized knowledge layer.
-- **P2** Browser extension to pipe HP Tuners selections directly.
-- **P2** Desktop companion app (Electron) for OS-level integration & file watcher.
+## Phase 2 — IN PROGRESS (Feb 2026 — "The Brain")
+- [x] **Multi-tenant data model** — every record scoped by `shop_id` (default: `drunderhood-fortsmith`)
+- [x] **Tech logins** — owner can add team members through Settings → SHOP TEAM. Roles: `owner` | `tech`. `require_owner` middleware guards tech mgmt.
+- [x] **Cases brain (RAG over closed repairs)** — new `brain_cases` Mongo collection. Vehicle + symptom + DTC + root cause + repair + parts + outcome + photos. Embedded via OpenAI `text-embedding-3-small` (1536-dim, Doc's OpenAI key). Cosine sim in-memory.
+- [x] **Cases UI** — `/cases` page with full CRUD, outcome badges. "SAVE AS CASE" button on chat sessions auto-drafts a case from the conversation.
+- [x] **External brain API** (bearer-token gated, multi-tenant from day 1): `/api/brain/ask`, `/api/brain/learn`, `/api/brain/stats`, `/api/brain/feedback`
+- [x] **Cross-project reply letter** drafted for Dr. Underhood Live Assist agent (Robert's iOS app) → `/app/memory/REPLY_TO_DR_UNDERHOOD_AGENT.md`
 
-## Test Status
+## Phase 2.5 — Backlog
+- **P0** Outlook 365 + Gmail OAuth for shop email
+- **P0** Atlas Vector Search swap (once ≥ 10k cases per shop)
+- **P0** Quota-graceful error handling on /api/chat, /api/chart/edit (return 503 instead of raw 500)
+- **P1** Photo storage → GridFS / S3 with real `photo_urls` in /ask responses
+- **P1** Wrench chat tool: `find_similar_cases(symptom, vehicle)` — call brain from inside active voice call
+- **P1** "Save chat as case" prefilled vehicle from active vehicle context
+- **P1** YouTube transcript → library, pin-chat-to-memory button, `.hpt` binary R&D
+- **P2** SaaS launch: tenant billing, signup flow for other shops, shared/anonymized cross-shop knowledge layer (opt-in)
+- **P2** Browser extension, Electron companion
+
+## Phase 1.5 — DONE (Feb 2026)
 - iteration_1.json — 100% backend (24/24), 100% frontend.
 - One transient flag: universal LLM key budget cap can occasionally throw 500 on burst usage.
 

@@ -91,6 +91,17 @@ class TTSReq(BaseModel):
     text: str
     voice: str = "onyx"
 
+class TechReq(BaseModel):
+    email: EmailStr
+    password: str
+    name: str
+    role: Literal["owner", "tech"] = "tech"
+
+class TechUpdateReq(BaseModel):
+    name: Optional[str] = None
+    role: Optional[Literal["owner", "tech"]] = None
+    password: Optional[str] = None
+
 
 # ============ Auth helpers ============
 def hash_pw(pw: str) -> str:
@@ -254,6 +265,9 @@ async def signup(body: SignupReq):
     if existing:
         raise HTTPException(400, "Email already registered")
     uid = str(uuid.uuid4())
+    # First user becomes the shop owner; subsequent signups via this endpoint would be techs
+    # (real tech invites should go through POST /api/techs, which sets shop_id from the owner).
+    user_count = await db.users.count_documents({})
     user_doc = {
         "id": uid,
         "email": body.email.lower(),
@@ -261,10 +275,13 @@ async def signup(body: SignupReq):
         "password": hash_pw(body.password),
         "created_at": datetime.now(timezone.utc).isoformat(),
         "settings": {"voice": "onyx", "voice_enabled": True, "mode": "direct"},
+        "shop_id": os.environ.get("DEFAULT_SHOP_ID", "drunderhood-fortsmith"),
+        "role": "owner" if user_count == 0 else "tech",
     }
     await db.users.insert_one(user_doc)
     return TokenResp(token=make_token(uid, body.email.lower()),
-                     user={"id": uid, "email": body.email.lower(), "name": user_doc["name"], "settings": user_doc["settings"]})
+                     user={"id": uid, "email": body.email.lower(), "name": user_doc["name"],
+                           "settings": user_doc["settings"], "shop_id": user_doc["shop_id"], "role": user_doc["role"]})
 
 @api.post("/auth/login", response_model=TokenResp)
 async def login(body: LoginReq):
@@ -273,10 +290,15 @@ async def login(body: LoginReq):
         raise HTTPException(401, "Bad credentials")
     return TokenResp(token=make_token(u["id"], u["email"]),
                      user={"id": u["id"], "email": u["email"], "name": u.get("name","Doc"),
-                           "settings": u.get("settings", {})})
+                           "settings": u.get("settings", {}),
+                           "shop_id": u.get("shop_id") or os.environ.get("DEFAULT_SHOP_ID", "drunderhood-fortsmith"),
+                           "role": u.get("role") or "owner"})
 
 @api.get("/auth/me")
 async def me(user=Depends(get_user)):
+    # Ensure shop_id/role surfaced even for old accounts
+    user["shop_id"] = user.get("shop_id") or os.environ.get("DEFAULT_SHOP_ID", "drunderhood-fortsmith")
+    user["role"] = user.get("role") or "owner"
     return user
 
 
@@ -1264,6 +1286,71 @@ async def realtime_session(user=Depends(get_user)):
         raise HTTPException(503, f"Realtime upstream error: {e}")
 
 
+# ============ Tech management (shop owner adds team members) ============
+def require_owner(user=Depends(get_user)):
+    if (user.get("role") or "owner") != "owner":
+        raise HTTPException(403, "Only the shop owner can manage techs.")
+    return user
+
+@api.get("/techs")
+async def techs_list(user=Depends(get_user)):
+    shop_id = user.get("shop_id") or os.environ.get("DEFAULT_SHOP_ID", "drunderhood-fortsmith")
+    cur = db.users.find({"shop_id": shop_id}, {"_id": 0, "password": 0}).sort("created_at", 1)
+    return await cur.to_list(100)
+
+@api.post("/techs")
+async def techs_create(body: TechReq, owner=Depends(require_owner)):
+    existing = await db.users.find_one({"email": body.email.lower()})
+    if existing:
+        raise HTTPException(400, "Email already in the system.")
+    shop_id = owner.get("shop_id") or os.environ.get("DEFAULT_SHOP_ID", "drunderhood-fortsmith")
+    uid = str(uuid.uuid4())
+    doc = {
+        "id": uid,
+        "email": body.email.lower(),
+        "name": body.name,
+        "password": hash_pw(body.password),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "settings": {"voice": "onyx", "voice_enabled": True, "mode": "direct"},
+        "shop_id": shop_id,
+        "role": body.role,
+        "invited_by_user_id": owner["id"],
+    }
+    await db.users.insert_one(doc)
+    doc.pop("password", None)
+    doc.pop("_id", None)
+    return doc
+
+@api.put("/techs/{tech_id}")
+async def techs_update(tech_id: str, body: TechUpdateReq, owner=Depends(require_owner)):
+    shop_id = owner.get("shop_id") or os.environ.get("DEFAULT_SHOP_ID", "drunderhood-fortsmith")
+    existing = await db.users.find_one({"id": tech_id, "shop_id": shop_id})
+    if not existing:
+        raise HTTPException(404, "Tech not found in your shop")
+    patch = {}
+    if body.name is not None: patch["name"] = body.name
+    if body.role is not None: patch["role"] = body.role
+    if body.password: patch["password"] = hash_pw(body.password)
+    if patch:
+        await db.users.update_one({"id": tech_id}, {"$set": patch})
+    updated = await db.users.find_one({"id": tech_id}, {"_id": 0, "password": 0})
+    return updated
+
+@api.delete("/techs/{tech_id}")
+async def techs_delete(tech_id: str, owner=Depends(require_owner)):
+    if tech_id == owner["id"]:
+        raise HTTPException(400, "Can't delete yourself, owner.")
+    shop_id = owner.get("shop_id") or os.environ.get("DEFAULT_SHOP_ID", "drunderhood-fortsmith")
+    r = await db.users.delete_one({"id": tech_id, "shop_id": shop_id})
+    return {"deleted": r.deleted_count > 0}
+
+
+# ============ Brain router (RAG cases / cross-project integration) ============
+from brain import make_brain_router  # noqa: E402
+brain_router = make_brain_router(db, get_user)
+api.include_router(brain_router)
+
+
 # ============ Register router ============
 app.include_router(api)
 app.add_middleware(
@@ -1273,6 +1360,26 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.on_event("startup")
+async def startup_migrate():
+    """Backfill shop_id/role for any pre-existing users + ensure brain indexes."""
+    shop_id = os.environ.get("DEFAULT_SHOP_ID", "drunderhood-fortsmith")
+    await db.users.update_many({"shop_id": {"$exists": False}}, {"$set": {"shop_id": shop_id}})
+    # First user (by created_at) becomes the owner if no one has the owner role
+    if await db.users.count_documents({"role": "owner"}) == 0:
+        first = await db.users.find({"shop_id": shop_id}).sort("created_at", 1).limit(1).to_list(1)
+        if first:
+            await db.users.update_one({"id": first[0]["id"]}, {"$set": {"role": "owner"}})
+    await db.users.update_many({"role": {"$exists": False}}, {"$set": {"role": "tech"}})
+    # brain_cases indexes
+    try:
+        await db.brain_cases.create_index([("shop_id", 1), ("created_at", -1)])
+        await db.brain_cases.create_index([("shop_id", 1), ("id", 1)], unique=True)
+    except Exception as e:
+        log.warning(f"index create: {e}")
+    log.info(f"Startup migration complete. Shop: {shop_id}")
+
 
 @app.on_event("shutdown")
 async def shutdown_db_client():

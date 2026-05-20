@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from "react";
-import { Mic, Send, Volume2, VolumeX, ChevronRight, Square, History, Settings2, X, Paperclip } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { Mic, Send, Volume2, VolumeX, ChevronRight, Square, History, Settings2, X, Paperclip, FolderPlus } from "lucide-react";
 import api, { API, getToken } from "@/api";
 import { useApp } from "@/AppContext";
 
@@ -7,6 +8,7 @@ const setStatus = (label, color) => window.dispatchEvent(new CustomEvent("wrench
 
 export default function Chat() {
   const app = useApp();
+  const nav = useNavigate();
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [sessionId, setSessionId] = useState(() => localStorage.getItem("dw_chat_session") || null);
@@ -112,6 +114,20 @@ export default function Chat() {
   };
 
   const newSession = () => { setSessionId(null); setMessages([]); setShowOptions(false); };
+
+  const saveAsCase = async () => {
+    if (!sessionId || messages.length === 0) {
+      alert("Nothing to save yet — chat with Wrench first, then save the closed job.");
+      return;
+    }
+    try {
+      const r = await api.post(`/cases/from-chat/${sessionId}`);
+      // Navigate to Cases page so Doc can fill in root cause + repair
+      nav(`/cases`);
+    } catch (e) {
+      alert("Save failed: " + (e?.response?.data?.detail || e.message));
+    }
+  };
 
   const send = async (text, attachmentNote) => {
     unlockAudio();
@@ -487,6 +503,7 @@ export default function Chat() {
             {voiceOn ? "VOICE ON" : "VOICE OFF"}
           </button>
           <button data-testid="sessions-toggle" onClick={()=>setShowSessions(s=>!s)} className="btn-ghost text-xs flex items-center gap-2"><History size={14}/>HISTORY</button>
+          <button data-testid="save-as-case" onClick={saveAsCase} className="btn-ghost text-xs flex items-center gap-2" title="Drop this chat into the BRAIN as a case Wrench can recall later"><FolderPlus size={14}/>SAVE AS CASE</button>
           <button data-testid="new-session" onClick={newSession} className="btn-ghost text-xs">+ NEW</button>
         </div>
       </div>
@@ -500,6 +517,7 @@ export default function Chat() {
           <span className={mode==="direct"?"text-rust":"text-amber2"}>{mode.toUpperCase()}</span>
         </button>
         <button data-testid="m-history" onClick={()=>setShowSessions(true)} className="text-[11px] uppercase tracking-widest border border-line px-2 py-1 text-ink-2 flex items-center gap-1"><History size={12}/>HX</button>
+        <button data-testid="m-save-case" onClick={saveAsCase} className="text-[11px] uppercase tracking-widest border border-line px-2 py-1 text-amber2 flex items-center gap-1" title="Save chat as case"><FolderPlus size={12}/>CASE</button>
         <button data-testid="m-new" onClick={newSession} className="text-[11px] uppercase tracking-widest border border-line px-2 py-1 text-ink-2">+ NEW</button>
         <button data-testid="m-options" onClick={()=>setShowOptions(true)} className="text-[11px] uppercase tracking-widest border border-line px-2 py-1 text-ink-2 flex items-center gap-1"><Settings2 size={12}/></button>
       </div>
