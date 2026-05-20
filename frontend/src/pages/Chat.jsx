@@ -18,6 +18,8 @@ export default function Chat() {
   const [recording, setRecording] = useState(false);
   const [thinking, setThinking] = useState(false);
   const [speaking, setSpeaking] = useState(false);
+  const [callMode, setCallMode] = useState(false);
+  const callModeRef = useRef(false);
   const [micError, setMicError] = useState("");
   const [showMicHelp, setShowMicHelp] = useState(false);
   const recRef = useRef(null);
@@ -83,10 +85,16 @@ export default function Chat() {
       const reply = r.data.reply || "";
       setMessages(m => [...m, { role: "assistant", content: reply, citations: r.data.citations, heat: r.data.heat_detected }]);
       refreshSessions();
-      if (voiceOn) await speak(reply);
+      if (voiceOn || callModeRef.current) await speak(reply);
+      else if (callModeRef.current) {
+        // shouldn't happen, but loop the mic regardless if call mode is on
+        setTimeout(() => callModeRef.current && startNativeSpeech(), 400);
+      }
     } catch (e) {
       setMessages(m => [...m, { role: "assistant", content: `[ ERROR ] ${e?.response?.data?.detail || e.message}` }]);
-    } finally { setThinking(false); setStatus("IDLE", "#52525B"); }
+      // even on error, resume listening if call mode is on
+      if (callModeRef.current) setTimeout(() => callModeRef.current && startNativeSpeech(), 800);
+    } finally { setThinking(false); if (!callModeRef.current) setStatus("IDLE", "#52525B"); }
   };
 
   const speak = async (text) => {
@@ -104,12 +112,24 @@ export default function Chat() {
       if (!el) { setSpeaking(false); setStatus("IDLE", "#52525B"); return; }
       try { el.pause(); el.currentTime = 0; } catch {}
       el.src = url;
-      el.onended = () => { setSpeaking(false); setStatus("IDLE", "#52525B"); };
-      el.onerror = () => { setSpeaking(false); setStatus("IDLE", "#52525B"); };
+      el.onended = () => {
+        setSpeaking(false);
+        setStatus(callModeRef.current ? "LISTENING" : "IDLE", callModeRef.current ? "#FF5722" : "#52525B");
+        // In call mode, automatically re-open mic after Wrench finishes
+        if (callModeRef.current) {
+          setTimeout(() => { if (callModeRef.current) startNativeSpeech(); }, 250);
+        }
+      };
+      el.onerror = () => {
+        setSpeaking(false);
+        setStatus(callModeRef.current ? "LISTENING" : "IDLE", callModeRef.current ? "#FF5722" : "#52525B");
+        if (callModeRef.current) {
+          setTimeout(() => { if (callModeRef.current) startNativeSpeech(); }, 250);
+        }
+      };
       try {
         await el.play();
       } catch (e) {
-        // iOS may still block — surface a "tap to play" button via status
         setSpeaking(false); setStatus("TAP TO HEAR", "#FFC107");
       }
     } catch {
@@ -178,14 +198,21 @@ export default function Chat() {
       };
       rec.onerror = (e) => {
         setRecording(false);
-        setStatus("IDLE", "#52525B");
+        if (!callModeRef.current) setStatus("IDLE", "#52525B");
         const err = e?.error || "unknown";
         if (err === "not-allowed" || err === "service-not-allowed" || err === "permission-denied") {
+          callModeRef.current = false; setCallMode(false);
           setMicError("Mic permission denied by browser.");
           setShowMicHelp(true);
         } else if (err === "no-speech") {
-          setMicError("Didn't catch anything — try again, talk closer to the phone.");
+          // in call mode, just restart silently
+          if (callModeRef.current) {
+            setTimeout(() => { if (callModeRef.current) startNativeSpeech(); }, 300);
+          } else {
+            setMicError("Didn't catch anything — try again.");
+          }
         } else if (err === "audio-capture") {
+          callModeRef.current = false; setCallMode(false);
           setMicError("Can't capture audio. Plug in headphones or check your mic.");
         } else if (err === "aborted") {
           // user cancelled — no error
@@ -195,11 +222,16 @@ export default function Chat() {
       };
       rec.onend = () => {
         setRecording(false);
-        setStatus("IDLE", "#52525B");
         const text = finalText.trim();
         if (text) {
           setInput("");
           send(text);
+        } else if (callModeRef.current && !thinking && !speaking) {
+          // no speech detected, restart listening if we're still on the call
+          setStatus("LISTENING", "#FF5722");
+          setTimeout(() => { if (callModeRef.current) startNativeSpeech(); }, 300);
+        } else if (!callModeRef.current) {
+          setStatus("IDLE", "#52525B");
         }
       };
 
@@ -284,6 +316,29 @@ export default function Chat() {
 
   const toggleRecord = () => recording ? stopRecord() : startRecord();
 
+  const startCall = () => {
+    unlockAudio();
+    callModeRef.current = true;
+    setCallMode(true);
+    setVoiceOn(true);
+    setMicError(""); setShowMicHelp(false);
+    // immediately open the mic
+    if (!recording) startNativeSpeech();
+  };
+
+  const endCall = () => {
+    callModeRef.current = false;
+    setCallMode(false);
+    // stop any active recognition
+    try { speechRecRef.current && speechRecRef.current.stop(); } catch {}
+    // stop any speaking
+    try { const el = audioElRef.current; if (el) el.pause(); } catch {}
+    setRecording(false); setSpeaking(false);
+    setStatus("IDLE", "#52525B");
+  };
+
+  const toggleCall = () => callMode ? endCall() : startCall();
+
   return (
     <div className="flex h-full flex-col" style={{minHeight:"calc(100dvh - 90px)"}}>
       {/* Hidden audio element for TTS playback — must be in DOM for iOS to allow play() */}
@@ -328,15 +383,15 @@ export default function Chat() {
       <div className="flex-1 overflow-auto" data-testid="messages-area">
         {messages.length === 0 ? (
           <div className="min-h-full flex flex-col items-center justify-center px-4 py-6 text-center">
-            <VoiceButton recording={recording} thinking={thinking} speaking={speaking} onClick={toggleRecord} onStopSpeak={stopSpeak} />
+            <VoiceButton callMode={callMode} recording={recording} thinking={thinking} speaking={speaking} onClick={toggleCall} />
             {micError && (
               <MicHelpPanel error={micError} expanded={showMicHelp} onToggle={()=>setShowMicHelp(s=>!s)} onRetry={startRecord} />
             )}
             <div className="mt-10 max-w-xl">
               <div className="heading text-2xl md:text-3xl mb-2">SAY THE WORD, DOC.</div>
               <p className="text-ink-2 text-xs md:text-sm leading-relaxed px-2">
-                <span className="text-rust font-bold">TYPE in the box below</span> — works every time, no mic needed.
-                Or tap the big mic if your phone is set up for it.
+                <span className="text-rust font-bold">TAP TALK</span> for a back-and-forth voice call.
+                Or type below if your hands are full.
               </p>
               <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-2 text-left">
                 {[
@@ -373,10 +428,10 @@ export default function Chat() {
         <div className="flex items-end gap-2 md:gap-3">
           <button
             data-testid="mic-button"
-            onClick={toggleRecord}
-            aria-label={recording ? "Stop recording" : "Start recording"}
-            className={`w-14 h-14 border-2 ${recording ? "border-rust bg-rust/10 animate-pulseRust" : "border-rust"} text-rust active:bg-rust active:text-black flex items-center justify-center flex-shrink-0`}>
-            {recording ? <Square size={20} fill="currentColor"/> : <Mic size={22}/>}
+            onClick={toggleCall}
+            aria-label={callMode ? "End call" : "Start voice call"}
+            className={`w-14 h-14 border-2 ${callMode ? "border-rust bg-rust text-black animate-pulseRust" : recording ? "border-rust bg-rust/10 animate-pulseRust text-rust" : "border-rust text-rust"} active:bg-rust active:text-black flex items-center justify-center flex-shrink-0`}>
+            {callMode ? <Square size={20} fill="currentColor"/> : <Mic size={22}/>}
           </button>
           <textarea
             ref={inputRef}
@@ -395,12 +450,11 @@ export default function Chat() {
           </button>
         </div>
         <div className="mt-1.5 text-[10px] text-ink-3 uppercase tracking-[0.15em] flex justify-between">
-          <span>{recording ? "● RECORDING — tap mic to stop" : speaking ? "● SPEAKING — tap to halt" : "READY"}</span>
+          <span>{callMode ? "● ON CALL — TAP MIC TO END" : recording ? "● RECORDING — tap mic to stop" : speaking ? "● SPEAKING" : "READY"}</span>
           <div className="flex items-center gap-3">
-            {audioElRef.current && audioElRef.current.src && !speaking && (
+            {audioElRef.current && audioElRef.current.src && !speaking && !callMode && (
               <button onClick={playLast} className="text-amber2 hover:text-rust" data-testid="replay-voice">▶ HEAR LAST</button>
             )}
-            {speaking && <button onClick={stopSpeak} className="text-rust">HALT VOICE</button>}
           </div>
         </div>
       </div>
@@ -519,19 +573,26 @@ function MicHelpPanel({ error, expanded, onToggle, onRetry, compact }) {
   );
 }
 
-function VoiceButton({ recording, thinking, speaking, onClick, onStopSpeak }) {
-  const active = recording || speaking;
+function VoiceButton({ callMode, recording, thinking, speaking, onClick }) {
+  const active = callMode || recording || speaking || thinking;
+  let label = "TAP TO TALK";
+  if (callMode) {
+    if (recording) label = "LISTENING — TAP TO END CALL";
+    else if (thinking) label = "WRENCH IS THINKING...";
+    else if (speaking) label = "WRENCH IS TALKING...";
+    else label = "IN CALL — TAP TO END";
+  }
   return (
     <div className="relative">
       <button
-        onClick={recording ? onClick : speaking ? onStopSpeak : onClick}
+        onClick={onClick}
         data-testid="big-voice-button"
-        aria-label="Push to talk"
-        className={`w-44 h-44 sm:w-48 sm:h-48 border-2 ${active?"border-rust":"border-rust/70"} ${recording?"bg-rust/10 animate-pulseRust":""} flex items-center justify-center text-rust active:bg-rust active:text-black transition-colors`}>
-        {speaking ? <WaveBars/> : recording ? <Square size={40} fill="currentColor"/> : <Mic size={56} strokeWidth={1.5}/>}
+        aria-label={callMode ? "End call" : "Start call"}
+        className={`w-44 h-44 sm:w-48 sm:h-48 border-2 ${active?"border-rust":"border-rust/70"} ${(recording||callMode)?"bg-rust/15":""} ${recording?"animate-pulseRust":""} flex items-center justify-center text-rust active:bg-rust active:text-black transition-colors`}>
+        {speaking ? <WaveBars/> : callMode ? (thinking ? <Square size={40} fill="currentColor"/> : <Mic size={56} strokeWidth={1.5}/>) : <Mic size={56} strokeWidth={1.5}/>}
       </button>
-      <div className="absolute -bottom-7 left-0 right-0 text-center text-[10px] uppercase tracking-[0.25em] text-ink-2">
-        {recording ? "LISTENING — TAP TO STOP" : speaking ? "SPEAKING — TAP TO HALT" : "TAP TO TALK"}
+      <div className="absolute -bottom-7 left-0 right-0 text-center text-[10px] uppercase tracking-[0.22em] text-ink-2 whitespace-nowrap">
+        {label}
       </div>
     </div>
   );
