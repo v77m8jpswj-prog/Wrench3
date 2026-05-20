@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
-import { Mic, Send, Volume2, VolumeX, ChevronRight, Square, History } from "lucide-react";
+import { Mic, Send, Volume2, VolumeX, ChevronRight, Square, History, Settings2, X } from "lucide-react";
 import api, { API, getToken } from "@/api";
 
 const setStatus = (label, color) => window.dispatchEvent(new CustomEvent("wrench-status", { detail: { label, color } }));
@@ -14,13 +14,16 @@ export default function Chat() {
   const [vehicles, setVehicles] = useState([]);
   const [sessions, setSessions] = useState([]);
   const [showSessions, setShowSessions] = useState(false);
+  const [showOptions, setShowOptions] = useState(false);
   const [recording, setRecording] = useState(false);
   const [thinking, setThinking] = useState(false);
   const [speaking, setSpeaking] = useState(false);
+  const [micError, setMicError] = useState("");
   const recRef = useRef(null);
   const audioRef = useRef(null);
   const chunksRef = useRef([]);
   const endRef = useRef(null);
+  const streamRef = useRef(null);
 
   useEffect(() => {
     api.get("/vehicles").then(r => setVehicles(r.data || [])).catch(()=>{});
@@ -38,7 +41,7 @@ export default function Chat() {
     setShowSessions(false);
   };
 
-  const newSession = () => { setSessionId(null); setMessages([]); };
+  const newSession = () => { setSessionId(null); setMessages([]); setShowOptions(false); };
 
   const send = async (text) => {
     const t = (text ?? input).trim();
@@ -74,7 +77,10 @@ export default function Chat() {
       audioRef.current = a;
       a.onended = () => { setSpeaking(false); setStatus("IDLE", "#52525B"); };
       a.onerror = () => { setSpeaking(false); setStatus("IDLE", "#52525B"); };
-      await a.play();
+      try { await a.play(); } catch (e) {
+        // iOS requires user gesture; user can tap the speak-again button
+        setSpeaking(false); setStatus("IDLE", "#52525B");
+      }
     } catch {
       setSpeaking(false); setStatus("IDLE", "#52525B");
     }
@@ -85,18 +91,40 @@ export default function Chat() {
     setSpeaking(false); setStatus("IDLE", "#52525B");
   };
 
+  const pickMime = () => {
+    const candidates = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/mp4;codecs=mp4a.40.2", "audio/mpeg"];
+    if (typeof MediaRecorder === "undefined") return null;
+    for (const m of candidates) {
+      if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(m)) return m;
+    }
+    return ""; // let browser pick
+  };
+
   const startRecord = async () => {
+    setMicError("");
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setMicError("This browser can't access the mic. Try Chrome or Safari latest.");
+      return;
+    }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mr = new MediaRecorder(stream, { mimeType: "audio/webm" });
+      streamRef.current = stream;
+      const mime = pickMime();
+      const opts = mime ? { mimeType: mime } : {};
+      let mr;
+      try { mr = new MediaRecorder(stream, opts); }
+      catch { mr = new MediaRecorder(stream); }
+
       chunksRef.current = [];
-      mr.ondataavailable = e => { if (e.data.size) chunksRef.current.push(e.data); };
+      mr.ondataavailable = e => { if (e.data && e.data.size) chunksRef.current.push(e.data); };
       mr.onstop = async () => {
-        stream.getTracks().forEach(t => t.stop());
-        const blob = new Blob(chunksRef.current, { type: "audio/webm" });
+        try { streamRef.current?.getTracks().forEach(t => t.stop()); } catch {}
+        const blob = new Blob(chunksRef.current, { type: mr.mimeType || "audio/webm" });
+        if (blob.size < 800) { setStatus("IDLE", "#52525B"); setMicError("Too short / silent. Hold and talk longer."); return; }
         setStatus("THINKING", "#FF5722");
+        const ext = (mr.mimeType || "").includes("mp4") ? "m4a" : (mr.mimeType || "").includes("mpeg") ? "mp3" : "webm";
         const fd = new FormData();
-        fd.append("audio", blob, "rec.webm");
+        fd.append("audio", blob, `rec.${ext}`);
         try {
           const r = await fetch(`${API}/voice/transcribe`, {
             method: "POST",
@@ -104,10 +132,10 @@ export default function Chat() {
             body: fd,
           });
           const j = await r.json();
-          if (j.text) send(j.text);
-          else setStatus("IDLE", "#52525B");
-        } catch {
-          setStatus("IDLE", "#52525B");
+          if (j.text && j.text.trim()) send(j.text);
+          else { setStatus("IDLE", "#52525B"); setMicError("Didn't catch that — try again."); }
+        } catch (e) {
+          setStatus("IDLE", "#52525B"); setMicError("Transcription failed.");
         }
       };
       mr.start();
@@ -115,128 +143,176 @@ export default function Chat() {
       setRecording(true);
       setStatus("LISTENING", "#FF5722");
     } catch (e) {
-      alert("Mic blocked: " + e.message);
+      const msg = (e && e.name) || "";
+      if (msg === "NotAllowedError" || msg === "PermissionDeniedError") {
+        setMicError("Mic blocked. Tap the lock icon in your browser and allow microphone.");
+      } else if (msg === "NotFoundError") {
+        setMicError("No microphone found on this device.");
+      } else {
+        setMicError("Mic error: " + (e?.message || msg || "unknown"));
+      }
     }
   };
 
   const stopRecord = () => {
-    if (recRef.current && recRef.current.state !== "inactive") recRef.current.stop();
+    try {
+      if (recRef.current && recRef.current.state !== "inactive") recRef.current.stop();
+    } catch {}
     setRecording(false);
   };
 
   const toggleRecord = () => recording ? stopRecord() : startRecord();
 
   return (
-    <div className="flex h-full" style={{height:"calc(100vh - 36px)"}}>
-      {/* main column */}
-      <div className="flex-1 flex flex-col">
-        {/* header */}
-        <div className="border-b border-line px-6 py-3 flex items-center justify-between bg-bg-2" data-testid="chat-header">
-          <div className="flex items-center gap-3">
-            <h1 className="heading text-2xl">CHAT // <span className="text-rust">WRENCH</span></h1>
-            <span className="text-ink-3 text-xs">{sessionId ? `SID: ${sessionId.slice(0,8)}` : "NEW SESSION"}</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <select data-testid="vehicle-select" value={vehicleId} onChange={e=>setVehicleId(e.target.value)} className="input-shop text-xs py-1" style={{width:"auto"}}>
-              <option value="">-- NO VEHICLE --</option>
-              {vehicles.map(v => <option key={v.id} value={v.id}>{`${v.year} ${v.make} ${v.model}`.trim() || v.id.slice(0,6)}</option>)}
-            </select>
-            <button data-testid="mode-toggle" onClick={()=>setMode(mode==="direct"?"dream":"direct")} className="btn-ghost text-xs">
-              MODE: <span className={mode==="direct"?"text-rust":"text-amber2"}>{mode === "direct" ? "DIRECT" : "DREAM"}</span>
-            </button>
-            <button data-testid="voice-toggle" onClick={()=>setVoiceOn(v=>!v)} className="btn-ghost text-xs flex items-center gap-2">
-              {voiceOn ? <Volume2 size={14}/> : <VolumeX size={14}/>}
-              {voiceOn ? "VOICE ON" : "VOICE OFF"}
-            </button>
-            <button data-testid="sessions-toggle" onClick={()=>setShowSessions(s=>!s)} className="btn-ghost text-xs flex items-center gap-2"><History size={14}/>HISTORY</button>
-            <button data-testid="new-session" onClick={newSession} className="btn-ghost text-xs">+ NEW</button>
-          </div>
+    <div className="flex h-full flex-col" style={{minHeight:"calc(100dvh - 90px)"}}>
+      {/* Desktop-only header */}
+      <div className="hidden md:flex border-b border-line px-6 py-3 items-center justify-between bg-bg-2" data-testid="chat-header">
+        <div className="flex items-center gap-3">
+          <h1 className="heading text-2xl">CHAT // <span className="text-rust">WRENCH</span></h1>
+          <span className="text-ink-3 text-xs">{sessionId ? `SID: ${sessionId.slice(0,8)}` : "NEW SESSION"}</span>
         </div>
-
-        {/* messages */}
-        <div className="flex-1 overflow-auto" data-testid="messages-area">
-          {messages.length === 0 && (
-            <div className="h-full flex flex-col items-center justify-center px-6 text-center">
-              <VoiceButton recording={recording} thinking={thinking} speaking={speaking} onClick={toggleRecord} onStopSpeak={stopSpeak} />
-              <div className="mt-8 max-w-xl">
-                <div className="heading text-3xl mb-2">SAY THE WORD, DOC.</div>
-                <p className="text-ink-2 text-sm leading-relaxed">
-                  Hit the mic and talk, or type below. Ask about a tune, drop a datalog,
-                  paste a table. I'll cite my sources when I'm pulling from your library.
-                </p>
-                <div className="mt-6 grid grid-cols-2 gap-2 text-left">
-                  {[
-                    "Truck pings under WOT at 4000 RPM. Where do I start?",
-                    "Smooth my VE table — I'll paste it next.",
-                    "Knock retard on cyl 6, log incoming.",
-                    "What's the torque spec on a GM LS rocker arm bolt?",
-                  ].map((s,i) => (
-                    <button key={i} data-testid={`suggest-${i}`} onClick={()=>send(s)} className="text-left text-xs text-ink-2 hover:text-white border border-line p-3 hover:border-rust transition-colors">
-                      <ChevronRight size={12} className="inline text-rust mr-1"/>{s}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {messages.length > 0 && (
-            <div className="font-mono text-sm">
-              {messages.map((m, i) => (
-                <MessageRow key={i} m={m} idx={i} />
-              ))}
-              {thinking && (
-                <div className="px-6 py-3 border-b border-line bg-bg-1 text-rust" data-testid="thinking-row">
-                  [WRENCH] <span className="animate-blink">_</span> thinking
-                </div>
-              )}
-              <div ref={endRef} />
-            </div>
-          )}
-        </div>
-
-        {/* input bar */}
-        <div className="border-t border-line bg-bg-2 px-6 py-4">
-          <div className="flex items-end gap-3">
-            <button
-              data-testid="mic-button"
-              onClick={toggleRecord}
-              className={`w-14 h-14 border-2 ${recording ? "border-rust bg-rust/10 animate-pulseRust" : "border-rust"} text-rust hover:bg-rust hover:text-black transition-colors flex items-center justify-center flex-shrink-0`}>
-              {recording ? <Square size={20} fill="currentColor"/> : <Mic size={22}/>}
-            </button>
-            <textarea
-              data-testid="chat-input"
-              value={input}
-              onChange={e=>setInput(e.target.value)}
-              onKeyDown={e=>{ if (e.key==="Enter" && !e.shiftKey){ e.preventDefault(); send(); } }}
-              rows={2}
-              placeholder={recording ? "LISTENING..." : "TYPE OR HIT MIC. ENTER TO SEND."}
-              className="input-shop flex-1 resize-none"
-            />
-            <button data-testid="send-btn" onClick={()=>send()} className="btn-rust h-14 flex items-center gap-2"><Send size={16}/>SEND</button>
-          </div>
-          <div className="mt-2 text-[10px] text-ink-3 uppercase tracking-[0.2em] flex justify-between">
-            <span>{recording ? "● RECORDING — click mic to stop" : speaking ? "● SPEAKING — click to halt" : "READY"}</span>
-            {speaking && <button onClick={stopSpeak} className="text-rust hover:text-white">HALT VOICE</button>}
-          </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <select data-testid="vehicle-select" value={vehicleId} onChange={e=>setVehicleId(e.target.value)} className="input-shop text-xs py-1" style={{width:"auto"}}>
+            <option value="">-- NO VEHICLE --</option>
+            {vehicles.map(v => <option key={v.id} value={v.id}>{`${v.year} ${v.make} ${v.model}`.trim() || v.id.slice(0,6)}</option>)}
+          </select>
+          <button data-testid="mode-toggle" onClick={()=>setMode(mode==="direct"?"dream":"direct")} className="btn-ghost text-xs">
+            MODE: <span className={mode==="direct"?"text-rust":"text-amber2"}>{mode === "direct" ? "DIRECT" : "DREAM"}</span>
+          </button>
+          <button data-testid="voice-toggle" onClick={()=>setVoiceOn(v=>!v)} className="btn-ghost text-xs flex items-center gap-2">
+            {voiceOn ? <Volume2 size={14}/> : <VolumeX size={14}/>}
+            {voiceOn ? "VOICE ON" : "VOICE OFF"}
+          </button>
+          <button data-testid="sessions-toggle" onClick={()=>setShowSessions(s=>!s)} className="btn-ghost text-xs flex items-center gap-2"><History size={14}/>HISTORY</button>
+          <button data-testid="new-session" onClick={newSession} className="btn-ghost text-xs">+ NEW</button>
         </div>
       </div>
 
-      {/* sessions drawer */}
-      {showSessions && (
-        <aside className="w-72 border-l border-line bg-bg-2 overflow-auto" data-testid="sessions-drawer">
-          <div className="px-4 py-3 border-b border-line flex items-center justify-between">
-            <span className="heading text-sm">HISTORY</span>
-            <button onClick={()=>setShowSessions(false)} className="text-ink-3 hover:text-rust">×</button>
+      {/* Mobile chat header strip */}
+      <div className="md:hidden px-3 py-2 border-b border-line bg-bg-2 flex items-center justify-between gap-2">
+        <button onClick={()=>setVoiceOn(v=>!v)} data-testid="m-voice-toggle" className={`flex items-center gap-1 text-[11px] uppercase tracking-widest border px-2 py-1 ${voiceOn?"border-rust text-rust":"border-line text-ink-2"}`}>
+          {voiceOn ? <Volume2 size={12}/> : <VolumeX size={12}/>} {voiceOn ? "VOICE" : "MUTE"}
+        </button>
+        <button onClick={()=>setMode(mode==="direct"?"dream":"direct")} data-testid="m-mode" className="text-[11px] uppercase tracking-widest border border-line px-2 py-1 text-ink-2">
+          <span className={mode==="direct"?"text-rust":"text-amber2"}>{mode.toUpperCase()}</span>
+        </button>
+        <button data-testid="m-history" onClick={()=>setShowSessions(true)} className="text-[11px] uppercase tracking-widest border border-line px-2 py-1 text-ink-2 flex items-center gap-1"><History size={12}/>HX</button>
+        <button data-testid="m-new" onClick={newSession} className="text-[11px] uppercase tracking-widest border border-line px-2 py-1 text-ink-2">+ NEW</button>
+        <button data-testid="m-options" onClick={()=>setShowOptions(true)} className="text-[11px] uppercase tracking-widest border border-line px-2 py-1 text-ink-2 flex items-center gap-1"><Settings2 size={12}/></button>
+      </div>
+
+      {/* Messages */}
+      <div className="flex-1 overflow-auto" data-testid="messages-area">
+        {messages.length === 0 ? (
+          <div className="min-h-full flex flex-col items-center justify-center px-4 py-6 text-center">
+            <VoiceButton recording={recording} thinking={thinking} speaking={speaking} onClick={toggleRecord} onStopSpeak={stopSpeak} />
+            {micError && (
+              <div className="mt-8 text-danger text-xs uppercase tracking-widest border border-danger px-3 py-2 max-w-sm" data-testid="mic-error">
+                {micError}
+              </div>
+            )}
+            <div className="mt-10 max-w-xl">
+              <div className="heading text-2xl md:text-3xl mb-2">SAY THE WORD, DOC.</div>
+              <p className="text-ink-2 text-xs md:text-sm leading-relaxed px-2">
+                Tap the mic and talk, or type below. Drop datalogs, paste tables, ask anything.
+              </p>
+              <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-2 text-left">
+                {[
+                  "Truck pings under WOT at 4000 RPM. Where do I start?",
+                  "Smooth my VE table — I'll paste it next.",
+                  "Knock retard on cyl 6, log incoming.",
+                  "Torque spec on a GM LS rocker arm bolt?",
+                ].map((s,i) => (
+                  <button key={i} data-testid={`suggest-${i}`} onClick={()=>send(s)} className="text-left text-xs text-ink-2 hover:text-white border border-line p-3 hover:border-rust transition-colors">
+                    <ChevronRight size={12} className="inline text-rust mr-1"/>{s}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
-          {sessions.length === 0 && <div className="p-4 text-ink-3 text-xs">No sessions yet.</div>}
-          {sessions.map(s => (
-            <button key={s.id} data-testid={`session-${s.id}`} onClick={()=>loadSession(s.id)} className={`w-full text-left px-4 py-3 border-b border-line hover:bg-bg-3 ${sessionId===s.id?"bg-bg-3 border-l-2 border-l-rust":""}`}>
-              <div className="text-xs font-bold truncate">{s.title || s.id.slice(0,8)}</div>
-              <div className="text-[10px] text-ink-3 truncate mt-1">{s.preview}</div>
-            </button>
-          ))}
-        </aside>
+        ) : (
+          <div className="font-mono text-sm pb-4">
+            {messages.map((m, i) => <MessageRow key={i} m={m} idx={i} />)}
+            {thinking && (
+              <div className="px-4 md:px-6 py-3 border-b border-line bg-bg-1 text-rust text-xs" data-testid="thinking-row">
+                [WRENCH] <span className="animate-blink">_</span> thinking
+              </div>
+            )}
+            <div ref={endRef} />
+          </div>
+        )}
+      </div>
+
+      {/* Bottom input bar */}
+      <div className="border-t border-line bg-bg-2 px-3 md:px-6 py-3 md:py-4 sticky bottom-0 z-20">
+        {micError && messages.length > 0 && (
+          <div className="text-danger text-[10px] uppercase tracking-widest border border-danger px-2 py-1 mb-2" data-testid="mic-error-inline">{micError}</div>
+        )}
+        <div className="flex items-end gap-2 md:gap-3">
+          <button
+            data-testid="mic-button"
+            onClick={toggleRecord}
+            aria-label={recording ? "Stop recording" : "Start recording"}
+            className={`w-14 h-14 border-2 ${recording ? "border-rust bg-rust/10 animate-pulseRust" : "border-rust"} text-rust active:bg-rust active:text-black flex items-center justify-center flex-shrink-0`}>
+            {recording ? <Square size={20} fill="currentColor"/> : <Mic size={22}/>}
+          </button>
+          <textarea
+            data-testid="chat-input"
+            value={input}
+            onChange={e=>setInput(e.target.value)}
+            onKeyDown={e=>{ if (e.key==="Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey){ e.preventDefault(); send(); } }}
+            rows={1}
+            placeholder={recording ? "LISTENING..." : "TYPE OR TAP MIC"}
+            className="input-shop flex-1 resize-none text-sm py-3"
+            style={{minHeight:"56px"}}
+          />
+          <button data-testid="send-btn" onClick={()=>send()} aria-label="Send" className="btn-rust h-14 px-3 md:px-5 flex items-center gap-1.5">
+            <Send size={16}/><span className="hidden sm:inline">SEND</span>
+          </button>
+        </div>
+        <div className="mt-1.5 text-[10px] text-ink-3 uppercase tracking-[0.15em] flex justify-between">
+          <span>{recording ? "● RECORDING — tap mic to stop" : speaking ? "● SPEAKING — tap to halt" : "READY"}</span>
+          {speaking && <button onClick={stopSpeak} className="text-rust">HALT VOICE</button>}
+        </div>
+      </div>
+
+      {/* Sessions drawer (mobile/desktop full-screen) */}
+      {showSessions && (
+        <div className="fixed inset-0 z-40 flex" data-testid="sessions-drawer">
+          <div className="flex-1 bg-black/60" onClick={()=>setShowSessions(false)} />
+          <aside className="w-[85%] max-w-sm bg-bg-2 border-l border-line overflow-auto">
+            <div className="px-4 py-3 border-b border-line flex items-center justify-between sticky top-0 bg-bg-2">
+              <span className="heading text-lg">HISTORY</span>
+              <button onClick={()=>setShowSessions(false)} data-testid="close-sessions" className="text-ink-2 p-1"><X size={20}/></button>
+            </div>
+            {sessions.length === 0 && <div className="p-4 text-ink-3 text-xs">No sessions yet.</div>}
+            {sessions.map(s => (
+              <button key={s.id} data-testid={`session-${s.id}`} onClick={()=>loadSession(s.id)} className={`w-full text-left px-4 py-3 border-b border-line ${sessionId===s.id?"bg-bg-3 border-l-2 border-l-rust":""}`}>
+                <div className="text-xs font-bold truncate">{s.title || s.id.slice(0,8)}</div>
+                <div className="text-[10px] text-ink-3 truncate mt-1">{s.preview}</div>
+              </button>
+            ))}
+          </aside>
+        </div>
+      )}
+
+      {/* Mobile options sheet */}
+      {showOptions && (
+        <div className="md:hidden fixed inset-0 z-40 flex items-end" data-testid="options-sheet">
+          <div className="flex-1 bg-black/60" onClick={()=>setShowOptions(false)} />
+          <div className="absolute left-0 right-0 bottom-0 bg-bg-2 border-t border-line p-4">
+            <div className="flex items-center justify-between mb-3">
+              <span className="heading text-lg">OPTIONS</span>
+              <button onClick={()=>setShowOptions(false)} className="text-ink-2 p-1"><X size={18}/></button>
+            </div>
+            <label className="label-shop">VEHICLE</label>
+            <select value={vehicleId} onChange={e=>setVehicleId(e.target.value)} className="input-shop mb-4">
+              <option value="">-- NO VEHICLE --</option>
+              {vehicles.map(v => <option key={v.id} value={v.id}>{`${v.year} ${v.make} ${v.model}`.trim() || v.id.slice(0,6)}</option>)}
+            </select>
+            <button onClick={()=>setShowOptions(false)} className="btn-rust w-full">DONE</button>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -249,11 +325,12 @@ function VoiceButton({ recording, thinking, speaking, onClick, onStopSpeak }) {
       <button
         onClick={recording ? onClick : speaking ? onStopSpeak : onClick}
         data-testid="big-voice-button"
-        className={`w-40 h-40 border-2 ${active?"border-rust":"border-rust/60"} ${recording?"bg-rust/10 animate-pulseRust":""} flex items-center justify-center text-rust hover:bg-rust hover:text-black transition-colors`}>
-        {speaking ? <WaveBars/> : recording ? <Square size={36} fill="currentColor"/> : <Mic size={48} strokeWidth={1.5}/>}
+        aria-label="Push to talk"
+        className={`w-44 h-44 sm:w-48 sm:h-48 border-2 ${active?"border-rust":"border-rust/70"} ${recording?"bg-rust/10 animate-pulseRust":""} flex items-center justify-center text-rust active:bg-rust active:text-black transition-colors`}>
+        {speaking ? <WaveBars/> : recording ? <Square size={40} fill="currentColor"/> : <Mic size={56} strokeWidth={1.5}/>}
       </button>
-      <div className="absolute -bottom-6 left-0 right-0 text-center text-[10px] uppercase tracking-[0.3em] text-ink-2">
-        {recording ? "LISTENING" : speaking ? "SPEAKING (CLICK TO HALT)" : "PUSH TO TALK"}
+      <div className="absolute -bottom-7 left-0 right-0 text-center text-[10px] uppercase tracking-[0.25em] text-ink-2">
+        {recording ? "LISTENING — TAP TO STOP" : speaking ? "SPEAKING — TAP TO HALT" : "TAP TO TALK"}
       </div>
     </div>
   );
@@ -261,9 +338,9 @@ function VoiceButton({ recording, thinking, speaking, onClick, onStopSpeak }) {
 
 function WaveBars() {
   return (
-    <div className="flex items-end gap-1 h-12">
+    <div className="flex items-end gap-1 h-14">
       {[0,1,2,3,4,5,6].map(i => (
-        <div key={i} className="w-2 bg-rust origin-bottom animate-bar" style={{ height: 40, animationDelay: `${i*70}ms` }}/>
+        <div key={i} className="w-2 bg-rust origin-bottom animate-bar" style={{ height: 48, animationDelay: `${i*70}ms` }}/>
       ))}
     </div>
   );
@@ -272,16 +349,16 @@ function WaveBars() {
 function MessageRow({ m, idx }) {
   const isUser = m.role === "user";
   return (
-    <div className={`px-6 py-3 border-b border-line whitespace-pre-wrap break-words ${idx%2===0?"bg-bg-1":"bg-bg-2"}`} data-testid={`msg-${idx}`}>
-      <div className="flex items-baseline gap-3">
-        <span className={`font-head text-xs uppercase tracking-widest font-bold ${isUser?"text-amber2":"text-rust"}`}>
+    <div className={`px-4 md:px-6 py-3 border-b border-line whitespace-pre-wrap break-words ${idx%2===0?"bg-bg-1":"bg-bg-2"}`} data-testid={`msg-${idx}`}>
+      <div className="flex items-baseline gap-2 md:gap-3 flex-wrap">
+        <span className={`font-head text-[11px] md:text-xs uppercase tracking-widest font-bold ${isUser?"text-amber2":"text-rust"}`}>
           [{isUser?"TECH":"WRENCH"}]
         </span>
-        {m.heat && <span className="text-[10px] text-danger uppercase tracking-widest border border-danger px-1">HEAT</span>}
-        <span className="flex-1 text-ink leading-relaxed">{m.content}</span>
+        {m.heat && <span className="text-[9px] text-danger uppercase tracking-widest border border-danger px-1">HEAT</span>}
       </div>
+      <div className="mt-1 text-ink text-[13px] md:text-sm leading-relaxed">{m.content}</div>
       {m.citations && m.citations.length > 0 && (
-        <div className="mt-2 ml-16 text-[11px] text-ink-3 border-l-2 border-line pl-3">
+        <div className="mt-2 text-[10px] md:text-[11px] text-ink-3 border-l-2 border-line pl-3">
           <div className="uppercase tracking-widest text-amber2 mb-1">SOURCES</div>
           {m.citations.map((c,i)=>(<div key={i} className="mb-1">› {c.source}: <span className="text-ink-2">{c.snippet}</span></div>))}
         </div>

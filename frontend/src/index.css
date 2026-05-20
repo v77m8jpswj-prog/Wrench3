@@ -8,6 +8,7 @@ html, body, #root {
     background-color: #0A0A0A;
     color: #FFFFFF;
     min-height: 100vh;
+    min-height: 100dvh;
 }
 
 body {
@@ -18,7 +19,11 @@ body {
     background-color: #0A0A0A;
     color: #FFFFFF;
     overflow-x: hidden;
+    -webkit-tap-highlight-color: transparent;
 }
+
+input, textarea, select, button { font-size: 16px; } /* prevent iOS zoom */
+@media (min-width: 768px){ input, textarea, select { font-size: 14px; } }
 
 ::selection { background: #FF5722; color: #000; }
 
