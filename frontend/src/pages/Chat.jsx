@@ -19,15 +19,19 @@ export default function Chat() {
   const [thinking, setThinking] = useState(false);
   const [speaking, setSpeaking] = useState(false);
   const [micError, setMicError] = useState("");
+  const [showMicHelp, setShowMicHelp] = useState(false);
   const recRef = useRef(null);
   const audioRef = useRef(null);
   const chunksRef = useRef([]);
   const endRef = useRef(null);
   const streamRef = useRef(null);
+  const inputRef = useRef(null);
 
   useEffect(() => {
     api.get("/vehicles").then(r => setVehicles(r.data || [])).catch(()=>{});
     refreshSessions();
+    // Auto-focus text input so Doc can type immediately
+    setTimeout(() => inputRef.current?.focus(), 300);
   }, []);
 
   const refreshSessions = () => api.get("/chat/sessions").then(r => setSessions(r.data || [])).catch(()=>{});
@@ -101,9 +105,10 @@ export default function Chat() {
   };
 
   const startRecord = async () => {
-    setMicError("");
+    setMicError(""); setShowMicHelp(false);
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      setMicError("This browser can't access the mic. Try Chrome or Safari latest.");
+      setMicError("This browser can't access the mic.");
+      setShowMicHelp(true);
       return;
     }
     try {
@@ -145,7 +150,8 @@ export default function Chat() {
     } catch (e) {
       const msg = (e && e.name) || "";
       if (msg === "NotAllowedError" || msg === "PermissionDeniedError") {
-        setMicError("Mic blocked. Tap the lock icon in your browser and allow microphone.");
+        setMicError("Mic permission is BLOCKED.");
+        setShowMicHelp(true);
       } else if (msg === "NotFoundError") {
         setMicError("No microphone found on this device.");
       } else {
@@ -207,14 +213,13 @@ export default function Chat() {
           <div className="min-h-full flex flex-col items-center justify-center px-4 py-6 text-center">
             <VoiceButton recording={recording} thinking={thinking} speaking={speaking} onClick={toggleRecord} onStopSpeak={stopSpeak} />
             {micError && (
-              <div className="mt-8 text-danger text-xs uppercase tracking-widest border border-danger px-3 py-2 max-w-sm" data-testid="mic-error">
-                {micError}
-              </div>
+              <MicHelpPanel error={micError} expanded={showMicHelp} onToggle={()=>setShowMicHelp(s=>!s)} onRetry={startRecord} />
             )}
             <div className="mt-10 max-w-xl">
               <div className="heading text-2xl md:text-3xl mb-2">SAY THE WORD, DOC.</div>
               <p className="text-ink-2 text-xs md:text-sm leading-relaxed px-2">
-                Tap the mic and talk, or type below. Drop datalogs, paste tables, ask anything.
+                <span className="text-rust font-bold">TYPE in the box below</span> — works every time, no mic needed.
+                Or tap the big mic if your phone is set up for it.
               </p>
               <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-2 text-left">
                 {[
@@ -246,7 +251,7 @@ export default function Chat() {
       {/* Bottom input bar */}
       <div className="border-t border-line bg-bg-2 px-3 md:px-6 py-3 md:py-4 sticky bottom-0 z-20">
         {micError && messages.length > 0 && (
-          <div className="text-danger text-[10px] uppercase tracking-widest border border-danger px-2 py-1 mb-2" data-testid="mic-error-inline">{micError}</div>
+          <MicHelpPanel error={micError} expanded={showMicHelp} onToggle={()=>setShowMicHelp(s=>!s)} onRetry={startRecord} compact />
         )}
         <div className="flex items-end gap-2 md:gap-3">
           <button
@@ -257,14 +262,16 @@ export default function Chat() {
             {recording ? <Square size={20} fill="currentColor"/> : <Mic size={22}/>}
           </button>
           <textarea
+            ref={inputRef}
             data-testid="chat-input"
             value={input}
             onChange={e=>setInput(e.target.value)}
             onKeyDown={e=>{ if (e.key==="Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey){ e.preventDefault(); send(); } }}
             rows={1}
-            placeholder={recording ? "LISTENING..." : "TYPE OR TAP MIC"}
+            placeholder={recording ? "LISTENING..." : "TYPE HERE → HIT SEND"}
             className="input-shop flex-1 resize-none text-sm py-3"
             style={{minHeight:"56px"}}
+            autoFocus
           />
           <button data-testid="send-btn" onClick={()=>send()} aria-label="Send" className="btn-rust h-14 px-3 md:px-5 flex items-center gap-1.5">
             <Send size={16}/><span className="hidden sm:inline">SEND</span>
@@ -312,6 +319,78 @@ export default function Chat() {
             </select>
             <button onClick={()=>setShowOptions(false)} className="btn-rust w-full">DONE</button>
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MicHelpPanel({ error, expanded, onToggle, onRetry, compact }) {
+  // detect device
+  const ua = (typeof navigator !== "undefined") ? navigator.userAgent : "";
+  const isIOS = /iPhone|iPad|iPod/i.test(ua);
+  const isAndroid = /Android/i.test(ua);
+
+  return (
+    <div className={`border-2 border-danger bg-danger/10 ${compact ? "p-3 mb-2" : "mt-8 p-4 max-w-md w-full"}`} data-testid="mic-help-panel">
+      <div className="flex items-start gap-2">
+        <div className="text-danger heading text-lg flex-1">{error}</div>
+        <button onClick={onToggle} className="text-danger underline text-xs uppercase tracking-widest">
+          {expanded ? "HIDE" : "HOW TO FIX"}
+        </button>
+      </div>
+
+      {expanded && (
+        <div className="mt-4 text-sm text-ink space-y-3 text-left">
+          {isIOS && (
+            <div>
+              <div className="heading text-rust text-base mb-1">ON YOUR iPHONE:</div>
+              <ol className="list-decimal pl-5 space-y-1 text-[13px]">
+                <li>Open the <b>Settings</b> app (gear icon)</li>
+                <li>Scroll down and tap <b>Safari</b></li>
+                <li>Tap <b>Microphone</b></li>
+                <li>Choose <b>Ask</b> (or Allow)</li>
+                <li>Come back here, <b>close this tab</b>, and reopen the link</li>
+                <li>Tap the mic — Safari will prompt — hit <b>Allow</b></li>
+              </ol>
+              <div className="mt-2 text-[11px] text-ink-2">
+                Don't see Microphone under Safari? Tap the <b>"AA"</b> button on the left side of Safari's address bar →
+                <b> Website Settings</b> → <b>Microphone → Allow</b>.
+              </div>
+            </div>
+          )}
+          {isAndroid && (
+            <div>
+              <div className="heading text-rust text-base mb-1">ON YOUR ANDROID:</div>
+              <ol className="list-decimal pl-5 space-y-1 text-[13px]">
+                <li>Tap the <b>lock icon</b> (or three dots) left of the address bar</li>
+                <li>Tap <b>Permissions</b> → <b>Microphone</b> → <b>Allow</b></li>
+                <li>Refresh the page</li>
+                <li>Tap the mic and allow when prompted</li>
+              </ol>
+              <div className="mt-2 text-[11px] text-ink-2">
+                Still blocked? Phone <b>Settings → Apps → Chrome → Permissions → Microphone → Allow</b>, then refresh.
+              </div>
+            </div>
+          )}
+          {!isIOS && !isAndroid && (
+            <div>
+              <div className="heading text-rust text-base mb-1">DESKTOP BROWSER:</div>
+              <ol className="list-decimal pl-5 space-y-1 text-[13px]">
+                <li>Click the <b>lock icon</b> left of the URL</li>
+                <li>Find <b>Microphone</b> → set to <b>Allow</b></li>
+                <li>Reload the page</li>
+              </ol>
+            </div>
+          )}
+
+          <div className="border-t border-danger/40 pt-3 text-[11px] text-ink-2">
+            Or just <b>type</b> in the box below — Wrench answers either way.
+          </div>
+
+          <button onClick={onRetry} className="btn-rust w-full mt-2" data-testid="retry-mic">
+            I FIXED IT — TRY MIC AGAIN
+          </button>
         </div>
       )}
     </div>
