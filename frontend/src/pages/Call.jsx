@@ -10,10 +10,14 @@ export default function Call() {
   const [muted, setMuted] = useState(false);
   const [transcript, setTranscript] = useState([]); // {who, text}
   const [seconds, setSeconds] = useState(0);
+  const [volume, setVolume] = useState(1.5); // 0-3.0 (0%-300%)
+  const [typed, setTyped] = useState("");
   const pcRef = useRef(null);
   const dcRef = useRef(null);
   const localStreamRef = useRef(null);
   const audioElRef = useRef(null);
+  const audioCtxRef = useRef(null);
+  const gainRef = useRef(null);
   const timerRef = useRef(null);
   const pendingUserRef = useRef("");
   const pendingAssistantRef = useRef("");
@@ -43,11 +47,32 @@ export default function Call() {
       const pc = new RTCPeerConnection();
       pcRef.current = pc;
 
-      // Remote audio track from OpenAI
+      // Remote audio track from OpenAI — route through Web Audio for volume boost
       pc.ontrack = (e) => {
-        if (audioElRef.current) {
-          audioElRef.current.srcObject = e.streams[0];
-          audioElRef.current.play().catch(()=>{});
+        const stream = e.streams[0];
+        try {
+          // Some browsers need a sink <audio> element to actually play remote audio
+          if (audioElRef.current) {
+            audioElRef.current.srcObject = stream;
+            audioElRef.current.muted = true; // we'll play through Web Audio gain
+            audioElRef.current.play().catch(()=>{});
+          }
+          const ctx = audioCtxRef.current || new (window.AudioContext || window.webkitAudioContext)();
+          audioCtxRef.current = ctx;
+          if (ctx.state === "suspended") ctx.resume().catch(()=>{});
+          const src = ctx.createMediaStreamSource(stream);
+          const gain = ctx.createGain();
+          gain.gain.value = volume;
+          gainRef.current = gain;
+          src.connect(gain);
+          gain.connect(ctx.destination);
+        } catch (err) {
+          // Fallback: just play through audio element
+          if (audioElRef.current) {
+            audioElRef.current.srcObject = stream;
+            audioElRef.current.muted = false;
+            audioElRef.current.play().catch(()=>{});
+          }
         }
       };
 
@@ -131,11 +156,36 @@ export default function Call() {
     }
   };
 
+  // Update gain live as the slider moves
+  useEffect(() => {
+    if (gainRef.current) gainRef.current.gain.value = volume;
+    // Also sync the fallback <audio> element (cannot go above 1.0 there)
+    if (audioElRef.current && !gainRef.current) audioElRef.current.volume = Math.min(1, volume);
+  }, [volume]);
+
+  const sendText = (text) => {
+    const t = (text ?? typed).trim();
+    if (!t || !dcRef.current || dcRef.current.readyState !== "open") return;
+    setTranscript(arr => [...arr, { who: "tech", text: t }]);
+    try {
+      dcRef.current.send(JSON.stringify({
+        type: "conversation.item.create",
+        item: { type: "message", role: "user", content: [{ type: "input_text", text: t }] },
+      }));
+      dcRef.current.send(JSON.stringify({ type: "response.create" }));
+    } catch (e) {
+      setError("Failed to send text: " + (e?.message || e));
+    }
+    setTyped("");
+  };
+
   const endCall = (keepError) => {
     try { dcRef.current && dcRef.current.close(); } catch {}
     try { pcRef.current && pcRef.current.close(); } catch {}
     try { localStreamRef.current && localStreamRef.current.getTracks().forEach(t => t.stop()); } catch {}
+    try { audioCtxRef.current && audioCtxRef.current.close(); } catch {}
     dcRef.current = null; pcRef.current = null; localStreamRef.current = null;
+    audioCtxRef.current = null; gainRef.current = null;
     stopTick();
     setMuted(false);
     if (!keepError) { setState("idle"); setStatus("IDLE", "#52525B"); }
@@ -195,15 +245,36 @@ export default function Call() {
           )}
 
           {state === "connected" && (
-            <div className="flex items-center gap-3 w-full max-w-xs">
-              <button data-testid="mute-toggle" onClick={toggleMute} className={`flex-1 py-4 border-2 ${muted?"border-amber2 text-amber2":"border-line text-ink-2"} flex items-center justify-center gap-2`}>
-                {muted ? <MicOff size={18}/> : <Mic size={18}/>}
-                {muted ? "MUTED" : "MIC"}
-              </button>
-              <button data-testid="end-call" onClick={()=>endCall()} className="flex-1 py-4 border-2 border-danger bg-danger/15 text-danger flex items-center justify-center gap-2 hover:bg-danger hover:text-white">
-                <PhoneOff size={18}/> HANG UP
-              </button>
-            </div>
+            <>
+              <div className="flex items-center gap-3 w-full max-w-xs">
+                <button data-testid="mute-toggle" onClick={toggleMute} className={`flex-1 py-4 border-2 ${muted?"border-amber2 text-amber2":"border-line text-ink-2"} flex items-center justify-center gap-2`}>
+                  {muted ? <MicOff size={18}/> : <Mic size={18}/>}
+                  {muted ? "MUTED" : "MIC"}
+                </button>
+                <button data-testid="end-call" onClick={()=>endCall()} className="flex-1 py-4 border-2 border-danger bg-danger/15 text-danger flex items-center justify-center gap-2 hover:bg-danger hover:text-white">
+                  <PhoneOff size={18}/> HANG UP
+                </button>
+              </div>
+
+              {/* Volume control */}
+              <div className="w-full max-w-xs mt-4">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-[10px] uppercase tracking-widest text-ink-2 flex items-center gap-1">
+                    <Volume2 size={12}/> WRENCH VOLUME
+                  </span>
+                  <span className="text-[11px] font-mono text-rust" data-testid="volume-label">{Math.round(volume*100)}%</span>
+                </div>
+                <input
+                  type="range" min="0" max="3" step="0.1" value={volume}
+                  onChange={e=>setVolume(parseFloat(e.target.value))}
+                  data-testid="volume-slider"
+                  className="w-full accent-rust"
+                />
+                <div className="flex justify-between text-[9px] uppercase tracking-widest text-ink-3 mt-1">
+                  <span>OFF</span><span>NORMAL</span><span>LOUD AF</span>
+                </div>
+              </div>
+            </>
           )}
 
           {error && (
@@ -219,12 +290,12 @@ export default function Call() {
         </div>
 
         {/* Live transcript */}
-        <div className="panel">
+        <div className="panel flex flex-col">
           <div className="px-4 py-3 border-b border-line text-[11px] uppercase tracking-widest text-ink-3 flex justify-between">
             <span>LIVE TRANSCRIPT</span>
             <span className="text-rust animate-blink">{state === "connected" ? "● LIVE" : ""}</span>
           </div>
-          <div className="p-2 max-h-[55vh] overflow-auto" data-testid="transcript">
+          <div className="p-2 max-h-[40vh] overflow-auto flex-1" data-testid="transcript">
             {transcript.length === 0 ? (
               <div className="p-6 text-ink-3 text-sm text-center">
                 {state === "connected"
@@ -236,9 +307,35 @@ export default function Call() {
                 <div className={`text-[10px] uppercase tracking-widest font-bold ${m.who==="tech"?"text-amber2":"text-rust"}`}>
                   [{m.who==="tech"?"TECH":"WRENCH"}]
                 </div>
-                <div className="text-sm mt-1 break-words">{m.text}</div>
+                <div className="text-sm mt-1 break-words whitespace-pre-wrap">{m.text}</div>
               </div>
             ))}
+          </div>
+
+          {/* Text input — paste tables, datalogs, notes during the call */}
+          <div className="border-t border-line p-3 bg-bg-2">
+            <div className="label-shop !mb-1">PASTE / TYPE (Wrench reads it)</div>
+            <div className="flex gap-2 items-end">
+              <textarea
+                data-testid="call-text-input"
+                value={typed}
+                onChange={e=>setTyped(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendText(); } }}
+                rows={3}
+                disabled={state !== "connected"}
+                placeholder={state === "connected" ? "Paste a datalog, table, or VIN. Cmd/Ctrl+V then ENTER." : "Start a call to enable..."}
+                className="input-shop flex-1 resize-none text-xs font-mono"
+              />
+              <button
+                data-testid="call-send-text"
+                onClick={()=>sendText()}
+                disabled={state !== "connected" || !typed.trim()}
+                className="btn-rust h-12 px-4"
+              >SEND</button>
+            </div>
+            <div className="text-[9px] text-ink-3 uppercase tracking-widest mt-1">
+              Wrench will see it AND speak about it. Enter = send · Shift+Enter = new line
+            </div>
           </div>
         </div>
       </div>
