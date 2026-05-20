@@ -564,9 +564,18 @@ export default function Chat() {
             <Send size={16}/><span className="hidden sm:inline">SEND</span>
           </button>
         </div>
-        <div className="mt-1.5 text-[10px] text-ink-3 uppercase tracking-[0.15em] flex justify-between">
-          <span>{callMode ? "● ON CALL — TAP MIC TO END" : recording ? "● RECORDING — tap mic to stop" : speaking ? "● SPEAKING" : "READY"}</span>
+        <div className="mt-1.5 text-[10px] text-ink-3 uppercase tracking-[0.15em] flex justify-between items-center">
+          <span>{callMode ? "● ON CALL — TAP MIC TO END" : recording ? "● RECORDING — tap mic to stop" : speaking ? "● WRENCH IS TALKING" : "READY"}</span>
           <div className="flex items-center gap-3">
+            {speaking && (
+              <button
+                onClick={stopSpeak}
+                data-testid="halt-tts"
+                className="bg-amber2 text-black uppercase tracking-widest font-bold text-[11px] px-3 py-1.5 hover:bg-rust hover:text-white"
+              >
+                ✋ SHUT UP
+              </button>
+            )}
             {audioElRef.current && audioElRef.current.src && !speaking && !callMode && (
               <button onClick={playLast} className="text-amber2 hover:text-rust" data-testid="replay-voice">▶ HEAR LAST</button>
             )}

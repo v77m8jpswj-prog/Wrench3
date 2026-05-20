@@ -5,7 +5,7 @@ import { useApp } from "@/AppContext";
 export default function Call() {
   const {
     callState, callError, callTranscript, callMuted, callSeconds, callVolume,
-    setCallVolume, startCall, endCall, sendCallText, toggleCallMute,
+    setCallVolume, startCall, endCall, sendCallText, toggleCallMute, haltWrench,
     activeVehicle,
   } = useApp();
   const [typed, setTyped] = useState("");
@@ -100,8 +100,8 @@ export default function Call() {
               </div>
             ) : callTranscript.map((m, i) => (
               <div key={i} className={`px-3 py-2 border-b border-line ${i%2===0?"bg-bg-1":"bg-bg-2"}`}>
-                <div className={`text-[10px] uppercase tracking-widest font-bold ${m.who==="tech"?"text-amber2":"text-rust"}`}>
-                  [{m.who==="tech"?"TECH":"WRENCH"}]
+                <div className={`text-[10px] uppercase tracking-widest font-bold ${m.who==="tech"?"text-amber2":m.who==="tool"?"text-ok":"text-rust"}`}>
+                  [{m.who==="tech"?"TECH":m.who==="tool"?"TOOL":"WRENCH"}]
                 </div>
                 <div className="text-sm mt-1 break-words whitespace-pre-wrap">{m.text}</div>
               </div>

@@ -86,6 +86,7 @@ export function AppProvider({ children }) {
     let args = {};
     try { args = JSON.parse(argsJson || "{}"); } catch { args = {}; }
     let output = { ok: false, error: "unknown tool" };
+    let transcriptNote = "";
     try {
       if (name === "save_vehicle_from_vin") {
         const vin = (args.vin || "").replace(/\s/g, "").toUpperCase();
@@ -103,13 +104,17 @@ export function AppProvider({ children }) {
         const v = (await api.post("/vehicles", payload)).data;
         await refreshVehicles();
         setActiveVehicleId(v.id);
-        addArtifact({ type: "vehicle", label: `${v.year} ${v.make} ${v.model}`.trim() || vin, vehicle_id: v.id, vin });
+        const lbl = `${v.year} ${v.make} ${v.model}`.trim() || vin;
+        addArtifact({ type: "vehicle", label: lbl, vehicle_id: v.id, vin });
+        transcriptNote = `✓ SAVED VEHICLE → ${lbl} · set ACTIVE`;
         output = { ok: true, vehicle: v };
       } else if (name === "send_link") {
         addArtifact({ type: "link", url: args.url, label: args.label || args.url });
+        transcriptNote = `✓ LINK SENT → ${args.label || args.url}`;
         output = { ok: true };
       } else if (name === "send_note") {
         addArtifact({ type: "note", title: args.title || "Note", body: args.body || "" });
+        transcriptNote = `✓ NOTE SENT → ${args.title || "(text)"}`;
         output = { ok: true };
       } else if (name === "set_active_vehicle") {
         const q = (args.query || "").toLowerCase();
@@ -117,16 +122,26 @@ export function AppProvider({ children }) {
           const s = `${v.year} ${v.make} ${v.model} ${v.engine}`.toLowerCase();
           return s.includes(q);
         });
-        if (match) { setActiveVehicleId(match.id); output = { ok: true, vehicle_id: match.id, label: `${match.year} ${match.make} ${match.model}` }; }
-        else output = { ok: false, error: "No matching vehicle in garage" };
+        if (match) {
+          setActiveVehicleId(match.id);
+          transcriptNote = `✓ ACTIVE VEHICLE → ${match.year} ${match.make} ${match.model}`;
+          output = { ok: true, vehicle_id: match.id, label: `${match.year} ${match.make} ${match.model}` };
+        } else {
+          transcriptNote = `✗ NO VEHICLE MATCHED "${args.query}"`;
+          output = { ok: false, error: "No matching vehicle in garage" };
+        }
       } else if (name === "save_to_memory") {
         await api.post("/memory", { fact: args.fact || "" });
+        transcriptNote = `✓ MEMORY SAVED → ${args.fact}`;
         output = { ok: true };
       }
     } catch (e) {
       output = { ok: false, error: e?.response?.data?.detail || e?.message || String(e) };
+      transcriptNote = `✗ TOOL FAILED → ${name}: ${output.error}`;
     }
-    // Send result back through the data channel so Wrench can continue
+    if (transcriptNote) {
+      setCallTranscript(arr => [...arr, { who: "tool", text: transcriptNote }]);
+    }
     try {
       dcRef.current.send(JSON.stringify({
         type: "conversation.item.create",
@@ -220,6 +235,14 @@ export function AppProvider({ children }) {
 
   const handleEvent = (evt) => {
     const t = evt.type;
+    // When Doc starts speaking, immediately stop Wrench's audio playback (barge-in)
+    if (t === "input_audio_buffer.speech_started") {
+      try {
+        if (audioElRef.current) { audioElRef.current.pause(); audioElRef.current.currentTime = 0; }
+      } catch {}
+      // Tell the model to stop generating
+      try { dcRef.current?.send(JSON.stringify({ type: "response.cancel" })); } catch {}
+    }
     if (t === "conversation.item.input_audio_transcription.completed") {
       const txt = (evt.transcript || "").trim();
       if (txt) setCallTranscript(arr => [...arr, { who: "tech", text: txt }]);
@@ -245,6 +268,12 @@ export function AppProvider({ children }) {
       handleFunctionCall(evt.item.call_id, evt.item.name, evt.item.arguments);
     }
     if (t === "error") setCallError(evt.error?.message || "Realtime error");
+  };
+
+  // Manually halt Wrench's voice (Doc taps a button)
+  const haltWrench = () => {
+    try { if (audioElRef.current) { audioElRef.current.pause(); audioElRef.current.currentTime = 0; } } catch {}
+    try { dcRef.current?.send(JSON.stringify({ type: "response.cancel" })); } catch {}
   };
 
   const sendCallText = (text) => {
@@ -289,7 +318,7 @@ export function AppProvider({ children }) {
       vehicles, refreshVehicles,
       activeVehicleId, setActiveVehicleId, activeVehicle,
       callState, callError, callTranscript, callMuted, callSeconds, callVolume,
-      setCallVolume, startCall, endCall, sendCallText, toggleCallMute,
+      setCallVolume, startCall, endCall, sendCallText, toggleCallMute, haltWrench,
       callArtifacts, addArtifact, markArtifactsSeen, clearArtifact, clearAllArtifacts,
     }}>
       <audio ref={audioElRef} playsInline autoPlay style={{display:"none"}} />

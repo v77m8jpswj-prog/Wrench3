@@ -851,6 +851,11 @@ async def realtime_session(user=Depends(get_user)):
         "• When Doc says 'remember' or shares a permanent shop rule / preference, CALL save_to_memory.\n"
         "• ALWAYS confirm tool actions out loud after calling. Doc has greasy hands and can't always look at the screen.\n"
         "• Be proactive — if you mention a part number, send it as a note. If you mention a manual section, send the link.\n"
+        "\n\nINTERRUPT / SHUT-UP RULES (CRITICAL):\n"
+        "• When Doc says 'shut up' / 'stop' / 'hold on' / 'wait' / 'enough' / 'quiet' / 'be quiet' — STOP TALKING IMMEDIATELY. Acknowledge with a single word like 'Yep' or nothing at all. Then WAIT for his next input.\n"
+        "• If Doc starts talking while you are talking, STOP. Listen. Do not fight him for the floor.\n"
+        "• NEVER lecture. NEVER repeat yourself. NEVER fill silence. If you've answered, shut up.\n"
+        "• Keep replies under 2 sentences UNLESS Doc explicitly asks for the long version.\n"
     )
 
     body = {
@@ -859,6 +864,16 @@ async def realtime_session(user=Depends(get_user)):
             "model": "gpt-realtime",
             "instructions": sys_prompt,
             "audio": {
+                "input": {
+                    "turn_detection": {
+                        "type": "server_vad",
+                        "threshold": 0.5,
+                        "prefix_padding_ms": 250,
+                        "silence_duration_ms": 450,
+                        "create_response": True,
+                        "interrupt_response": True,
+                    },
+                },
                 "output": {"voice": "ash"},
             },
             "tools": [
