@@ -1,0 +1,34 @@
+{
+  "summary": "First iteration end-to-end test for Data Wrench. All 24 backend endpoints exercised via pytest (auth, chat with heat detection, sessions, voice TTS, chart edit, library upload/list/delete, vehicles CRUD, datalog analyze, memory, settings) and all critical frontend flows verified with Playwright (login, chat reply rendering, chart editor with 40-cell modification, library upload, vehicle creation, sessions drawer). Full system is functional including the GPT-5.2 personality, heat-mode trigger, chart killer feature, and RAG library upload.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/chat (and any GPT-5.2 endpoint)", "issue": "Initial pass returned 500 'Budget has been exceeded! Current cost: 1.0146 / Max budget: 1.001' from litellm via EMERGENT_LLM_KEY. Retry ~30s later succeeded. Universal-key budget appears to be very close to the cap and occasionally throws transient budget errors. Worth flagging to ops; not a code defect."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/backend_test.py", "/app/test_reports/pytest/pytest_results.xml"],
+  "action_items": [
+    "(Optional / external) Monitor EMERGENT_LLM_KEY budget — transient '500 Budget exceeded' surfaced on first chat call then auto-resolved on retry. If it recurs in production, surface a friendlier 'service over quota' message in /api/chat instead of raw exception text.",
+    "(Nice-to-have) STT (/api/voice/transcribe) was not exercised end-to-end — needs a real audio file via browser mic. Backend wiring is in place but not tested in this iteration."
+  ],
+  "critical_code_review_comments": [
+    "server.py is 696 lines — over the 700-line guideline soft cap. Consider splitting into routers/auth.py, routers/chat.py, routers/charts.py, routers/library.py, routers/voice.py for maintainability.",
+    "Library RAG uses naive keyword scoring (acknowledged MVP design). For production, swap to embeddings + vector search.",
+    "Chat endpoint replays last 12 turns by appending them to system_message instead of using LlmChat's multi-turn API — works but bloats system prompt and may hurt instruction adherence on long sessions.",
+    "Error messages from upstream LLM/litellm are echoed verbatim to clients ('Wrench is jammed up: {e}'). Acceptable for single-user MVP, but in multi-tenant production this leaks budget/account info.",
+    "/api/chat raises HTTPException(500) on LLM failure but persists nothing; that's correct. Consider returning 503 instead of 500 for upstream provider failures."
+  ],
+  "updated_files": ["/app/backend/tests/backend_test.py"],
+  "success_rate": {"backend": "100% (24/24 on retry; 20/24 on first pass due to transient budget error)", "frontend": "100% (all tested flows passed)"},
+  "test_credentials": "doc@drunderhood.com / Wrench123! — confirmed working",
+  "seed_data_creation": "Tests create then delete: TEST_ library item, TEST_ vehicle, TEST_ memory fact. Chat tests leave 1-2 transient sessions in DB (small).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend pytest suite lives at /app/backend/tests/backend_test.py with 24 cases. If chat tests fail with 'Budget has been exceeded', re-run JUST TestChat — it's a transient on the universal key. STT endpoint /api/voice/transcribe is untested (no audio fixture). Frontend uses @-alias and data-testid attrs are comprehensive — see Shell.jsx nav-* ids and per-page page-level testids.",
+  "rca of the issue": "The transient 500 on /api/chat was a litellm budget-exceeded response from the OpenAI provider via EMERGENT_LLM_KEY ('Current cost: 1.0146 / Max budget: 1.001'). The cost tracker on the universal key sits right at the cap and the very next attempt succeeded — likely a billing-tracking race or per-key soft cap. Mitigation: catch litellm.BadRequestError specifically in /api/chat, /api/chart/edit, /api/datalog/analyze and return HTTP 503 with message 'AI quota exceeded — try again in a moment.' rather than raw stringified exception."
+}

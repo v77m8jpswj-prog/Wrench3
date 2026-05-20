@@ -1,50 +1,48 @@
-import { useEffect } from "react";
+import React, { useState, useEffect } from "react";
+import { BrowserRouter, Routes, Route, Navigate, useNavigate, Link, useLocation } from "react-router-dom";
 import "@/App.css";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
-import axios from "axios";
+import api, { setToken, getToken, clearToken } from "@/api";
+import Login from "@/pages/Login";
+import Chat from "@/pages/Chat";
+import Charts from "@/pages/Charts";
+import Library from "@/pages/Library";
+import Vehicles from "@/pages/Vehicles";
+import Datalog from "@/pages/Datalog";
+import Memory from "@/pages/Memory";
+import Settings from "@/pages/Settings";
+import Shell from "@/components/Shell";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
-
-const Home = () => {
-  const helloWorldApi = async () => {
-    try {
-      const response = await axios.get(`${API}/`);
-      console.log(response.data.message);
-    } catch (e) {
-      console.error(e, `errored out requesting / api`);
-    }
-  };
-
+function Protected({ children }) {
+  const [ready, setReady] = useState(false);
+  const [user, setUser] = useState(null);
+  const nav = useNavigate();
   useEffect(() => {
-    helloWorldApi();
+    if (!getToken()) { nav("/login"); return; }
+    api.get("/auth/me").then(r => { setUser(r.data); setReady(true); })
+      .catch(() => { clearToken(); nav("/login"); });
   }, []);
-
-  return (
-    <div>
-      <header className="App-header">
-        <a
-          className="App-link"
-          href="https://emergent.sh"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <img src="https://avatars.githubusercontent.com/in/1201222?s=120&u=2686cf91179bbafbc7a71bfbc43004cf9ae1acea&v=4" />
-        </a>
-        <p className="mt-5">Building something incredible ~!</p>
-      </header>
+  if (!ready) return (
+    <div className="min-h-screen flex items-center justify-center bg-bg-1 text-rust font-mono">
+      <span className="animate-blink">BOOTING WRENCH...</span>
     </div>
   );
-};
+  return <Shell user={user} setUser={setUser}>{children}</Shell>;
+}
 
 function App() {
   return (
-    <div className="App">
+    <div className="App grain">
       <BrowserRouter>
         <Routes>
-          <Route path="/" element={<Home />}>
-            <Route index element={<Home />} />
-          </Route>
+          <Route path="/login" element={<Login />} />
+          <Route path="/" element={<Protected><Chat /></Protected>} />
+          <Route path="/charts" element={<Protected><Charts /></Protected>} />
+          <Route path="/library" element={<Protected><Library /></Protected>} />
+          <Route path="/vehicles" element={<Protected><Vehicles /></Protected>} />
+          <Route path="/datalog" element={<Protected><Datalog /></Protected>} />
+          <Route path="/memory" element={<Protected><Memory /></Protected>} />
+          <Route path="/settings" element={<Protected><Settings /></Protected>} />
+          <Route path="*" element={<Navigate to="/" />} />
         </Routes>
       </BrowserRouter>
     </div>
