@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { Mic, Send, Volume2, VolumeX, ChevronRight, Square, History, Settings2, X, Paperclip, FolderPlus } from "lucide-react";
 import api, { API, getToken } from "@/api";
 import { useApp } from "@/AppContext";
@@ -9,6 +9,7 @@ const setStatus = (label, color) => window.dispatchEvent(new CustomEvent("wrench
 export default function Chat() {
   const app = useApp();
   const nav = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [sessionId, setSessionId] = useState(() => localStorage.getItem("dw_chat_session") || null);
@@ -39,6 +40,9 @@ export default function Chat() {
   const [speaking, setSpeaking] = useState(false);
   const [callMode, setCallMode] = useState(false);
   const callModeRef = useRef(false);
+  // The REALTIME call is owned by AppContext — when it's connected, suppress chat TTS
+  // so we don't get double audio (call + chat playback talking over each other).
+  const realtimeCallActive = app?.callState === "connected" || app?.callState === "connecting";
   const [micError, setMicError] = useState("");
   const [showMicHelp, setShowMicHelp] = useState(false);
   const recRef = useRef(null);
@@ -113,6 +117,19 @@ export default function Chat() {
     setShowSessions(false);
   };
 
+  // Handle ?resume=<sid> from the JOBS page — auto-load that session
+  useEffect(() => {
+    const sid = searchParams.get("resume");
+    if (sid) {
+      loadSession(sid).finally(() => {
+        // Clear the query param so back/refresh doesn't reload
+        searchParams.delete("resume");
+        setSearchParams(searchParams, { replace: true });
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const newSession = () => { setSessionId(null); setMessages([]); setShowOptions(false); };
 
   const saveAsCase = async () => {
@@ -144,8 +161,8 @@ export default function Chat() {
       const reply = r.data.reply || "";
       setMessages(m => [...m, { role: "assistant", content: reply, citations: r.data.citations, heat: r.data.heat_detected }]);
       refreshSessions();
-      if (voiceOn || callModeRef.current) await speak(reply);
-      else if (callModeRef.current) {
+      if ((voiceOn || callModeRef.current) && !realtimeCallActive) await speak(reply);
+      else if (callModeRef.current && !realtimeCallActive) {
         setTimeout(() => callModeRef.current && startNativeSpeech(), 400);
       }
     } catch (e) {
@@ -182,7 +199,31 @@ export default function Chat() {
     const userText = input.trim();
     setInput("");
     setMessages(m => [...m, { role: "user", content: userText, imageUrl: previewUrl, imageName: file.name }]);
-    setThinking(true); setStatus("READING SNIP", "#FF5722");
+    setThinking(true);
+
+    // REALTIME CALL ACTIVE → route image into the call, NOT a parallel chat.
+    // Stops the call + chat double-stream problem Doc hit.
+    if (realtimeCallActive) {
+      setStatus("READING SNIP (CALL)", "#FF5722");
+      try {
+        const fd = new FormData();
+        fd.append("image", file);
+        fd.append("message", userText || "Doc dropped a snip mid-call. Describe what's in it in 2-3 sentences.");
+        if (sessionId) fd.append("session_id", sessionId);
+        fd.append("mode", "direct");
+        if (vehicleId) fd.append("vehicle_id", vehicleId);
+        const r = await api.post("/chat/vision", fd, { headers: { "Content-Type": "multipart/form-data" }, timeout: 120000 });
+        const desc = (r.data?.reply || "").slice(0, 1500);
+        const callMsg = `[Image dropped: ${file.name}] Doc says: ${userText || "see this"}\n\nWhat the image shows:\n${desc}`;
+        app?.sendCallText?.(callMsg);
+        setMessages(m => [...m, { role: "system", content: `→ Snip + description sent to active call. Wrench is talking about it.` }]);
+      } catch (e) {
+        setMessages(m => [...m, { role: "assistant", content: `[ERROR sending snip into call] ${e?.response?.data?.detail || e.message}` }]);
+      } finally { setThinking(false); setStatus("ON CALL", "#FF5722"); }
+      return;
+    }
+
+    setStatus("READING SNIP", "#FF5722");
     try {
       const fd = new FormData();
       fd.append("image", file);
@@ -195,7 +236,7 @@ export default function Chat() {
       const reply = r.data.reply || "";
       setMessages(m => [...m, { role: "assistant", content: reply, citations: r.data.citations, heat: r.data.heat_detected }]);
       refreshSessions();
-      if (voiceOn || callModeRef.current) await speak(reply);
+      if ((voiceOn || callModeRef.current) && !realtimeCallActive) await speak(reply);
     } catch (e) {
       setMessages(m => [...m, { role: "assistant", content: `[ ERROR reading snip ] ${e?.response?.data?.detail || e.message}` }]);
     } finally { setThinking(false); if (!callModeRef.current) setStatus("IDLE", "#52525B"); }

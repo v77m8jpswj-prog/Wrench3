@@ -1,12 +1,13 @@
 import React, { useEffect, useState } from "react";
 import { NavLink, useNavigate, useLocation } from "react-router-dom";
-import { MessageSquare, Grid3x3, BookOpen, Truck, Activity, Brain, Settings as Cog, LogOut, Wrench, Menu, X, Phone, KeyRound, FolderArchive, Users, Mail } from "lucide-react";
+import { MessageSquare, Grid3x3, BookOpen, Truck, Activity, Brain, Settings as Cog, LogOut, Wrench, Menu, X, Phone, PhoneOff, KeyRound, FolderArchive, Users, Mail, MicOff, Mic, Briefcase } from "lucide-react";
 import { clearToken } from "@/api";
 import { useApp } from "@/AppContext";
 
 const NAV = [
   { to: "/call", icon: Phone, label: "CALL", id: "nav-call" },
   { to: "/", icon: MessageSquare, label: "CHAT", id: "nav-chat" },
+  { to: "/jobs", icon: Briefcase, label: "JOBS", id: "nav-jobs" },
   { to: "/team", icon: Users, label: "TEAM", id: "nav-team" },
   { to: "/cases", icon: FolderArchive, label: "CASES", id: "nav-cases" },
   { to: "/letters", icon: Mail, label: "LETTERS", id: "nav-letters" },
@@ -45,11 +46,51 @@ export default function Shell({ user, setUser, children }) {
   const logout = () => { clearToken(); nav("/login"); };
 
   const currentLabel = (NAV.find(n => n.to === loc.pathname) || NAV[1]).label;
+  const onCallGlobal = app?.callState === "connected" || app?.callState === "connecting";
+  const fmtSec = (s) => `${Math.floor((s||0)/60)}:${String((s||0)%60).padStart(2,"0")}`;
 
   return (
     <div className="min-h-screen flex flex-col bg-bg-1 text-ink relative">
       {/* iOS notch / Dynamic Island safe-area padding (mobile only) */}
-      <div className="md:hidden bg-bg-2" style={{ height: "env(safe-area-inset-top)" }} />
+      <div className={`md:hidden ${onCallGlobal?"bg-rust":"bg-bg-2"}`} style={{ height: "env(safe-area-inset-top)" }} />
+
+      {/* ON CALL banner — sticky on every page when a realtime call is active */}
+      {onCallGlobal && (
+        <div className="bg-rust text-black flex items-center justify-between px-3 md:px-6 py-2 sticky z-40 border-b-2 border-black"
+             style={{ top: "env(safe-area-inset-top)" }}
+             data-testid="oncall-banner">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="w-2.5 h-2.5 rounded-full bg-black animate-pulse"/>
+            <span className="font-black tracking-widest text-xs uppercase">ON CALL · WRENCH</span>
+            <span className="font-mono text-xs">{fmtSec(app.callSeconds)}</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={()=>app?.toggleCallMute?.()}
+              className="bg-black/30 hover:bg-black/50 text-black px-2.5 py-1 text-[11px] font-bold uppercase tracking-widest flex items-center gap-1"
+              data-testid="banner-mute"
+            >
+              {app?.callMuted ? <><MicOff size={12}/> MIC OFF</> : <><Mic size={12}/> MIC ON</>}
+            </button>
+            <button
+              onClick={()=>app?.haltWrench?.()}
+              className="bg-black/30 hover:bg-black/50 text-black px-2.5 py-1 text-[11px] font-bold uppercase tracking-widest"
+              data-testid="banner-shutup"
+              title="Stop Wrench from talking but keep the call open"
+            >
+              SHUT UP
+            </button>
+            <button
+              onClick={()=>app?.endCall?.()}
+              className="bg-black text-rust hover:bg-bg-1 px-2.5 py-1 text-[11px] font-black uppercase tracking-widest flex items-center gap-1"
+              data-testid="banner-endcall"
+            >
+              <PhoneOff size={12}/> END
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Hazard stripe top */}
       <div className="h-1 hazard" />
 

@@ -730,6 +730,29 @@ async def del_session(session_id: str, user=Depends(get_user)):
     return {"ok": True}
 
 
+class SessionUpdateReq(BaseModel):
+    status: Optional[Literal["open", "closed"]] = None
+    pinned: Optional[bool] = None
+    title: Optional[str] = None
+    vehicle_id: Optional[str] = None
+
+
+@api.patch("/chat/sessions/{session_id}")
+async def update_session(session_id: str, body: SessionUpdateReq, user=Depends(get_user)):
+    patch = {}
+    if body.status is not None: patch["status"] = body.status
+    if body.pinned is not None: patch["pinned"] = body.pinned
+    if body.title is not None: patch["title"] = body.title
+    if body.vehicle_id is not None: patch["vehicle_id"] = body.vehicle_id
+    if not patch:
+        raise HTTPException(400, "Nothing to update")
+    r = await db.chat_sessions.update_one({"id": session_id, "user_id": user["id"]}, {"$set": patch})
+    if r.matched_count == 0:
+        raise HTTPException(404, "Session not found")
+    doc = await db.chat_sessions.find_one({"id": session_id, "user_id": user["id"]}, {"_id": 0})
+    return doc
+
+
 # ============ Web search — Wrench can pull diagrams, pics, articles ============
 import httpx  # noqa: E402
 
