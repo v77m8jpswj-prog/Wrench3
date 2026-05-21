@@ -562,6 +562,34 @@ def make_brain_router(db, get_user):
         can ground responses (e.g. \"Yes, this shop does AFM delete tuning\")."""
         return await _get_or_seed_profile(shop_id)
 
+    # ----- Recent outcomes (partner polls this to learn from closed jobs) -----
+    @router.get("/brain/recent-outcomes")
+    async def brain_recent_outcomes(
+        shop_id: str = Query(...),
+        since: Optional[str] = Query(None, description="ISO-8601 timestamp. Returns only events created after this. Omit for last 50 events."),
+        outcome: Optional[str] = Query(None, description="Filter by FIXED | PARTIAL | NOT_FIXED"),
+        limit: int = Query(50, ge=1, le=500),
+        _t: str = Depends(get_brain_token),
+    ):
+        """Lightweight feed of every job Doc has closed since `since`. Partner polls
+        this every minute or so and uses it to: (a) downweight similarity matches
+        whose outcome turned out NOT_FIXED, (b) surface fresh repair patterns to
+        their dashboard, (c) celebrate FIXED outcomes back to the original
+        symptom reporter."""
+        q = {"shop_id": shop_id}
+        if since:
+            q["created_at"] = {"$gt": since}
+        if outcome:
+            q["outcome"] = outcome.upper()
+        cur = db.brain_outcome_events.find(q, {"_id": 0}).sort("created_at", -1).limit(limit)
+        events = await cur.to_list(limit)
+        return {
+            "shop_id": shop_id,
+            "since": since,
+            "count": len(events),
+            "events": events,
+        }
+
     # ----- Internal Cases endpoints (user JWT) -----
     @router.get("/cases")
     async def list_cases(user=Depends(get_user)):
@@ -703,6 +731,21 @@ def make_brain_router(db, get_user):
         }
         doc["embedding"] = await embed_text(case_text_blob(doc))
         await db.brain_cases.insert_one(doc)
+        # Also write a lightweight outcome event so the partner can poll
+        # /api/brain/recent-outcomes and learn from closed jobs (downweight bad
+        # matches, surface fresh repair patterns, etc.) without us needing to
+        # know their webhook URL.
+        await db.brain_outcome_events.insert_one({
+            "id": str(uuid.uuid4()),
+            "shop_id": shop_id,
+            "case_id_in_brain": case_id,
+            "linked_chat_session_id": session_id,
+            "outcome": body.outcome,
+            "symptom_preview": (symptom or "")[:200],
+            "vehicle_summary": vehicle_summary(vehicle),
+            "technician_id": user.get("id", ""),
+            "created_at": doc["created_at"],
+        })
         # Flip the chat session to closed and link the case
         if body.close_session:
             await db.chat_sessions.update_one(

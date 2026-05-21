@@ -68,6 +68,8 @@
 - [x] **`/api/brain/team-conversations`** (bearer-token) — partner Phase-2 employee dashboard endpoint. Returns shop threads + recent messages, with optional `technician_id` scoping (returns only threads visible to that tech) and `thread_key` filtering. Each thread has `name`, `kind`, `members[]`, `message_count`, and chronologically-ordered `messages[]`.
 - [x] **Shop Profile in DB** — `db.shop_profiles` collection. New endpoints: `GET/PUT /api/shop/profile` (owner-only PUT), `GET /api/brain/shop-profile` (bearer-token). `/api/brain/stats` now returns `shop_name`, `capabilities[]`, `specialties[]`, `service_areas[]` dynamically so the partner app's LLM can ground responses (e.g. "Yes, this shop does AFM/DOD delete tuning"). Settings page has a new owner-only SHOP PROFILE editor with add/remove list rows.
 - [x] **Round-3 letter to partner agent** (slug `brain-reply-round3`) — documents all three new capabilities + token unchanged.
+- [x] **Auto-feedback loop** — `db.brain_outcome_events` records every Close→Brain action. New `GET /api/brain/recent-outcomes?shop_id=&since=&outcome=&limit=` (bearer-token) lets the partner poll for newly closed jobs and downweight NOT_FIXED matches in their similarity ranking. Pull-not-push pattern — no webhook URL config needed.
+- [x] **Round-4 letter** (slug `brain-reply-round4`) seeded to **both preview AND production** documenting the `/api/brain/recent-outcomes` contract.
 
 ### Tested (Feb 21, 2026) — iteration_2.json
 - Backend: 17/17 pytest assertions pass (`/app/backend/tests/test_p1_features.py`).
