@@ -59,6 +59,8 @@ class ChatReq(BaseModel):
     session_id: Optional[str] = None
     mode: Literal["direct", "dream"] = "direct"
     vehicle_id: Optional[str] = None
+    skill_level: Optional[Literal["rookie", "journey", "master"]] = None
+    specialty: Optional[Literal["general", "diesel", "electrical", "tuner", "service_writer"]] = None
 
 class ChatResp(BaseModel):
     session_id: str
@@ -156,7 +158,13 @@ def detect_heat(text: str) -> bool:
 
 
 def build_system_prompt(user: Dict, mode: str, heat: bool, vehicle: Optional[Dict],
-                        memory_facts: List[str], lib_chunks: List[Dict]) -> str:
+                        memory_facts: List[str], lib_chunks: List[Dict],
+                        skill_level: Optional[str] = None, specialty: Optional[str] = None) -> str:
+    # Pull defaults from user settings if not passed in
+    settings = user.get("settings") or {}
+    skill_level = skill_level or settings.get("skill_level") or "master"
+    specialty = specialty or settings.get("specialty") or "general"
+
     base = f"""You are WRENCH, the AI Foreman at Dr. Underhood Automotive.
 
 You're a gruff, old-school master mechanic with 30+ years on the bench. ASE Master Certified.
@@ -217,6 +225,73 @@ DEFAULT MODE: Be yourself. Gruff, a little smart-ass, but useful first, funny se
         base += "\nLIBRARY CONTEXT (cite by source name when used):\n"
         for c in lib_chunks[:8]:
             base += f"[Source: {c.get('source','unknown')}] {c.get('text','')[:600]}\n---\n"
+
+    # ===== SKILL LEVEL BRANCHING (Level 4: Personalities) =====
+    if skill_level == "rookie":
+        base += (
+            "\n\nSKILL LEVEL — ROOKIE TECH:\n"
+            "- Doc is training a rookie. Talk to them like the first year on the floor.\n"
+            "- ALWAYS explain WHY before HOW. \"You're checking fuel trim because...\".\n"
+            "- Define acronyms the first time you use them in a session (LTFT = Long-Term Fuel Trim, etc.).\n"
+            "- Step-by-step. One action at a time. Number the steps.\n"
+            "- ALWAYS include a safety note when relevant (\"disconnect the negative terminal first\", \"hot exhaust\", \"capacitor discharge\").\n"
+            "- Call out connector locations and color codes in plain English. If you don't know cold, say so and ask for the snip.\n"
+            "- Patient tone. Smart-ass humor dialed WAY back. They're learning, not being hazed.\n"
+            "- End each answer with 'Does that make sense, or do you want me to slow down?'\n"
+        )
+    elif skill_level == "journey":
+        base += (
+            "\n\nSKILL LEVEL — JOURNEYMAN TECH:\n"
+            "- Talk like you would a tech 3-5 years in. Skip the 101 stuff but don't assume Master-level shortcuts.\n"
+            "- Explain root-cause reasoning briefly but skip basic acronym definitions.\n"
+            "- Reasonable safety reminders for high-risk procedures only.\n"
+            "- Medium pace. Banter is OK but stay useful.\n"
+        )
+    else:  # master (default — Doc himself)
+        base += (
+            "\n\nSKILL LEVEL — MASTER TECH (Doc himself or equivalent):\n"
+            "- Peer to peer. Skip the basics entirely.\n"
+            "- Cut to root cause and the cheapest/fastest confirmation step.\n"
+            "- Cell coordinates, deltas, specific component names. No hand-holding.\n"
+            "- Full gruff Wrench personality on.\n"
+        )
+
+    # ===== SPECIALTY MODES (Level 4: Personalities) =====
+    if specialty == "diesel":
+        base += (
+            "\n\nSPECIALTY MODE — DIESEL:\n"
+            "Bias toward diesel diagnostics: HPFP, injectors (CP4, CP3), DPF/SCR/DEF systems, EGR delete\n"
+            "considerations (legality aside), turbo failure modes (VGT actuator sticking), boost leaks,\n"
+            "regen cycles, fuel return flow tests, glow plug systems, NOx sensors. When Doc mentions a\n"
+            "platform (6.7L Powerstroke, 6.6L Duramax, 5.9/6.7L Cummins, OM642, etc.), lead with the\n"
+            "common failure patterns for THAT engine first.\n"
+        )
+    elif specialty == "electrical":
+        base += (
+            "\n\nSPECIALTY MODE — ELECTRICAL SPECIALIST:\n"
+            "Lead with circuit diagnostic thinking: voltage drops, parasitic draws, ground integrity,\n"
+            "CAN/LIN bus health, module communication faults, dim/bright/no-light patterns mapped to\n"
+            "circuit type. When in doubt say 'pull the wiring diagram for that circuit' and use\n"
+            "find_diagram. Always think IN TERMS OF circuits, not symptoms.\n"
+        )
+    elif specialty == "tuner":
+        base += (
+            "\n\nSPECIALTY MODE — TUNER (HP Tuners-heavy):\n"
+            "Lead with table coordinates, MAF/VE tuning math, spark advance vs knock retard, AFR targets,\n"
+            "torque management tables, transmission tuning (line pressure, shift firmness, TCC apply).\n"
+            "When Doc shares a log or table, immediately call out cells of concern with RPM/MAP/Load\n"
+            "coordinates and exact deltas in degrees/percent/grams/lb. Brand the advice in HP Tuners\n"
+            "VCM Editor terminology.\n"
+        )
+    elif specialty == "service_writer":
+        base += (
+            "\n\nSPECIALTY MODE — SERVICE WRITER:\n"
+            "Customer-facing tone. Diagnostic findings translated into LAYMAN language Doc can read to\n"
+            "the customer. Include estimated parts + labor when possible (ballpark, not binding).\n"
+            "Lead with 'what's wrong, what it costs to fix, what happens if you don't'. Keep the gruff\n"
+            "for the back office, polite for the front counter.\n"
+        )
+    # specialty == "general" → no extra block, Wrench is default mechanic
 
     return base
 
@@ -1510,6 +1585,8 @@ class SettingsReq(BaseModel):
     voice: Optional[str] = None
     voice_enabled: Optional[bool] = None
     mode: Optional[str] = None
+    skill_level: Optional[Literal["rookie", "journey", "master"]] = None
+    specialty: Optional[Literal["general", "diesel", "electrical", "tuner", "service_writer"]] = None
 
 @api.put("/settings")
 async def settings_update(body: SettingsReq, user=Depends(get_user)):
