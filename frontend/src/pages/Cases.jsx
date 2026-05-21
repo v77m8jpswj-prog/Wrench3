@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Plus, X, Trash2, Edit3, Brain, AlertCircle, CheckCircle2, Circle } from "lucide-react";
+import { Plus, X, Trash2, Edit3, Brain, AlertCircle, CheckCircle2, Circle, Zap, ClipboardPaste } from "lucide-react";
 import api from "@/api";
 
 const blank = {
@@ -16,6 +16,7 @@ export default function Cases() {
   const [editing, setEditing] = useState(null); // case object or "new"
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [bulkOpen, setBulkOpen] = useState(false);
 
   const refresh = async () => {
     setLoading(true);
@@ -42,9 +43,14 @@ export default function Cases() {
             Every closed repair makes Wrench smarter for the next one
           </p>
         </div>
-        <button data-testid="new-case-btn" onClick={()=>setEditing({...blank, id:"new"})} className="btn-rust flex items-center gap-2 text-sm">
-          <Plus size={16}/> NEW CASE
-        </button>
+        <div className="flex gap-2 flex-wrap">
+          <button data-testid="bulk-paste-btn" onClick={()=>setBulkOpen(true)} className="btn-ghost flex items-center gap-2 text-sm">
+            <ClipboardPaste size={16}/> PASTE RO
+          </button>
+          <button data-testid="new-case-btn" onClick={()=>setEditing({...blank, id:"new"})} className="btn-rust flex items-center gap-2 text-sm">
+            <Plus size={16}/> NEW CASE
+          </button>
+        </div>
       </div>
 
       <div className="border border-line bg-bg-2 p-3 md:p-4 mb-4 flex items-center gap-3 flex-wrap text-sm" data-testid="brain-stats">
@@ -78,6 +84,13 @@ export default function Cases() {
           initial={editing}
           onClose={()=>setEditing(null)}
           onSaved={()=>{ setEditing(null); refresh(); }}
+        />
+      )}
+
+      {bulkOpen && (
+        <BulkPaste
+          onClose={()=>setBulkOpen(false)}
+          onIngested={()=>refresh()}
         />
       )}
     </div>
@@ -240,6 +253,95 @@ function CaseEditor({ initial, onClose, onSaved }) {
             </button>
             <button onClick={onClose} className="btn-ghost px-6">CANCEL</button>
           </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+function BulkPaste({ onClose, onIngested }) {
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [results, setResults] = useState([]); // [{ok, parsed_summary, parsed_case, error}]
+  const [totalInBrain, setTotalInBrain] = useState(null);
+  const [err, setErr] = useState("");
+
+  const ingest = async () => {
+    setErr("");
+    if (!text.trim()) { setErr("Paste at least one repair order first."); return; }
+    setBusy(true);
+    try {
+      // Split on common RO delimiters so user can paste multiple at once
+      const blobs = text.split(/\n\s*(?:---|===|###|##)+\s*\n/g).map(s => s.trim()).filter(Boolean);
+      const items = blobs.map(raw_text => ({ raw_text }));
+      const r = await api.post("/cases/learn-bulk", { items });
+      setResults(prev => [...r.data.results, ...prev]);
+      setTotalInBrain(r.data.total_cases_in_brain);
+      setText(""); // clear textarea for next paste
+      onIngested?.();
+    } catch (e) {
+      setErr(e?.response?.data?.detail || e.message || "Ingest failed");
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex" data-testid="bulk-paste-modal">
+      <div className="flex-1 bg-black/70" onClick={onClose}/>
+      <div className="w-full md:w-[640px] bg-bg-2 border-l border-line overflow-auto flex flex-col">
+        <div className="sticky top-0 bg-bg-2 border-b border-line px-4 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Zap size={18} className="text-amber2"/>
+            <span className="heading text-lg">BULK INGEST</span>
+            {totalInBrain != null && (
+              <span className="text-xs text-ink-3 ml-2 uppercase tracking-widest">BRAIN: <span className="text-amber2 font-bold">{totalInBrain}</span></span>
+            )}
+          </div>
+          <button onClick={onClose} className="text-ink-2 p-1" data-testid="close-bulk"><X size={20}/></button>
+        </div>
+
+        <div className="p-4 space-y-3 flex-1">
+          <p className="text-xs text-ink-2">
+            Paste any old repair order — messy is fine. Wrench reads it and pulls out vehicle, symptom, root cause, repair, parts.
+            Separate multiple ROs with a blank line and <code className="text-amber2">---</code> or <code className="text-amber2">===</code>.
+          </p>
+          {err && <div className="border border-danger bg-danger/10 text-danger text-sm p-2" data-testid="bulk-err">{err}</div>}
+          <textarea
+            data-testid="bulk-text"
+            rows={10}
+            className="input-shop w-full font-mono text-xs"
+            placeholder={`2014 Silverado 5.3 — customer says lifter tick on cyl 7, runs rough cold start. Found AFM lifter collapsed. Replaced full lifter set, disabled AFM in tune. Verified clean after road test. — Doc, 4.5hr\n\n---\n\n2018 F-150 3.5L EB. Misfire cyl 4, P0304. Replaced coil and plug. Still misfiring. Compression test cyl 4 = 85psi (others 165). Bad valve. Pulled head, found burned exhaust valve. Reman head, new valves...`}
+            value={text}
+            onChange={e=>setText(e.target.value)}
+          />
+          <button data-testid="ingest-btn" onClick={ingest} disabled={busy || !text.trim()} className="btn-rust w-full py-4 text-base disabled:opacity-50 flex items-center justify-center gap-2">
+            {busy ? "READING..." : <><Zap size={16}/>INGEST INTO BRAIN</>}
+          </button>
+
+          {results.length > 0 && (
+            <div className="pt-3 mt-2 border-t border-line">
+              <div className="text-[10px] uppercase tracking-widest text-amber2 mb-2">RECENT INGESTS ({results.length})</div>
+              <div className="space-y-2">
+                {results.map((r, i) => (
+                  <div key={i} className={`border ${r.ok?"border-ok/40 bg-ok/5":"border-danger/40 bg-danger/5"} px-3 py-2 text-xs`} data-testid={`ingest-result-${i}`}>
+                    {r.ok ? (
+                      <>
+                        <div className="text-ok font-bold mb-1 flex items-center gap-1.5"><CheckCircle2 size={12}/> {r.parsed_summary}</div>
+                        {r.parsed_case && (
+                          <div className="text-ink-2 text-[11px] space-y-0.5">
+                            {r.parsed_case.dtc_codes?.length>0 && <div>DTC: <span className="text-amber2 font-mono">{r.parsed_case.dtc_codes.join(", ")}</span></div>}
+                            {r.parsed_case.parts?.length>0 && <div>Parts: {r.parsed_case.parts.slice(0,5).join(" · ")}{r.parsed_case.parts.length>5 && ` +${r.parsed_case.parts.length-5} more`}</div>}
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <div className="text-danger flex items-center gap-1.5"><AlertCircle size={12}/> {r.error || "Failed"}</div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

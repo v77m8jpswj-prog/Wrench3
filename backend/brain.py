@@ -27,6 +27,8 @@ import httpx
 
 log = logging.getLogger("datawrench.brain")
 
+EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
+
 BRAIN_TOKEN = os.environ.get("BRAIN_INGRESS_TOKEN", "")
 DEFAULT_SHOP_ID = os.environ.get("DEFAULT_SHOP_ID", "drunderhood-fortsmith")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
@@ -163,6 +165,61 @@ async def embed_text(text: str) -> List[float]:
         return list(data["data"][0]["embedding"])
     except Exception as e:
         log.warning(f"embed_text failed: {e}")
+        return []
+
+
+_EXTRACT_SYSTEM = """You are a data-extraction tool for an automotive shop's repair-history brain.
+Doc pastes the raw text of one or more repair orders (RO). Your job is to extract STRUCTURED case data.
+
+OUTPUT FORMAT — strict JSON, no commentary:
+{
+  "cases": [
+    {
+      "vehicle": {"year":"", "make":"", "model":"", "engine":"", "vin":""},
+      "symptom": "customer concern in their words OR the tech write-up of the complaint",
+      "dtc_codes": ["P0300"],
+      "root_cause": "the actual finding — what was wrong",
+      "repair_summary": "what the tech did to fix it",
+      "parts": ["list of parts used, one per item, SKU or description"],
+      "outcome": "FIXED" | "PARTIAL" | "NOT_FIXED",
+      "technician_name": "if mentioned, else empty",
+      "labor_hours": null
+    }
+  ]
+}
+
+RULES:
+- If the input contains MULTIPLE repair orders (separated by blank lines, "---", "===", or obvious RO breaks), return one case per RO.
+- If a field is not in the text, return empty string "" or empty array [] — DON'T invent.
+- Year/make/model/engine: extract aggressively. "2014 Silverado 5.3" → year=2014, make=Chevrolet, model=Silverado, engine=5.3L.
+- VIN: 17-char alphanumeric, all caps. Only fill if present in text.
+- DTC codes: regex P/B/C/U + 4 digits (e.g. P0300, B1234).
+- Outcome: assume FIXED unless text says "didn't fix", "still doing it", "came back", "no resolution" → then PARTIAL or NOT_FIXED.
+- Labor hours: numeric if mentioned (e.g. "1.5 hr", "2 hours" → 1.5 / 2.0). Else null.
+- DO NOT include any text outside the JSON object. NO markdown fences. JUST {"cases": [...]}.
+"""
+
+
+async def extract_cases_from_text(raw_text: str) -> List[Dict[str, Any]]:
+    """Use GPT-5.2 (via Emergent LLM key) to parse raw RO text into structured cases."""
+    if not raw_text.strip():
+        return []
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage
+        chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"extract-{uuid.uuid4().hex[:8]}", system_message=_EXTRACT_SYSTEM).with_model("openai", "gpt-5.2")
+        reply = await chat.send_message(UserMessage(text=raw_text[:12000]))
+        # Strip any code fences
+        cleaned = reply.strip()
+        if cleaned.startswith("```"):
+            cleaned = cleaned.split("```", 2)[1]
+            if cleaned.lower().startswith("json"):
+                cleaned = cleaned[4:]
+            cleaned = cleaned.rsplit("```", 1)[0].strip()
+        data = json.loads(cleaned)
+        cases = data.get("cases", []) if isinstance(data, dict) else []
+        return [c for c in cases if isinstance(c, dict) and (c.get("symptom") or c.get("root_cause") or c.get("repair_summary"))]
+    except Exception as e:
+        log.warning(f"extract_cases_from_text failed: {e}")
         return []
 
 
@@ -492,4 +549,98 @@ def make_brain_router(db, get_user):
         conf = "empty" if not matches else "high" if matches[0].similarity >= 0.78 else "medium" if matches[0].similarity >= 0.55 else "low"
         return {"matches": [m.model_dump() for m in matches], "confidence": conf, "total_cases_in_brain": len(all_cases)}
 
+    @router.post("/brain/learn-bulk")
+    async def brain_learn_bulk(body: Dict[str, Any], _t: str = Depends(get_brain_token)):
+        """Bulk-ingest. items[] entries are either {raw_text: '...'} (parsed via GPT) or structured case dicts."""
+        shop_id = body.get("shop_id") or DEFAULT_SHOP_ID
+        items = body.get("items") or []
+        return await _bulk_ingest(db, shop_id, items, user_name="", user_id="brain_api")
+
+    @router.post("/cases/learn-bulk")
+    async def cases_learn_bulk(body: Dict[str, Any], user=Depends(get_user)):
+        """Same as /brain/learn-bulk, but scoped to logged-in user's shop. For Doc's UI."""
+        shop_id = user.get("shop_id") or DEFAULT_SHOP_ID
+        items = body.get("items") or []
+        return await _bulk_ingest(db, shop_id, items, user_name=user.get("name",""), user_id=user.get("id",""))
+
     return router
+
+
+async def _bulk_ingest(db, shop_id: str, items: List[Dict[str, Any]], user_name: str, user_id: str) -> Dict[str, Any]:
+    if not items:
+        raise HTTPException(400, "items[] is empty")
+    if len(items) > 50:
+        raise HTTPException(413, "Max 50 items per bulk call. Send in batches.")
+    results = []
+    ingested = 0
+    failed = 0
+    for it in items:
+        try:
+            if isinstance(it, dict) and it.get("raw_text"):
+                parsed_cases = await extract_cases_from_text(it["raw_text"])
+                if not parsed_cases:
+                    failed += 1
+                    results.append({"ok": False, "error": "Couldn't extract a case from that text.", "raw_preview": it["raw_text"][:120]})
+                    continue
+                for pc in parsed_cases:
+                    case_id = await _persist_case(db, shop_id, pc, user_name, user_id, source="bulk_paste")
+                    results.append({"ok": True, "case_id_in_brain": case_id, "parsed_summary": _summary_line(pc), "parsed_case": _safe_case(pc)})
+                    ingested += 1
+            elif isinstance(it, dict):
+                case_id = await _persist_case(db, shop_id, it, user_name, user_id, source="bulk_structured")
+                results.append({"ok": True, "case_id_in_brain": case_id, "parsed_summary": _summary_line(it), "parsed_case": _safe_case(it)})
+                ingested += 1
+            else:
+                failed += 1
+                results.append({"ok": False, "error": "Item must be an object."})
+        except Exception as e:
+            failed += 1
+            results.append({"ok": False, "error": str(e)})
+    total = await db.brain_cases.count_documents({"shop_id": shop_id})
+    return {"ingested": ingested, "failed": failed, "total_cases_in_brain": total, "results": results}
+
+
+def _summary_line(c: Dict[str, Any]) -> str:
+    v = c.get("vehicle") or {}
+    veh = " ".join(filter(None, [str(v.get("year","")), v.get("make",""), v.get("model","")])) or "unknown vehicle"
+    sym = (c.get("symptom") or "").strip()[:60]
+    cause = (c.get("root_cause") or "").strip()[:60]
+    return f"{veh} / {sym}" + (f" → {cause}" if cause else "")
+
+
+def _safe_case(c: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "vehicle": c.get("vehicle") or {},
+        "symptom": c.get("symptom") or "",
+        "dtc_codes": c.get("dtc_codes") or [],
+        "root_cause": c.get("root_cause") or "",
+        "repair_summary": c.get("repair_summary") or "",
+        "parts": c.get("parts") or [],
+        "outcome": (c.get("outcome") or "FIXED").upper(),
+    }
+
+
+async def _persist_case(db, shop_id: str, c: Dict[str, Any], user_name: str, user_id: str, source: str) -> str:
+    case_id = str(uuid.uuid4())
+    doc = {
+        "id": case_id,
+        "shop_id": shop_id,
+        "vehicle": c.get("vehicle") or {},
+        "symptom": c.get("symptom") or "",
+        "dtc_codes": c.get("dtc_codes") or [],
+        "root_cause": c.get("root_cause") or "",
+        "repair_summary": c.get("repair_summary") or "",
+        "parts": c.get("parts") or [],
+        "technician_name": c.get("technician_name") or user_name or "",
+        "technician_id": user_id,
+        "outcome": (c.get("outcome") or "FIXED").upper(),
+        "labor_hours": c.get("labor_hours"),
+        "photos_base64": [],
+        "confidence_note": c.get("confidence_note") or "",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "source": source,
+        "created_by_user_id": user_id,
+    }
+    doc["embedding"] = await embed_text(case_text_blob(doc))
+    await db.brain_cases.insert_one(doc)
+    return case_id
