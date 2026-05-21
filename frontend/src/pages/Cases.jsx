@@ -298,7 +298,7 @@ function BulkPaste({ onClose, onIngested }) {
       const r = await api.post("/cases/learn-pdf", fd, { headers: { "Content-Type": "multipart/form-data" }, timeout: 240000 });
       setResults(prev => [...(r.data.results || []), ...prev]);
       setTotalInBrain(r.data.total_cases_in_brain);
-      setPdfInfo({ filename: r.data.source_filename, pages: r.data.pdf_pages, chunks: r.data.chunks_sent_to_gpt, ingested: r.data.ingested, failed: r.data.failed });
+      setPdfInfo({ filename: r.data.source_filename, pages: r.data.pdf_pages, chunks: r.data.chunks_sent_to_gpt, ingested: r.data.ingested, failed: r.data.failed, ocr_used: r.data.ocr_used, ocr_pages: r.data.ocr_pages, preview: r.data.extracted_text_preview });
       onIngested?.();
     } catch (e) {
       setErr(e?.response?.data?.detail || e.message || "PDF ingest failed");
@@ -345,9 +345,22 @@ function BulkPaste({ onClose, onIngested }) {
               <Upload size={14}/>{busy ? "READING PDF..." : "PICK PDF"}
             </button>
             {pdfInfo && (
-              <div className="mt-3 text-[11px] text-ok uppercase tracking-widest" data-testid="pdf-info">
-                {pdfInfo.filename}: {pdfInfo.pages} pages → {pdfInfo.ingested} cases ingested
-                {pdfInfo.failed > 0 && <span className="text-amber2"> · {pdfInfo.failed} skipped</span>}
+              <div className="mt-3 text-[11px] uppercase tracking-widest space-y-1" data-testid="pdf-info">
+                <div className={pdfInfo.ingested > 0 ? "text-ok" : "text-amber2"}>
+                  {pdfInfo.filename}: {pdfInfo.pages} page{pdfInfo.pages !== 1 && "s"} → <span className="font-bold">{pdfInfo.ingested}</span> case{pdfInfo.ingested !== 1 && "s"} ingested
+                  {pdfInfo.failed > 0 && <span className="text-danger"> · {pdfInfo.failed} skipped</span>}
+                </div>
+                {pdfInfo.ocr_used && (
+                  <div className="text-amber2 normal-case tracking-normal text-[10px]">
+                    PDF was scanned (no text layer). Used Vision OCR on {pdfInfo.ocr_pages} page{pdfInfo.ocr_pages !== 1 && "s"}.
+                  </div>
+                )}
+                {pdfInfo.ingested === 0 && pdfInfo.preview && (
+                  <div className="border border-amber2/40 bg-amber2/5 p-2 mt-2 text-left normal-case tracking-normal">
+                    <div className="text-[10px] text-amber2 uppercase tracking-widest mb-1">WHAT WE READ FROM THE PDF (paste this if it looks right):</div>
+                    <div className="text-[11px] text-ink-2 font-mono whitespace-pre-wrap line-clamp-6 max-h-32 overflow-auto">{pdfInfo.preview}</div>
+                  </div>
+                )}
               </div>
             )}
           </div>

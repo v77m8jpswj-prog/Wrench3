@@ -799,14 +799,17 @@ def make_brain_router(db, get_user):
     async def cases_learn_pdf(file: UploadFile = File(...), user=Depends(get_user)):
         """Drop an AutoLeap (or any) PDF full of repair orders. We extract text page-by-page,
         chunk it, feed each chunk through GPT-5.2 to pull structured cases, and embed them.
-        Returns the same shape as /cases/learn-bulk."""
+        If the PDF is a scan / image-only (no text layer), we fall back to GPT-5.2 Vision
+        to OCR each page as an image. Returns the same shape as /cases/learn-bulk."""
         shop_id = user.get("shop_id") or DEFAULT_SHOP_ID
         raw = await file.read()
         if not raw:
             raise HTTPException(400, "Empty file.")
-        if len(raw) > 20 * 1024 * 1024:
-            raise HTTPException(413, "PDF too big (20MB max). Split it.")
-        # Extract text from the PDF
+        if len(raw) > 25 * 1024 * 1024:
+            raise HTTPException(413, "PDF too big (25MB max). Split it.")
+        # ---- 1) Try text-layer extraction first (fast, no AI cost) ----
+        ocr_used = False
+        ocr_pages = 0
         try:
             import pypdf
             reader = pypdf.PdfReader(io.BytesIO(raw))
@@ -818,27 +821,88 @@ def make_brain_router(db, get_user):
                     t = ""
                 if t.strip():
                     pages.append(t)
+            total_text = sum(len(p) for p in pages)
         except Exception as e:
-            raise HTTPException(400, f"Couldn't read that PDF: {e}")
-        if not pages:
-            raise HTTPException(400, "PDF had no extractable text. If it's a scan, take phone pics of each RO and use the image upload (coming next).")
-        # Chunk: one page = one item, but if a page is short (<500 chars) glue it
-        # to the next so GPT has enough context to pull a full RO.
+            log.warning(f"pypdf failed on {file.filename}: {e}")
+            pages = []
+            total_text = 0
+        # ---- 2) If text layer is thin (scanned PDF), OCR via GPT-5.2 Vision ----
+        OCR_TRIGGER_CHARS = 200
+        if total_text < OCR_TRIGGER_CHARS:
+            log.info(f"PDF '{file.filename}' has only {total_text} chars of text — falling back to Vision OCR.")
+            try:
+                import fitz  # PyMuPDF
+            except ImportError as e:
+                raise HTTPException(500, f"PDF appears scanned (no text). Vision OCR library not installed: {e}")
+            if not OPENAI_API_KEY:
+                raise HTTPException(503, "PDF is a scan and needs Vision OCR. OPENAI_API_KEY not configured.")
+            try:
+                pdfdoc = fitz.open(stream=raw, filetype="pdf")
+            except Exception as e:
+                raise HTTPException(400, f"Couldn't open the PDF: {e}")
+            ocr_pages = min(len(pdfdoc), 20)  # cap at 20 pages per call
+            page_texts = []
+            for i in range(ocr_pages):
+                page = pdfdoc[i]
+                pix = page.get_pixmap(dpi=180)  # 180 DPI is plenty for OCR
+                png_bytes = pix.tobytes("png")
+                b64 = base64.b64encode(png_bytes).decode()
+                # Call GPT-5.2 Vision via OpenAI Chat Completions
+                async with httpx.AsyncClient(timeout=90) as c:
+                    r = await c.post(
+                        "https://api.openai.com/v1/chat/completions",
+                        headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"},
+                        json={
+                            "model": "gpt-5.2",
+                            "messages": [{
+                                "role": "user",
+                                "content": [
+                                    {"type": "text", "text": "Transcribe ALL text from this repair-order PDF page exactly as it appears. Preserve vehicle info, VIN, symptom/concern, diagnosis/repair, parts list (Qty + part # + description), labor, technician, totals. Output plain text only — no commentary, no markdown."},
+                                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}}
+                                ]
+                            }],
+                            "max_completion_tokens": 4000,
+                        },
+                    )
+                if r.status_code != 200:
+                    log.warning(f"OCR page {i+1} failed: {r.status_code} {r.text[:300]}")
+                    continue
+                jr = r.json()
+                page_text = jr.get("choices", [{}])[0].get("message", {}).get("content", "")
+                if page_text.strip():
+                    page_texts.append(page_text)
+            pdfdoc.close()
+            pages = page_texts
+            total_text = sum(len(p) for p in pages)
+            ocr_used = True
+        if not pages or total_text < 50:
+            raise HTTPException(400, "PDF had no extractable text, even after OCR. Try a clearer scan or paste the RO as text.")
+        # ---- 3) Chunk: send pages combined unless they're huge ----
+        # AutoLeap ROs often span 2-4 pages — combine until ~12000 chars.
         items = []
         buf = ""
         for pg in pages:
-            buf = (buf + "\n\n" + pg).strip() if buf else pg
-            if len(buf) >= 800:
+            if len(buf) + len(pg) > 12000 and buf:
                 items.append({"raw_text": buf})
-                buf = ""
+                buf = pg
+            else:
+                buf = (buf + "\n\n" + pg).strip() if buf else pg
         if buf:
             items.append({"raw_text": buf})
-        # Cap at 50 items per call (matches bulk endpoint limit)
         items = items[:50]
+        # ---- 4) Feed to GPT-5.2 extractor ----
         result = await _bulk_ingest(db, shop_id, items, user_name=user.get("name",""), user_id=user.get("id",""))
         result["source_filename"] = file.filename
         result["pdf_pages"] = len(pages)
         result["chunks_sent_to_gpt"] = len(items)
+        result["ocr_used"] = ocr_used
+        result["ocr_pages"] = ocr_pages
+        result["total_extracted_chars"] = total_text
+        if ocr_used:
+            result["note"] = f"PDF was scanned (no text layer) — used Vision OCR on {ocr_pages} page(s)."
+        # If GPT couldn't extract ANY cases, include a preview of what we sent so Doc sees what went in
+        if result.get("ingested", 0) == 0 and items:
+            result["extracted_text_preview"] = (items[0]["raw_text"][:600] if items else "") + ("..." if items and len(items[0]["raw_text"]) > 600 else "")
         return result
 
     return router

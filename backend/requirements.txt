@@ -123,3 +123,4 @@ watchfiles==1.2.0
 websockets==16.0
 yarl==1.23.0
 zipp==4.1.0
+PyMuPDF==1.27.2.3
