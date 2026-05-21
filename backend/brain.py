@@ -16,10 +16,10 @@ import math
 import uuid
 import base64
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict, Any, Literal
 
-from fastapi import APIRouter, HTTPException, Depends, Header, UploadFile, File, Form, Query
+from fastapi import APIRouter, HTTPException, Depends, Header, UploadFile, File, Form, Query, Request
 from pydantic import BaseModel, Field
 from motor.motor_asyncio import AsyncIOMotorClient
 
@@ -568,8 +568,7 @@ def make_brain_router(db, get_user):
         can ground responses (e.g. \"Yes, this shop does AFM delete tuning\")."""
         return await _get_or_seed_profile(shop_id)
 
-    # ----- Recent outcomes (partner polls this to learn from closed jobs) -----
-    @router.get("/brain/recent-outcomes")
+    # ----- Recent outcomes (partner polls this to learn from closed jobs) -----    @router.get("/brain/recent-outcomes")
     async def brain_recent_outcomes(
         shop_id: str = Query(...),
         since: Optional[str] = Query(None, description="ISO-8601 timestamp. Returns only events created after this. Omit for last 50 events."),
@@ -910,6 +909,81 @@ def make_brain_router(db, get_user):
         if result.get("ingested", 0) == 0 and items:
             result["extracted_text_preview"] = (items[0]["raw_text"][:600] if items else "") + ("..." if items and len(items[0]["raw_text"]) > 600 else "")
         return result
+
+    # ===================== PUBLIC SHOP LANDING (no auth) =====================
+    @router.get("/public/shop/{shop_id}")
+    async def public_shop(shop_id: str):
+        """Public shop info — drives the marketing landing page at /shop/{shop_id}.
+        No auth, scoped to one shop. Safe fields only (no internal stats)."""
+        profile = await db.shop_profiles.find_one({"shop_id": shop_id}, {"_id": 0}) or {}
+        if not profile:
+            raise HTTPException(404, "Shop not found.")
+        return {
+            "shop_id": shop_id,
+            "name": profile.get("name") or "",
+            "capabilities": profile.get("capabilities") or [],
+            "specialties": profile.get("specialties") or [],
+            "service_areas": profile.get("service_areas") or [],
+            "hours": profile.get("hours") or "",
+            "phone": profile.get("phone") or "",
+            "address": profile.get("address") or "",
+            "notes": profile.get("notes") or "",
+        }
+
+    class PublicLeadReq(BaseModel):
+        shop_id: str
+        name: str
+        contact: str  # phone OR email — they pick one
+        vehicle: Optional[str] = ""  # "2017 GMC Sierra 5.3"
+        what_they_need: str  # symptom / quote request / question
+        source: Optional[str] = "landing"  # "landing" | "qr" | etc.
+
+    @router.post("/public/leads")
+    async def public_lead(body: PublicLeadReq, request: Request):
+        """Customer fills the contact form on the public landing page. We store the lead,
+        no auth. Naive rate limit: 5/min per IP per shop."""
+        ip = request.client.host if request.client else "unknown"
+        # Naive rate limit
+        one_min_ago = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+        recent = await db.leads.count_documents({"shop_id": body.shop_id, "ip": ip, "created_at": {"$gt": one_min_ago}})
+        if recent >= 5:
+            raise HTTPException(429, "Slow down — you've sent a bunch of these in the last minute.")
+        # Trim
+        doc = {
+            "id": str(uuid.uuid4()),
+            "shop_id": body.shop_id,
+            "name": body.name.strip()[:120],
+            "contact": body.contact.strip()[:160],
+            "vehicle": (body.vehicle or "").strip()[:200],
+            "what_they_need": body.what_they_need.strip()[:2000],
+            "source": body.source or "landing",
+            "ip": ip,
+            "status": "new",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if not doc["name"] or not doc["contact"] or not doc["what_they_need"]:
+            raise HTTPException(400, "Name, contact, and what you need are all required.")
+        await db.leads.insert_one(doc)
+        doc.pop("_id", None)
+        return {"ok": True, "lead_id": doc["id"]}
+
+    # ----- Owner-side lead inbox (user-JWT) -----
+    @router.get("/leads")
+    async def list_leads(user=Depends(get_user)):
+        sid = user.get("shop_id") or DEFAULT_SHOP_ID
+        cur = db.leads.find({"shop_id": sid}, {"_id": 0}).sort("created_at", -1).limit(100)
+        return await cur.to_list(100)
+
+    class LeadStatusReq(BaseModel):
+        status: Literal["new", "contacted", "won", "lost"] = "new"
+
+    @router.patch("/leads/{lead_id}")
+    async def update_lead(lead_id: str, body: LeadStatusReq, user=Depends(get_user)):
+        sid = user.get("shop_id") or DEFAULT_SHOP_ID
+        r = await db.leads.update_one({"id": lead_id, "shop_id": sid}, {"$set": {"status": body.status}})
+        if r.matched_count == 0:
+            raise HTTPException(404, "Lead not found.")
+        return {"ok": True, "status": body.status}
 
     return router
 
