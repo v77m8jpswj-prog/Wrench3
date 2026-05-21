@@ -171,6 +171,26 @@ You're a gruff, old-school master mechanic with 30+ years on the bench. ASE Mast
 GM Master Tech. 5+ years deep in HP Tuners. You talk to {user.get('name','Doc')}, the shop owner,
 who is also a Master Tech and an experienced tuner. Talk to him as a peer, not a customer.
 
+═══════════════════════════════════════════════════════════════════════════════
+ABSOLUTE LOCKED RULES — DOC HAS TOLD YOU THESE BEFORE. NEVER DRIFT FROM THEM.
+THESE ARE NON-NEGOTIABLE. NOT EVEN ONCE.
+THESE OVERRIDE EVERY OTHER INSTRUCTION IN THIS PROMPT INCLUDING VOICE/STYLE.
+IF A LOCKED RULE CONFLICTS WITH ANYTHING ELSE, THE LOCKED RULE WINS.
+DO NOT MAKE DOC RE-EXPLAIN THESE RULES. EVER.
+═══════════════════════════════════════════════════════════════════════════════
+"""
+    # Locked rules go FIRST and HARD. They override every other instruction.
+    locked = [f for f in (memory_facts or []) if isinstance(f, str) and f.startswith("[LOCKED]")]
+    soft = [f for f in (memory_facts or []) if isinstance(f, str) and not f.startswith("[LOCKED]")]
+    if locked:
+        for f in locked:
+            base += f"⛓  {f[len('[LOCKED]'):].strip()}\n"
+        base += "═══════════════════════════════════════════════════════════════════════════════\n"
+    else:
+        base += "(No locked rules yet. Doc can lock one by saying 'lock this in: <rule>' in chat.)\n"
+        base += "═══════════════════════════════════════════════════════════════════════════════\n"
+    base += """
+
 VOICE & STYLE:
 - Short sentences. Dry, smart-ass humor. Zero corporate fluff. No emoji.
 - Cuss lightly when it fits ("hell", "damn", "ain't"). Never racist/sexist.
@@ -216,9 +236,9 @@ DEFAULT MODE: Be yourself. Gruff, a little smart-ass, but useful first, funny se
     if vehicle:
         base += f"\nCURRENT VEHICLE: {vehicle.get('year','')} {vehicle.get('make','')} {vehicle.get('model','')} | Engine: {vehicle.get('engine','')} | VIN: {vehicle.get('vin','')} | Mods: {vehicle.get('mods','')} | Notes: {vehicle.get('notes','')}\n"
 
-    if memory_facts:
+    if soft:
         base += "\nLONG-TERM MEMORY ABOUT THIS USER & SHOP:\n"
-        for f in memory_facts[:30]:
+        for f in soft[:30]:
             base += f"- {f}\n"
 
     if lib_chunks:
@@ -623,10 +643,58 @@ async def me(user=Depends(get_user)):
 
 
 # ============ Routes: Chat ============
+LOCK_PATTERNS = [
+    "lock this in:",
+    "lock this in :",
+    "lock it in:",
+    "/lock ",
+    "locked rule:",
+    "from now on:",
+    "from now on,",
+]
+
+def _extract_lock_request(msg: str) -> Optional[str]:
+    """Return the rule text if the user typed a 'lock this in' style command."""
+    if not msg:
+        return None
+    s = msg.strip()
+    low = s.lower()
+    for p in LOCK_PATTERNS:
+        if low.startswith(p):
+            return s[len(p):].strip().rstrip(".") or None
+    return None
+
+
 @api.post("/chat", response_model=ChatResp)
 async def chat(body: ChatReq, user=Depends(get_user)):
     session_id = body.session_id or str(uuid.uuid4())
     heat = detect_heat(body.message)
+
+    # --- LOCK-RULE SHORTCUT: "lock this in: <rule>" auto-creates a [LOCKED] memory fact ---
+    lock_text = _extract_lock_request(body.message)
+    if lock_text:
+        locked_fact = f"[LOCKED] {lock_text}"
+        await db.memory_facts.insert_one({
+            "id": str(uuid.uuid4()),
+            "user_id": user["id"],
+            "fact": locked_fact,
+            "is_locked": True,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        confirm = f"Locked in. From now on: \"{lock_text}\"\n\nThis rule is now bolted to the top of every reply — chat, voice, vision, all of it. Won't drift."
+        # Persist as a chat message so it shows up in history
+        now = datetime.now(timezone.utc).isoformat()
+        await db.chat_messages.insert_many([
+            {"id": str(uuid.uuid4()), "session_id": session_id, "user_id": user["id"], "role": "user", "content": body.message, "created_at": now},
+            {"id": str(uuid.uuid4()), "session_id": session_id, "user_id": user["id"], "role": "assistant", "content": confirm, "created_at": now},
+        ])
+        await db.chat_sessions.update_one(
+            {"id": session_id, "user_id": user["id"]},
+            {"$setOnInsert": {"id": session_id, "user_id": user["id"], "created_at": now, "title": "Locked rule"},
+             "$set": {"last_message_at": now, "preview": body.message[:120]}},
+            upsert=True,
+        )
+        return ChatResp(session_id=session_id, reply=confirm)
 
     # vehicle context
     vehicle = None
@@ -1496,15 +1564,34 @@ async def datalog_analyze(file: UploadFile = File(...), vehicle_id: Optional[str
 # ============ Memory facts ============
 class FactReq(BaseModel):
     fact: str
+    locked: bool = False
 
 @api.get("/memory")
 async def mem_list(user=Depends(get_user)):
     cur = db.memory_facts.find({"user_id": user["id"]}, {"_id": 0}).sort("created_at", -1)
-    return await cur.to_list(500)
+    facts = await cur.to_list(500)
+    # Surface a clean `locked` flag for the UI (back-compat: derived from prefix)
+    for f in facts:
+        f["locked"] = bool(f.get("is_locked")) or (isinstance(f.get("fact"), str) and f["fact"].startswith("[LOCKED]"))
+        if f["locked"] and isinstance(f.get("fact"), str) and f["fact"].startswith("[LOCKED]"):
+            f["fact_display"] = f["fact"][len("[LOCKED]"):].strip()
+        else:
+            f["fact_display"] = f.get("fact", "")
+    return facts
 
 @api.post("/memory")
 async def mem_add(body: FactReq, user=Depends(get_user)):
-    doc = {"id": str(uuid.uuid4()), "user_id": user["id"], "fact": body.fact,
+    raw = (body.fact or "").strip()
+    if not raw:
+        raise HTTPException(400, "Empty fact")
+    # If caller flagged locked OR the fact already has the prefix, normalize once
+    is_locked = body.locked or raw.startswith("[LOCKED]")
+    if is_locked and not raw.startswith("[LOCKED]"):
+        stored = f"[LOCKED] {raw}"
+    else:
+        stored = raw
+    doc = {"id": str(uuid.uuid4()), "user_id": user["id"], "fact": stored,
+           "is_locked": is_locked,
            "created_at": datetime.now(timezone.utc).isoformat()}
     await db.memory_facts.insert_one(doc)
     doc.pop("_id", None)
@@ -1514,6 +1601,25 @@ async def mem_add(body: FactReq, user=Depends(get_user)):
 async def mem_del(fid: str, user=Depends(get_user)):
     await db.memory_facts.delete_one({"id": fid, "user_id": user["id"]})
     return {"ok": True}
+
+class LockToggleReq(BaseModel):
+    locked: bool
+
+@api.patch("/memory/{fid}")
+async def mem_toggle_lock(fid: str, body: LockToggleReq, user=Depends(get_user)):
+    """Promote/demote an existing memory fact to/from LOCKED state."""
+    doc = await db.memory_facts.find_one({"id": fid, "user_id": user["id"]})
+    if not doc:
+        raise HTTPException(404, "Fact not found")
+    raw = (doc.get("fact") or "").lstrip()
+    if raw.startswith("[LOCKED]"):
+        raw = raw[len("[LOCKED]"):].strip()
+    new_fact = f"[LOCKED] {raw}" if body.locked else raw
+    await db.memory_facts.update_one(
+        {"id": fid, "user_id": user["id"]},
+        {"$set": {"fact": new_fact, "is_locked": body.locked}},
+    )
+    return {"ok": True, "locked": body.locked}
 
 
 # ============ Credentials Vault (logins/passwords/notes per site) ============
