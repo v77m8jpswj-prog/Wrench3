@@ -795,6 +795,52 @@ def make_brain_router(db, get_user):
         items = body.get("items") or []
         return await _bulk_ingest(db, shop_id, items, user_name=user.get("name",""), user_id=user.get("id",""))
 
+    @router.post("/cases/learn-pdf")
+    async def cases_learn_pdf(file: UploadFile = File(...), user=Depends(get_user)):
+        """Drop an AutoLeap (or any) PDF full of repair orders. We extract text page-by-page,
+        chunk it, feed each chunk through GPT-5.2 to pull structured cases, and embed them.
+        Returns the same shape as /cases/learn-bulk."""
+        shop_id = user.get("shop_id") or DEFAULT_SHOP_ID
+        raw = await file.read()
+        if not raw:
+            raise HTTPException(400, "Empty file.")
+        if len(raw) > 20 * 1024 * 1024:
+            raise HTTPException(413, "PDF too big (20MB max). Split it.")
+        # Extract text from the PDF
+        try:
+            import pypdf
+            reader = pypdf.PdfReader(io.BytesIO(raw))
+            pages = []
+            for p in reader.pages:
+                try:
+                    t = p.extract_text() or ""
+                except Exception:
+                    t = ""
+                if t.strip():
+                    pages.append(t)
+        except Exception as e:
+            raise HTTPException(400, f"Couldn't read that PDF: {e}")
+        if not pages:
+            raise HTTPException(400, "PDF had no extractable text. If it's a scan, take phone pics of each RO and use the image upload (coming next).")
+        # Chunk: one page = one item, but if a page is short (<500 chars) glue it
+        # to the next so GPT has enough context to pull a full RO.
+        items = []
+        buf = ""
+        for pg in pages:
+            buf = (buf + "\n\n" + pg).strip() if buf else pg
+            if len(buf) >= 800:
+                items.append({"raw_text": buf})
+                buf = ""
+        if buf:
+            items.append({"raw_text": buf})
+        # Cap at 50 items per call (matches bulk endpoint limit)
+        items = items[:50]
+        result = await _bulk_ingest(db, shop_id, items, user_name=user.get("name",""), user_id=user.get("id",""))
+        result["source_filename"] = file.filename
+        result["pdf_pages"] = len(pages)
+        result["chunks_sent_to_gpt"] = len(items)
+        return result
+
     return router
 
 

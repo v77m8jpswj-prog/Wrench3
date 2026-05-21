@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { Plus, X, Trash2, Edit3, Brain, AlertCircle, CheckCircle2, Circle, Zap, ClipboardPaste } from "lucide-react";
+import { Plus, X, Trash2, Edit3, Brain, AlertCircle, CheckCircle2, Circle, Zap, ClipboardPaste, FileText, Upload } from "lucide-react";
 import api from "@/api";
 
 const blank = {
@@ -266,6 +266,8 @@ function BulkPaste({ onClose, onIngested }) {
   const [results, setResults] = useState([]); // [{ok, parsed_summary, parsed_case, error}]
   const [totalInBrain, setTotalInBrain] = useState(null);
   const [err, setErr] = useState("");
+  const [pdfInfo, setPdfInfo] = useState(null); // {filename, pages, chunks}
+  const fileRef = useRef(null);
 
   const ingest = async () => {
     setErr("");
@@ -285,6 +287,24 @@ function BulkPaste({ onClose, onIngested }) {
     } finally { setBusy(false); }
   };
 
+  const ingestPdf = async (file) => {
+    if (!file) return;
+    setErr(""); setPdfInfo(null);
+    if (file.size > 20 * 1024 * 1024) { setErr("PDF too big (20MB max). Split it."); return; }
+    setBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const r = await api.post("/cases/learn-pdf", fd, { headers: { "Content-Type": "multipart/form-data" }, timeout: 240000 });
+      setResults(prev => [...(r.data.results || []), ...prev]);
+      setTotalInBrain(r.data.total_cases_in_brain);
+      setPdfInfo({ filename: r.data.source_filename, pages: r.data.pdf_pages, chunks: r.data.chunks_sent_to_gpt, ingested: r.data.ingested, failed: r.data.failed });
+      onIngested?.();
+    } catch (e) {
+      setErr(e?.response?.data?.detail || e.message || "PDF ingest failed");
+    } finally { setBusy(false); if (fileRef.current) fileRef.current.value = ""; }
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex" data-testid="bulk-paste-modal">
       <div className="flex-1 bg-black/70" onClick={onClose}/>
@@ -301,6 +321,39 @@ function BulkPaste({ onClose, onIngested }) {
         </div>
 
         <div className="p-4 space-y-3 flex-1">
+          <div className="border-2 border-dashed border-rust/40 bg-rust/5 p-4 text-center">
+            <FileText size={28} className="mx-auto text-rust mb-2"/>
+            <div className="heading text-base mb-1">DROP AUTOLEAP PDF HERE</div>
+            <div className="text-[11px] text-ink-3 uppercase tracking-widest mb-3">
+              Export an RO (or 50) from AutoLeap as PDF → tap below → done
+            </div>
+            <input
+              ref={fileRef}
+              type="file"
+              accept="application/pdf,.pdf"
+              data-testid="bulk-pdf-input"
+              className="hidden"
+              onChange={e => ingestPdf(e.target.files?.[0])}
+              disabled={busy}
+            />
+            <button
+              data-testid="bulk-pdf-btn"
+              onClick={() => fileRef.current?.click()}
+              disabled={busy}
+              className="btn-rust px-5 py-3 text-sm inline-flex items-center gap-2 disabled:opacity-50"
+            >
+              <Upload size={14}/>{busy ? "READING PDF..." : "PICK PDF"}
+            </button>
+            {pdfInfo && (
+              <div className="mt-3 text-[11px] text-ok uppercase tracking-widest" data-testid="pdf-info">
+                {pdfInfo.filename}: {pdfInfo.pages} pages → {pdfInfo.ingested} cases ingested
+                {pdfInfo.failed > 0 && <span className="text-amber2"> · {pdfInfo.failed} skipped</span>}
+              </div>
+            )}
+          </div>
+
+          <div className="text-center text-[10px] text-ink-3 uppercase tracking-widest">— OR PASTE TEXT BELOW —</div>
+
           <p className="text-xs text-ink-2">
             Paste any old repair order — messy is fine. Wrench reads it and pulls out vehicle, symptom, root cause, repair, parts.
             Separate multiple ROs with a blank line and <code className="text-amber2">---</code> or <code className="text-amber2">===</code>.
