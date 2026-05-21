@@ -1,11 +1,14 @@
 import React, { useEffect, useState, useRef } from "react";
-import { Upload, Trash2, FileText, FileSpreadsheet, BookOpen, RefreshCw } from "lucide-react";
+import { Upload, Trash2, FileText, FileSpreadsheet, BookOpen, RefreshCw, Link as LinkIcon, ExternalLink, Loader } from "lucide-react";
 import api from "@/api";
 
 export default function Library() {
   const [items, setItems] = useState([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [url, setUrl] = useState("");
+  const [urlBusy, setUrlBusy] = useState(false);
+  const [urlMsg, setUrlMsg] = useState("");
   const fileRef = useRef(null);
 
   const refresh = async () => {
@@ -39,7 +42,21 @@ export default function Library() {
     refresh();
   };
 
-  const iconFor = (k) => k === "pdf" ? FileText : k === "csv" ? FileSpreadsheet : BookOpen;
+  const iconFor = (k) => k === "url" ? LinkIcon : k === "pdf" ? FileText : k === "csv" ? FileSpreadsheet : BookOpen;
+
+  const feedUrl = async () => {
+    setErr(""); setUrlMsg("");
+    if (!url.trim()) return;
+    setUrlBusy(true);
+    try {
+      const r = await api.post("/scrape/url", { url: url.trim() }, { timeout: 240000 });
+      setUrlMsg(`✓ Ingested "${r.data.title?.slice(0,60) || "page"}" — ${r.data.chunks_ingested} chunks, ${r.data.chars} chars${r.data.needed_login ? " (used Vault login)" : ""}.`);
+      setUrl("");
+      refresh();
+    } catch (e) {
+      setErr(e?.response?.data?.detail || e.message || "Scrape failed");
+    } finally { setUrlBusy(false); }
+  };
 
   return (
     <div className="p-6" data-testid="library-page">
@@ -56,7 +73,7 @@ export default function Library() {
         onDragOver={e=>e.preventDefault()}
         onDrop={onDrop}
         data-testid="dropzone"
-        className="border-2 border-dashed border-line p-8 text-center mb-6 hover:border-rust transition-colors">
+        className="border-2 border-dashed border-line p-8 text-center mb-4 hover:border-rust transition-colors">
         <Upload size={28} className="mx-auto text-ink-3 mb-2"/>
         <div className="heading text-xl">DROP FILES HERE</div>
         <div className="text-ink-3 text-xs uppercase tracking-widest mt-1">PDF · TXT · MD · CSV · LOG · <span className="text-rust">.HPT / .HPL TUNE FILES</span></div>
@@ -66,6 +83,30 @@ export default function Library() {
           NOTE ON .HPT: HP TUNERS' BINARY FORMAT IS PROPRIETARY · WRENCH STORES THE FILE + EXTRACTS METADATA (VIN, OS, CALIBRATION ID).<br/>
           FOR TABLE EDITS, USE THE <span className="text-rust">CHARTS</span> TAB — SCREENSHOT OR PASTE THE SPECIFIC TABLE.
         </div>
+      </div>
+
+      <div className="panel mb-6 p-4 border-l-4 border-amber2" data-testid="url-feeder">
+        <div className="flex items-center gap-2 mb-2">
+          <LinkIcon size={16} className="text-amber2"/>
+          <div className="heading text-base">FEED FROM URL</div>
+        </div>
+        <p className="text-xs text-ink-2 mb-3">
+          Paste any URL. Wrench reads the page and adds it to the brain. Works on public sites (HP Tuners forum, manufacturer service bulletins, YouTube transcripts) and paywalled sites like <span className="text-amber2">AllData</span> and <span className="text-amber2">Identifix</span> — for those, save your login in the <span className="text-amber2">Vault</span> first and Wrench will use it.
+        </p>
+        <div className="flex gap-2 flex-col sm:flex-row">
+          <input
+            data-testid="url-input"
+            value={url}
+            onChange={e=>setUrl(e.target.value)}
+            placeholder="https://forum.hptuners.com/showthread.php?..."
+            className="input-shop flex-1 text-sm"
+            onKeyDown={e=>{ if (e.key === "Enter") feedUrl(); }}
+          />
+          <button onClick={feedUrl} disabled={urlBusy || !url.trim()} className="btn-rust px-4 py-2 text-sm flex items-center gap-2 disabled:opacity-50" data-testid="url-feed-btn">
+            {urlBusy ? <Loader size={14} className="animate-spin"/> : <ExternalLink size={14}/>}{urlBusy ? "READING..." : "FEED IT"}
+          </button>
+        </div>
+        {urlMsg && <div className="mt-2 text-xs text-ok" data-testid="url-feed-msg">{urlMsg}</div>}
       </div>
 
       <div className="panel">
