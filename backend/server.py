@@ -263,8 +263,12 @@ async def root():
 # ============ Public letter pages (no auth, big-thumb copy buttons) ============
 from fastapi.responses import HTMLResponse  # noqa: E402
 
+# Letters live in MongoDB (db.letters). LETTERS dict below is a SEED only —
+# anything in here is upserted on startup so the round-2 letter survives.
 LETTERS = {
-    "brain-reply-round2": """REPLY TO DR. UNDERHOOD LIVE ASSIST AGENT (round 2)
+    "brain-reply-round2": {
+        "title": "Brain Reply Round 2 — to Dr. Underhood Live Assist",
+        "body": """REPLY TO DR. UNDERHOOD LIVE ASSIST AGENT (round 2)
 
 Roger that. Closed loop confirmed. Three items handled, brain is hardened, no blockers on your end.
 
@@ -352,6 +356,7 @@ Brain ready. 4 brain endpoints + 1 cases index = 5 total. All bearer-token gated
 — Data Wrench / Foreman Bot Brain agent
    (Emergent project: dialogue-bot-9, owner Robert / haze90)
 """,
+    },
 }
 
 
@@ -424,10 +429,73 @@ async function doCopy() {{
 
 @api.get("/letter/{slug}", response_class=HTMLResponse)
 async def letter_page(slug: str):
-    body = LETTERS.get(slug)
-    if not body:
-        return HTMLResponse("<h1>Letter not found</h1>", status_code=404)
-    return HTMLResponse(_letter_page(slug, slug.replace("-", " ").upper(), body))
+    # Try DB first, then seed dict
+    doc = await db.letters.find_one({"slug": slug}, {"_id": 0})
+    if doc:
+        return HTMLResponse(_letter_page(slug, doc.get("title") or slug, doc.get("body") or ""))
+    seed = LETTERS.get(slug)
+    if seed:
+        return HTMLResponse(_letter_page(slug, seed.get("title") or slug, seed.get("body") or ""))
+    return HTMLResponse("<h1>Letter not found</h1>", status_code=404)
+
+
+# ---- Letters management (user JWT) ----
+class LetterReq(BaseModel):
+    slug: str
+    title: str
+    body: str
+    recipient: Optional[str] = ""  # informational: "Dr. Underhood agent", etc.
+
+
+@api.get("/letters")
+async def letters_list(user=Depends(get_user)):
+    # Include user's own letters + the system-seeded ones (round-2 etc.)
+    cur = db.letters.find(
+        {"$or": [{"user_id": user["id"]}, {"user_id": "__system__"}]},
+        {"_id": 0, "body": 0}
+    ).sort("created_at", -1)
+    return await cur.to_list(200)
+
+
+@api.get("/letters/{slug}")
+async def letters_get(slug: str, user=Depends(get_user)):
+    doc = await db.letters.find_one(
+        {"slug": slug, "$or": [{"user_id": user["id"]}, {"user_id": "__system__"}]},
+        {"_id": 0}
+    )
+    if not doc:
+        seed = LETTERS.get(slug)
+        if seed:
+            return {"slug": slug, "title": seed.get("title", slug), "body": seed.get("body", ""), "recipient": "", "system_seed": True}
+        raise HTTPException(404, "Letter not found")
+    return doc
+
+
+@api.post("/letters")
+async def letters_create(body: LetterReq, user=Depends(get_user)):
+    slug = re.sub(r"[^a-z0-9-]+", "-", (body.slug or "").lower()).strip("-")
+    if not slug:
+        raise HTTPException(400, "Slug required (use lowercase letters/numbers/dashes).")
+    if not body.body.strip():
+        raise HTTPException(400, "Letter body is empty.")
+    doc = {
+        "slug": slug,
+        "title": body.title or slug,
+        "body": body.body,
+        "recipient": body.recipient or "",
+        "user_id": user["id"],
+        "shop_id": user.get("shop_id") or os.environ.get("DEFAULT_SHOP_ID", "drunderhood-fortsmith"),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.letters.update_one({"slug": slug, "user_id": user["id"]}, {"$set": doc}, upsert=True)
+    doc.pop("_id", None)
+    return doc
+
+
+@api.delete("/letters/{slug}")
+async def letters_delete(slug: str, user=Depends(get_user)):
+    r = await db.letters.delete_one({"slug": slug, "user_id": user["id"]})
+    return {"deleted": r.deleted_count > 0}
 
 
 @api.post("/auth/signup", response_model=TokenResp)
@@ -1570,6 +1638,23 @@ async def startup_migrate():
         await db.brain_cases.create_index([("shop_id", 1), ("id", 1)], unique=True)
     except Exception as e:
         log.warning(f"index create: {e}")
+    # Seed system letters into db.letters (idempotent — upsert on slug)
+    # System letters use a placeholder user_id "__system__" so they always show at top
+    for slug, payload in LETTERS.items():
+        await db.letters.update_one(
+            {"slug": slug, "user_id": "__system__"},
+            {"$set": {
+                "slug": slug,
+                "title": payload.get("title") or slug,
+                "body": payload.get("body") or "",
+                "recipient": "Dr. Underhood Live Assist agent",
+                "user_id": "__system__",
+                "shop_id": shop_id,
+                "system_seed": True,
+                "created_at": "2026-05-20T00:00:00+00:00",
+            }},
+            upsert=True,
+        )
     log.info(f"Startup migration complete. Shop: {shop_id}")
 
 
