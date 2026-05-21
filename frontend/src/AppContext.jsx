@@ -204,6 +204,30 @@ export function AppProvider({ children }) {
         });
         transcriptNote = `✓ CHART EDITED → ${r.data.changed_cells?.length || 0} cells changed · note sent`;
         output = { ok: true, changed_cells: r.data.changed_cells?.length || 0, notes: r.data.notes };
+      } else if (name === "find_diagram" || name === "web_search") {
+        const r = await api.post("/search/web", {
+          query: args.query || "",
+          vehicle_context: args.vehicle_context || "",
+          mode: name === "find_diagram" ? "diagram" : "web",
+        });
+        const imgs = (r.data?.image_urls || []).slice(0, 5);
+        const cits = (r.data?.citations || []).slice(0, 5);
+        const ansShort = (r.data?.answer || "").slice(0, 800);
+        // Send a note artifact with the full thing so Doc can read
+        const noteBody = ansShort
+          + (cits.length ? "\n\nSOURCES:\n" + cits.map(c => `• ${c.title || ""}: ${c.url}`).join("\n") : "")
+          + (imgs.length ? "\n\nIMAGES:\n" + imgs.join("\n") : "");
+        addArtifact({ type: name === "find_diagram" ? "diagram" : "note", title: args.query || "Search result", body: noteBody, images: imgs });
+        transcriptNote = `✓ ${name === "find_diagram" ? "DIAGRAMS" : "WEB"} → ${imgs.length} image${imgs.length===1?"":"s"} · ${cits.length} source${cits.length===1?"":"s"}`;
+        output = {
+          ok: true,
+          answer: ansShort.slice(0, 400),
+          image_urls: imgs,
+          citation_urls: cits.map(c => c.url),
+          summary_for_voice: imgs.length > 0
+            ? `Found ${imgs.length} ${name==='find_diagram'?'diagrams':'pages'}. Check the screen — pictures are up.`
+            : "Got it. No images for that one, but I pulled some source pages — they're in the chat panel.",
+        };
       } else if (name === "find_similar_cases") {
         const r = await api.post("/cases/search", {
           symptom: args.symptom || "",

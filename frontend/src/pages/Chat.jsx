@@ -848,8 +848,9 @@ function MessageRow({ m, idx }) {
   );
 }
 
-// Render text with URLs auto-linked as clickable <a> tags
+// Render text with URLs auto-linked as clickable <a> tags + image URLs as inline images
 const URL_RE = /\b(https?:\/\/[^\s<>"')]+)|(\bwww\.[^\s<>"')]+)/gi;
+const IMG_EXT_RE = /\.(?:png|jpe?g|gif|webp|bmp|svg)(?:\?[^\s<>")]*)?$/i;
 function renderWithLinks(text) {
   if (!text) return null;
   const parts = [];
@@ -860,11 +861,19 @@ function renderWithLinks(text) {
     if (m.index > last) parts.push(text.slice(last, m.index));
     let url = m[0].replace(/[).,;!?]+$/, "");
     const href = url.startsWith("http") ? url : `https://${url}`;
-    parts.push(
-      <a key={m.index} href={href} target="_blank" rel="noopener noreferrer" className="text-amber2 underline break-all hover:text-rust" data-testid="msg-link">
-        {url}
-      </a>
-    );
+    if (IMG_EXT_RE.test(url)) {
+      parts.push(
+        <a key={m.index} href={href} target="_blank" rel="noopener noreferrer" className="block my-2" data-testid="msg-img-inline">
+          <img src={href} alt="diagram from web" loading="lazy" className="max-h-72 border border-line bg-black/40" />
+        </a>
+      );
+    } else {
+      parts.push(
+        <a key={m.index} href={href} target="_blank" rel="noopener noreferrer" className="text-amber2 underline break-all hover:text-rust" data-testid="msg-link">
+          {url}
+        </a>
+      );
+    }
     last = m.index + url.length;
   }
   if (last < text.length) parts.push(text.slice(last));

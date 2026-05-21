@@ -174,6 +174,12 @@ HARD RULES:
 - NEVER fabricate pin numbers, wire colors, connector locations, or torque specs. Doc has been burned by wrong info before — he'd rather hear "I don't have that one cold, snip me the diagram you're looking at" than wrong specs that send him chasing ghosts.
 - When asked about a schematic, wiring diagram, pinout, connector, or part-specific spec you don't have memorized: TELL DOC to hit the paperclip and drop the snip in chat. Tell him exactly what page or diagram to snip if it helps. Then read what he sends.
 - When Doc DOES paste/upload an image, describe what you actually see in it — pins, colors, labels, gauge readings — don't invent details that aren't there.
+
+YOU CAN NOW PULL THINGS FROM THE WEB:
+- If the backend has injected LIVE WEB SEARCH RESULTS into your context, USE THEM. Quote the URLs and image URLs verbatim — the frontend renders image URLs as actual diagrams.
+- NEVER say "I can't pull a diagram" or "I can't look that up" — you CAN now. The backend auto-searches when Doc's question implies it needs visuals or current data, and your voice tools (find_diagram, web_search) handle the same on calls.
+- When images are in the search block, include them in your reply on their own lines so they render. Lead with the actual answer in plain English, then drop the image URLs.
+
 - For HP Tuners advice: cite cell coordinates (RPM x MAP/Load) and exact deltas (degrees, percent, ms).
 - For diagnostics: ranked likely causes + cheapest/fastest confirmation step first.
 - Cite the source by name when quoting from a manual, book, or prior note.
@@ -562,17 +568,49 @@ async def chat(body: ChatReq, user=Depends(get_user)):
 
     sys_prompt = build_system_prompt(user, body.mode, heat, vehicle, memory_facts, lib_chunks)
 
+    # --- Auto web-search trigger ---
+    # If Doc's message has visual / lookup intent, run a web search first and inject results.
+    msg_lower = body.message.lower()
+    diagram_intent = any(k in msg_lower for k in [
+        "diagram", "schematic", "pinout", "wiring", "show me", "send me", "pull up",
+        "picture of", "pic of", "image of", "what does it look like", "where is the",
+        "location of", "exploded view", "torque sequence", "torque spec diagram",
+    ])
+    web_intent = diagram_intent or any(k in msg_lower for k in [
+        "recall", "tsb", "service bulletin", "what's the price", "current price",
+        "forum thread", "look up", "search the web", "find me", "google", "look it up",
+    ])
+    search_block = ""
+    search_images = []
+    if web_intent and OPENAI_API_KEY:
+        try:
+            veh_ctx = ""
+            if vehicle:
+                veh_ctx = f"{vehicle.get('year','')} {vehicle.get('make','')} {vehicle.get('model','')} {vehicle.get('engine_summary','')}".strip()
+            search_res = await _openai_web_search(body.message, veh_ctx, diagram_mode=diagram_intent)
+            search_images = search_res.get("image_urls", [])[:8]
+            srch_text = (search_res.get("answer") or "")[:2500]
+            cit_lines = "\n".join(f"  - {c['title']}: {c['url']}" for c in (search_res.get("citations") or [])[:6])
+            search_block = (
+                "\n\nLIVE WEB SEARCH RESULTS (use these in your answer — quote URLs directly so Doc can tap them, include image URLs verbatim so they render):\n"
+                + srch_text
+                + ("\n\nSOURCES:\n" + cit_lines if cit_lines else "")
+                + (("\n\nIMAGES FOUND:\n" + "\n".join(search_images)) if search_images else "")
+            )
+        except Exception as e:
+            log.warning(f"auto web search failed: {e}")
+
     # prior turns
     turns_cursor = db.chat_messages.find({"session_id": session_id, "user_id": user["id"]}, {"_id": 0}).sort("created_at", 1)
     prior = await turns_cursor.to_list(40)
 
-    chat_obj = LlmChat(api_key=EMERGENT_KEY, session_id=session_id, system_message=sys_prompt).with_model("openai", "gpt-5.2")
+    chat_obj = LlmChat(api_key=EMERGENT_KEY, session_id=session_id, system_message=sys_prompt + search_block).with_model("openai", "gpt-5.2")
 
     if prior:
         recap = "\n\nRECENT CONVERSATION:\n" + "\n".join(
             f"[{t['role'].upper()}]: {t['content'][:400]}" for t in prior[-12:]
         )
-        chat_obj.system_message = sys_prompt + recap
+        chat_obj.system_message = sys_prompt + search_block + recap
 
     reply_text = ""
     try:
@@ -580,6 +618,15 @@ async def chat(body: ChatReq, user=Depends(get_user)):
     except Exception as e:
         log.exception("LLM failure")
         raise HTTPException(500, f"Wrench is jammed up: {e}")
+
+    # If web search found images and Wrench didn't include them in the reply, append them so they render
+    if search_images:
+        existing_imgs = set(re.findall(r"https?://[^\s<>\)\"]+?\.(?:png|jpe?g|gif|webp)(?:\?[^\s<>\)\"]*)?", reply_text, flags=re.I))
+        new_imgs = [u for u in search_images if u not in existing_imgs]
+        if new_imgs and not any(x in reply_text.lower() for x in ["diagram", "schematic", "pinout"]):
+            pass  # Wrench didn't talk about diagrams, skip
+        elif new_imgs:
+            reply_text = reply_text.rstrip() + "\n\nDIAGRAMS / PICS PULLED FROM THE WEB:\n" + "\n".join(new_imgs[:5])
 
     now = datetime.now(timezone.utc).isoformat()
     await db.chat_messages.insert_many([
@@ -681,6 +728,79 @@ async def del_session(session_id: str, user=Depends(get_user)):
     await db.chat_messages.delete_many({"session_id": session_id, "user_id": user["id"]})
     await db.chat_sessions.delete_one({"id": session_id, "user_id": user["id"]})
     return {"ok": True}
+
+
+# ============ Web search — Wrench can pull diagrams, pics, articles ============
+import httpx  # noqa: E402
+
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+
+class SearchReq(BaseModel):
+    query: str
+    mode: Literal["web", "diagram"] = "web"  # diagram biases the query toward images
+    vehicle_context: Optional[str] = ""  # e.g. "2014 Chevy Silverado 5.3"
+
+
+async def _openai_web_search(query: str, vehicle_context: str = "", diagram_mode: bool = False) -> Dict[str, Any]:
+    """Hit OpenAI Responses API with web_search_preview. Returns {answer, citations[], images[]}."""
+    if not OPENAI_API_KEY:
+        raise HTTPException(503, "Web search not configured (no OPENAI_API_KEY).")
+    full_query = query
+    if vehicle_context:
+        full_query = f"For a {vehicle_context}: {query}"
+    if diagram_mode:
+        full_query = (
+            f"Find wiring diagrams, schematics, pinout images, or part-location diagrams for: {full_query}. "
+            "Return any IMAGE URLs you find (must end in .jpg/.jpeg/.png/.gif/.webp) on their own lines so they render as images. "
+            "Then list the source page URLs."
+        )
+    async with httpx.AsyncClient(timeout=45) as client:
+        r = await client.post(
+            "https://api.openai.com/v1/responses",
+            headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"},
+            json={
+                "model": "gpt-5.2",
+                "tools": [{"type": "web_search_preview"}],
+                "input": full_query,
+            },
+        )
+    if r.status_code != 200:
+        raise HTTPException(502, f"Search failed: {r.text[:200]}")
+    data = r.json()
+    # Pull the assistant text + url citations
+    text = ""
+    citations = []
+    for item in data.get("output", []):
+        if item.get("type") == "message":
+            for c in item.get("content", []):
+                if c.get("type") == "output_text":
+                    text += c.get("text", "")
+                    for a in c.get("annotations", []) or []:
+                        if a.get("type") == "url_citation":
+                            citations.append({"url": a.get("url",""), "title": a.get("title",""), "start": a.get("start_index"), "end": a.get("end_index")})
+    # Extract image URLs from the text (anything ending in image extension)
+    image_urls = list({
+        m for m in re.findall(r"https?://[^\s<>\)\"]+?\.(?:png|jpe?g|gif|webp)(?:\?[^\s<>\)\"]*)?", text, flags=re.I)
+    })
+    return {"answer": text, "citations": citations, "image_urls": image_urls, "query": full_query}
+
+
+@api.post("/search/web")
+async def search_web(body: SearchReq, user=Depends(get_user)):
+    return await _openai_web_search(body.query, body.vehicle_context or "", diagram_mode=(body.mode == "diagram"))
+
+
+# Bearer-token gated for the partner's app to use too
+@api.post("/brain/search-web")
+async def brain_search_web(body: Dict[str, Any]):
+    auth = body.get("_bearer", "")  # alternate path if needed; keep simple
+    if os.environ.get("BRAIN_INGRESS_TOKEN") and auth != os.environ.get("BRAIN_INGRESS_TOKEN"):
+        raise HTTPException(401, "Invalid token")
+    return await _openai_web_search(
+        body.get("query",""),
+        body.get("vehicle_context",""),
+        diagram_mode=(body.get("mode") == "diagram"),
+    )
 
 
 # ============ Chat with image (vision) — Doc drops a snip/schematic ============
@@ -1344,6 +1464,9 @@ async def realtime_session(user=Depends(get_user)):
         "• When Doc asks 'what truck am I on', CALL get_active_vehicle.\n"
         "• When Doc adds info about the current truck ('add headers to mods', 'note it's on E85'), CALL update_active_vehicle.\n"
         "• When Doc asks about something in his library/books/manuals, CALL search_library FIRST before answering from memory.\n"
+        "• When Doc asks 'show me a diagram', 'send me a schematic', 'pull up a pinout', 'where is the X located', 'picture of', or any field-tech question that needs a VISUAL, CALL find_diagram with a tight query + vehicle context. The images render on screen automatically — read your answer out loud while Doc looks at them.\n"
+        "• When Doc asks about a recall, TSB, forum fix, current part price, latest news, or anything you don't have memorized cold and that needs FRESH web data, CALL web_search. Don't say 'I can't look that up' — you CAN, just call the tool.\n"
+        "• NEVER say you can't pull diagrams or look things up. You have find_diagram and web_search. Use them. Techs in the field need answers + visuals.\n"
         "• When Doc asks 'what's my login for [site]' or 'pull up the password for X' or 'log into X for me', CALL lookup_credentials with the site name.\n"
         "• When Doc describes a problem and asks 'has the shop seen this before' / 'have I fixed this before' / 'check my cases' / 'pull up similar repairs', CALL find_similar_cases with the symptom and vehicle. Then read the top match out loud (year/make/model, root cause, what we did).\n"
         "• ALWAYS confirm tool actions out loud after calling. Doc has greasy hands and can't always look at the screen.\n"
@@ -1488,6 +1611,32 @@ async def realtime_session(user=Depends(get_user)):
                             "table_label": {"type": "string", "description": "What kind of table (spark / VE / MAF / AFR)"},
                         },
                         "required": ["table_text", "instruction"],
+                    },
+                },
+                {
+                    "type": "function",
+                    "name": "find_diagram",
+                    "description": "Search the web for wiring diagrams, schematics, pinouts, or part-location images for a vehicle / part. Use whenever Doc says 'send me a diagram', 'show me the schematic', 'pull up a pinout', 'where is the X located', 'what does this part look like', or any time a tech in the field needs to see a picture/diagram to do the job. Tool returns image URLs that get displayed in chat AND source page links. Wrench should READ the answer to Doc out loud while the images render on screen.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string", "description": "What kind of diagram/schematic/image (e.g. 'AFM lifter location', 'C1 ECM connector pinout', 'cam phaser exploded view')"},
+                            "vehicle_context": {"type": "string", "description": "Year/make/model/engine if known (e.g. '2014 Chevy Silverado 5.3L L83')"},
+                        },
+                        "required": ["query"],
+                    },
+                },
+                {
+                    "type": "function",
+                    "name": "web_search",
+                    "description": "Search the live web for current information — recalls, TSBs, forum threads, parts pricing, specs. Use when Doc asks a question that needs CURRENT or specific info you don't have memorized cold (recalls, latest tunes, forum fixes, where to buy a specific part). NOT for general knowledge — only when fresh web data is actually needed. Returns an answer + source URLs.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string", "description": "What to search the web for"},
+                            "vehicle_context": {"type": "string", "description": "Vehicle context if relevant"},
+                        },
+                        "required": ["query"],
                     },
                 },
                 {
