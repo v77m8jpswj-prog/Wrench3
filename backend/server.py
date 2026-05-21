@@ -1911,10 +1911,13 @@ async def techs_delete(tech_id: str, owner=Depends(require_owner)):
 # ============ Brain router (RAG cases / cross-project integration) ============
 from brain import make_brain_router, embed_text as _brain_embed, case_text_blob as _brain_case_blob  # noqa: E402
 from team_chat import make_team_chat_router  # noqa: E402
+from email_mod import make_email_router  # noqa: E402
 brain_router = make_brain_router(db, get_user)
 api.include_router(brain_router)
 team_chat_router = make_team_chat_router(db, get_user, embed_text=_brain_embed, case_text_blob=_brain_case_blob)
 api.include_router(team_chat_router)
+email_router = make_email_router(db, get_user)
+api.include_router(email_router)
 
 
 # ============ Register router ============

@@ -16,6 +16,7 @@ import Cases from "@/pages/Cases";
 import TeamChat from "@/pages/TeamChat";
 import Letters from "@/pages/Letters";
 import Jobs from "@/pages/Jobs";
+import Email from "@/pages/Email";
 import Settings from "@/pages/Settings";
 import Shell from "@/components/Shell";
 
@@ -57,6 +58,7 @@ function App() {
                 <Route path="/team" element={<Protected><TeamChat /></Protected>} />
                 <Route path="/letters" element={<Protected><Letters /></Protected>} />
                 <Route path="/jobs" element={<Protected><Jobs /></Protected>} />
+                <Route path="/email" element={<Protected><Email /></Protected>} />
                 <Route path="/settings" element={<Protected><Settings /></Protected>} />
                 <Route path="*" element={<Navigate to="/" />} />
               </Routes>

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { NavLink, useNavigate, useLocation } from "react-router-dom";
-import { MessageSquare, Grid3x3, BookOpen, Truck, Activity, Brain, Settings as Cog, LogOut, Wrench, Menu, X, Phone, PhoneOff, KeyRound, FolderArchive, Users, Mail, MicOff, Mic, Briefcase } from "lucide-react";
+import { MessageSquare, Grid3x3, BookOpen, Truck, Activity, Brain, Settings as Cog, LogOut, Wrench, Menu, X, Phone, PhoneOff, KeyRound, FolderArchive, Users, Mail, MicOff, Mic, Briefcase, Inbox } from "lucide-react";
 import { clearToken } from "@/api";
 import { useApp } from "@/AppContext";
 
@@ -8,6 +8,7 @@ const NAV = [
   { to: "/call", icon: Phone, label: "CALL", id: "nav-call" },
   { to: "/", icon: MessageSquare, label: "CHAT", id: "nav-chat" },
   { to: "/jobs", icon: Briefcase, label: "JOBS", id: "nav-jobs" },
+  { to: "/email", icon: Inbox, label: "EMAIL", id: "nav-email" },
   { to: "/team", icon: Users, label: "TEAM", id: "nav-team" },
   { to: "/cases", icon: FolderArchive, label: "CASES", id: "nav-cases" },
   { to: "/letters", icon: Mail, label: "LETTERS", id: "nav-letters" },
