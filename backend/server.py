@@ -296,12 +296,55 @@ DEFAULT MODE: Be yourself. Gruff, a little smart-ass, but useful first, funny se
         )
     elif specialty == "tuner":
         base += (
-            "\n\nSPECIALTY MODE — TUNER (HP Tuners-heavy):\n"
-            "Lead with table coordinates, MAF/VE tuning math, spark advance vs knock retard, AFR targets,\n"
-            "torque management tables, transmission tuning (line pressure, shift firmness, TCC apply).\n"
-            "When Doc shares a log or table, immediately call out cells of concern with RPM/MAP/Load\n"
-            "coordinates and exact deltas in degrees/percent/grams/lb. Brand the advice in HP Tuners\n"
-            "VCM Editor terminology.\n"
+            "\n\n═══════════════════════════════════════════════════════════════════════════\n"
+            "BULLETPROOF TUNER MODE — HARD RULES THAT OVERRIDE EVERYTHING ELSE BELOW\n"
+            "═══════════════════════════════════════════════════════════════════════════\n"
+            "You are now Doc's tuning brain. Techs are leaning on you for HP Tuners advice that\n"
+            "directly affects expensive engines. Bad answers blow motors. Read carefully:\n"
+            "\n"
+            "PRE-FLIGHT — REQUIRED BEFORE ANY TABLE/CHART/VALUE GOES OUT THE DOOR:\n"
+            "Before you output ANY spark, fuel, MAF, VE, torque, transmission, or boost table —\n"
+            "or any specific cell value — you MUST confirm ALL FOUR of these in the conversation:\n"
+            "  1) OS / Calibration ID (or the visible HP Tuners VCM Editor screen name + version).\n"
+            "     If you can't see it, ASK: 'Which OS are you on? Snip the bottom-left of VCM Editor.'\n"
+            "  2) Engine config: cam (stock/aftermarket grind), heads, intake, headers, fuel pump.\n"
+            "     If unknown, ASK before answering.\n"
+            "  3) Fuel: 87 / 91 / 93 / E85 / race gas (octane). If unknown, ASK.\n"
+            "  4) Goal: street / strip / tow / dyno hunt / daily driver. If unknown, ASK.\n"
+            "If ANY of the four is missing — STOP and ASK. Do not output a single cell value.\n"
+            "Yes, even if the tech is pushing. ESPECIALLY if the tech is pushing.\n"
+            "\n"
+            "OUTPUT FORMAT — ONE PASTE, FULL CHART, NO PARTIAL DUMPS:\n"
+            "- When outputting a chart/table: ALL CELLS, every row, every column, ready for HP Tuners\n"
+            "  paste-special. No 'fill in the rest yourself'. No '+3 degrees from current'. No\n"
+            "  'increase by X%'. No row labels missing. No truncation.\n"
+            "- Tab-separated values inside a fenced code block so paste-special works.\n"
+            "- ONE table per response. Do not mix narrative cells with the dump.\n"
+            "- After the table, ONE LINE of context max: \"At [RPM x kPa], [cell] is [value] because [why].\"\n"
+            "- No 'verify before flashing' filler. The tech knows. Just deliver clean.\n"
+            "\n"
+            "HARD REFUSALS — DON'T BUDGE:\n"
+            "- If asked for a specific cell number you don't have COLD from Doc's library or the\n"
+            "  current chat context, REFUSE with: 'I don't have that one nailed. Snip me the current\n"
+            "  table and your target — I'll set it from what you've got.' Do not guess.\n"
+            "- If asked for an OS-specific parameter (e.g. E38 vs E40 cam phaser scalar) and OS is\n"
+            "  unconfirmed: REFUSE. Ask for the OS first.\n"
+            "- If asked to write a knock retard / spark / boost table without confirmed fuel octane:\n"
+            "  REFUSE. Fuel is non-negotiable.\n"
+            "- NEVER tell a tech to 'go find this menu' or 'navigate to' anything. They asked, you\n"
+            "  deliver. If you need a visual, demand the snip — don't send them hunting.\n"
+            "\n"
+            "TERMINOLOGY:\n"
+            "- HP Tuners VCM Editor terms only (SD, VE, MAF, AFR, COT, MAP, etc.).\n"
+            "- Coordinates always as (RPM × MAP) or (RPM × Load) — never one without the other.\n"
+            "- Deltas in: degrees for spark; % for fuel/VE/MAF; ms for injector PW; psi/bar for boost.\n"
+            "- AFR targets as commanded AFR (not lambda) unless the tech started in lambda.\n"
+            "\n"
+            "DYNO + DATALOG WORKFLOW:\n"
+            "- When Doc shares a CSV datalog, lead with knock retard cells of concern, then AFR\n"
+            "  deviation vs commanded, then torque-management interventions. Cite RPM ranges.\n"
+            "- When Doc shares before/after tunes (or screenshots), call out EXACT changed cells.\n"
+            "═══════════════════════════════════════════════════════════════════════════\n"
         )
     elif specialty == "service_writer":
         base += (
@@ -1274,6 +1317,90 @@ async def chart_edit_image(
         changed_cells=changed,
         table_text_out=grid_to_text(new_grid),
         notes=notes,
+    )
+
+
+# ============ Chart Diff — compare two HP Tuners screenshots ============
+class ChartDiffResp(BaseModel):
+    table_label: str = "table"
+    before_grid: List[List[str]] = []
+    after_grid: List[List[str]] = []
+    diff_grid: List[List[str]] = []  # cell-by-cell deltas as strings ("+2.5", "-1.0", "" if unchanged)
+    changed_cell_count: int = 0
+    summary: str = ""
+    warnings: List[str] = []
+
+
+@api.post("/chart/diff", response_model=ChartDiffResp)
+async def chart_diff(
+    before: UploadFile = File(...),
+    after: UploadFile = File(...),
+    table_label: str = Form("table"),
+    vehicle_id: Optional[str] = Form(None),
+    user=Depends(get_user),
+):
+    """Two HP Tuners screenshots in, cell-by-cell diff out. Catches a bad cell change BEFORE the dyno run."""
+    b_raw = await before.read()
+    a_raw = await after.read()
+    if not b_raw or not a_raw:
+        raise HTTPException(400, "Need both before and after images.")
+    b_b64 = base64.b64encode(b_raw).decode()
+    a_b64 = base64.b64encode(a_raw).decode()
+
+    vehicle = None
+    if vehicle_id:
+        vehicle = await db.vehicles.find_one({"id": vehicle_id, "user_id": user["id"]}, {"_id": 0})
+    v_ctx = ""
+    if vehicle:
+        v_ctx = f"Vehicle: {vehicle.get('year','')} {vehicle.get('make','')} {vehicle.get('model','')} {vehicle.get('engine','')} | Mods: {vehicle.get('mods','')}\n"
+
+    sys = (
+        "You are an expert HP Tuners VCM Editor tune auditor. The user has uploaded two screenshots of the SAME table: "
+        "image #1 = BEFORE, image #2 = AFTER. Your job: extract both grids cell-by-cell with extreme care, "
+        "compare them, and surface every cell that changed.\n\n"
+        "RETURN STRICT JSON, no markdown, with these keys:\n"
+        "  - before_grid: 2D array of strings (include header row + header col exactly as visible).\n"
+        "  - after_grid:  2D array of strings, SAME shape as before_grid.\n"
+        "  - diff_grid:   2D array of strings, SAME shape; each cell either '' (unchanged) or a signed delta like '+2.5' or '-1.0'. Header rows/cols always ''.\n"
+        "  - changed_cell_count: integer.\n"
+        "  - summary: 3-6 sentences, no fluff. What changed (areas of the table, e.g. 'high-load 3500-5500 RPM spark pulled 1-3°'), and most importantly: ANYTHING THAT LOOKS DANGEROUS or WRONG given typical street/strip GM/Ford/Mopar tuning practice (e.g. 'spark added in cells already near MBT', 'commanded AFR moved lean above 0.85g/cyl', 'TM TQ Mgmt raised >300 lb-ft beyond stock — verify the trans can hold it', 'cell delta exceeds 5° spark — typo?').\n"
+        "  - warnings: array of short strings, one per concern. Empty if everything looks clean.\n\n"
+        "ABSOLUTE RULES:\n"
+        "- BEFORE and AFTER must have IDENTICAL dimensions. If they don't (different table snipped), explain in summary and set changed_cell_count=0.\n"
+        "- Read decimal precision exactly. '20.00' vs '20.0' is unchanged — don't flag rounding.\n"
+        "- If a cell is unreadable in either image, output the original cell text in both grids and leave diff_grid empty for that cell.\n"
+        "- Surface SAFETY concerns aggressively. False positive on safety beats false negative.\n"
+    )
+    user_msg = f"{v_ctx}TABLE: {table_label}\nCompare the two attached images (#1=before, #2=after) and return the JSON."
+
+    chat_obj = LlmChat(api_key=EMERGENT_KEY, session_id=f"diff-{uuid.uuid4()}", system_message=sys).with_model("openai", "gpt-5.2")
+    try:
+        raw_resp = await chat_obj.send_message(UserMessage(
+            text=user_msg,
+            file_contents=[ImageContent(image_base64=b_b64), ImageContent(image_base64=a_b64)],
+        ))
+    except Exception as e:
+        log.exception("Chart diff failed")
+        raise HTTPException(500, f"Vision read failed: {e}")
+
+    m = re.search(r"\{.*\}", raw_resp, re.DOTALL)
+    if not m:
+        raise HTTPException(500, "Couldn't extract the diff. Try clearer screenshots — make sure the full table is visible in both.")
+    try:
+        parsed = json.loads(m.group(0))
+    except Exception as e:
+        raise HTTPException(500, f"Couldn't parse JSON: {e}")
+
+    def _norm(g):
+        return [[str(c) for c in row] for row in (g or [])]
+    return ChartDiffResp(
+        table_label=table_label,
+        before_grid=_norm(parsed.get("before_grid")),
+        after_grid=_norm(parsed.get("after_grid")),
+        diff_grid=_norm(parsed.get("diff_grid")),
+        changed_cell_count=int(parsed.get("changed_cell_count", 0) or 0),
+        summary=parsed.get("summary", "") or "",
+        warnings=[str(w) for w in (parsed.get("warnings") or [])],
     )
 
 

@@ -17,6 +17,7 @@ import TeamChat from "@/pages/TeamChat";
 import Letters from "@/pages/Letters";
 import Jobs from "@/pages/Jobs";
 import Email from "@/pages/Email";
+import DiffTune from "@/pages/DiffTune";
 import Settings from "@/pages/Settings";
 import Shell from "@/components/Shell";
 
@@ -59,6 +60,7 @@ function App() {
                 <Route path="/letters" element={<Protected><Letters /></Protected>} />
                 <Route path="/jobs" element={<Protected><Jobs /></Protected>} />
                 <Route path="/email" element={<Protected><Email /></Protected>} />
+                <Route path="/diff" element={<Protected><DiffTune /></Protected>} />
                 <Route path="/settings" element={<Protected><Settings /></Protected>} />
                 <Route path="*" element={<Navigate to="/" />} />
               </Routes>

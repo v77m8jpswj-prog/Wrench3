@@ -8,6 +8,8 @@ export default function Settings() {
   const [voice, setVoice] = useState("onyx");
   const [voiceEnabled, setVoiceEnabled] = useState(true);
   const [mode, setMode] = useState("direct");
+  const [specialty, setSpecialty] = useState("general");
+  const [skillLevel, setSkillLevel] = useState("master");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const [me, setMe] = useState(null);
@@ -19,12 +21,14 @@ export default function Settings() {
       setVoice(s.voice || "onyx");
       setVoiceEnabled(s.voice_enabled !== false);
       setMode(s.mode || "direct");
+      setSpecialty(s.specialty || "general");
+      setSkillLevel(s.skill_level || "master");
     });
   }, []);
 
   const save = async () => {
     setBusy(true);
-    await api.put("/settings", { voice, voice_enabled: voiceEnabled, mode });
+    await api.put("/settings", { voice, voice_enabled: voiceEnabled, mode, specialty, skill_level: skillLevel });
     setMsg("SETTINGS LOCKED IN");
     setBusy(false);
     setTimeout(()=>setMsg(""), 1500);
@@ -79,6 +83,42 @@ export default function Settings() {
           ))}
         </div>
         <div className="text-xs text-ink-3 mt-2">DIRECT = short answers. DREAM = walk through reasoning.</div>
+      </div>
+
+      <div className="panel p-4 mb-4">
+        <label className="label-shop">SPECIALTY MODE</label>
+        <div className="flex gap-2 flex-wrap">
+          {[
+            {k:"general", label:"GENERAL"},
+            {k:"tuner",   label:"TUNER (BULLETPROOF)"},
+            {k:"diesel",  label:"DIESEL"},
+            {k:"electrical", label:"ELECTRICAL"},
+            {k:"service_writer", label:"SERVICE WRITER"},
+          ].map(s => (
+            <button key={s.k} onClick={()=>setSpecialty(s.k)} className={`btn-ghost text-xs ${specialty===s.k?"!border-rust !text-rust":""}`} data-testid={`spec-${s.k}`}>
+              {s.label}
+            </button>
+          ))}
+        </div>
+        <div className="text-xs text-ink-3 mt-2">
+          {specialty==="tuner" && <span className="text-amber2">⛓ Tuner Mode forces pre-flight (OS / engine / fuel / goal) before any chart. Full-chart paste only. Hard refuses guesses.</span>}
+          {specialty==="diesel" && "Diesel-bias diagnostics (CP4/CP3, DPF, EGR, VGT, regen)."}
+          {specialty==="electrical" && "Circuit-first thinking (voltage drops, ground, CAN)."}
+          {specialty==="service_writer" && "Customer-facing language with parts/labor ballparks."}
+          {specialty==="general" && "Default mechanic — no specialty bias."}
+        </div>
+      </div>
+
+      <div className="panel p-4 mb-4">
+        <label className="label-shop">WHO'S ASKING (DEFAULT SKILL LEVEL)</label>
+        <div className="flex gap-2 flex-wrap">
+          {[{k:"master",label:"MASTER (DOC)"},{k:"journey",label:"JOURNEY (3-5YR)"},{k:"rookie",label:"ROOKIE (TRAINEE)"}].map(s => (
+            <button key={s.k} onClick={()=>setSkillLevel(s.k)} className={`btn-ghost text-xs ${skillLevel===s.k?"!border-rust !text-rust":""}`} data-testid={`skill-${s.k}`}>
+              {s.label}
+            </button>
+          ))}
+        </div>
+        <div className="text-xs text-ink-3 mt-2">Wrench changes tone + how much hand-holding he provides.</div>
       </div>
 
       <button data-testid="save-settings" onClick={save} disabled={busy} className="btn-rust flex items-center gap-2"><Save size={14}/>SAVE</button>
