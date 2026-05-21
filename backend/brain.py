@@ -107,6 +107,10 @@ class StatsResp(BaseModel):
     last_ingest_at: Optional[str] = None
     top_makes: List[str] = []
     brain_version: str = "0.1.0"
+    shop_name: Optional[str] = ""
+    capabilities: List[str] = []
+    specialties: List[str] = []
+    service_areas: List[str] = []
 
 
 class FeedbackReq(BaseModel):
@@ -352,6 +356,8 @@ def make_brain_router(db, get_user):
         ]
         top_makes_docs = await db.brain_cases.aggregate(pipeline).to_list(5)
         top_makes = [d["_id"] for d in top_makes_docs if d.get("_id")]
+        # Pull shop profile (capabilities/specialties) for the partner app
+        profile = await db.shop_profiles.find_one({"shop_id": shop_id}, {"_id": 0}) or {}
         return StatsResp(
             shop_id=shop_id,
             total_cases=total,
@@ -360,6 +366,10 @@ def make_brain_router(db, get_user):
             last_ingest_at=last_at,
             top_makes=top_makes,
             brain_version="0.1.0",
+            shop_name=profile.get("name", ""),
+            capabilities=profile.get("capabilities", []),
+            specialties=profile.get("specialties", []),
+            service_areas=profile.get("service_areas", []),
         )
 
     @router.post("/brain/feedback", response_model=FeedbackResp)
@@ -399,6 +409,158 @@ def make_brain_router(db, get_user):
             "returned": len(cases),
             "cases": cases,
         }
+
+    # ----- Team conversations (Partner Phase 2 employee dashboard) -----
+    @router.get("/brain/team-conversations")
+    async def brain_team_conversations(
+        shop_id: str = Query(...),
+        technician_id: Optional[str] = Query(None, description="Scope to threads visible to this tech. Omit to return all threads (manager view)."),
+        thread_key: Optional[str] = Query(None, description="If set, returns just this thread's messages. e.g. 'shop' or 'uid1|uid2'"),
+        message_limit: int = Query(50, ge=1, le=500),
+        thread_limit: int = Query(20, ge=1, le=100),
+        _t: str = Depends(get_brain_token),
+    ):
+        """Bearer-token gated endpoint for the partner app's employee dashboard.
+        Returns: shop's team chat threads + recent messages for each.
+        Multi-tenant: scoped by shop_id, optionally further scoped to a single technician's
+        visible threads (the #shop channel plus any DM thread that includes their user id)."""
+        # All techs in the shop (for thread naming + DM resolution)
+        techs = await db.users.find({"shop_id": shop_id}, {"_id": 0, "password": 0, "settings": 0}).to_list(500)
+        tech_by_id = {t["id"]: t for t in techs}
+
+        # Distinct thread keys present in the shop's team messages
+        all_thread_keys = await db.team_chat_messages.distinct("thread_key", {"shop_id": shop_id})
+
+        def thread_visible_to(tech_id: str, key: str) -> bool:
+            if key == "shop":
+                return True
+            return tech_id in key.split("|")
+
+        if thread_key:
+            keys = [thread_key]
+        elif technician_id:
+            keys = [k for k in all_thread_keys if thread_visible_to(technician_id, k)]
+        else:
+            keys = all_thread_keys
+
+        # Build threads payload
+        threads = []
+        for k in keys[:thread_limit]:
+            if k == "shop":
+                name = "#SHOP"
+                kind = "channel"
+                members = [t["id"] for t in techs]
+            else:
+                kind = "dm"
+                parts = k.split("|")
+                member_names = [tech_by_id.get(p, {}).get("name") or p for p in parts]
+                name = " ↔ ".join(member_names)
+                members = parts
+            cur = db.team_chat_messages.find(
+                {"shop_id": shop_id, "thread_key": k},
+                {"_id": 0, "shop_id": 0},
+            ).sort("created_at", -1).limit(message_limit)
+            msgs = await cur.to_list(message_limit)
+            msgs.reverse()  # chronological order for the partner UI
+            count = await db.team_chat_messages.count_documents({"shop_id": shop_id, "thread_key": k})
+            threads.append({
+                "thread_key": k,
+                "name": name,
+                "kind": kind,
+                "members": members,
+                "message_count": count,
+                "messages": msgs,
+            })
+        # Sort threads by most-recent activity (channel first when tied)
+        threads.sort(
+            key=lambda t: (t["messages"][-1]["created_at"] if t["messages"] else "", t["kind"] == "channel"),
+            reverse=True,
+        )
+        return {
+            "shop_id": shop_id,
+            "technician_id": technician_id,
+            "thread_count": len(threads),
+            "threads": threads,
+        }
+
+    # ----- Shop Profile (multi-tenant capabilities) -----
+    class ShopCapabilityList(BaseModel):
+        shop_id: Optional[str] = None
+        name: Optional[str] = ""
+        capabilities: List[str] = []  # ["AFM/DOD delete", "ECM/TCM tuning", ...]
+        specialties: List[str] = []   # ["GM 5.3 V8", "Ford Powerstroke 6.7", ...]
+        service_areas: List[str] = [] # ["Fort Smith AR", "NW Arkansas", ...]
+        hours: Optional[str] = ""
+        phone: Optional[str] = ""
+        address: Optional[str] = ""
+        notes: Optional[str] = ""
+
+    DEFAULT_PROFILE = {
+        "name": "Dr. Underhood",
+        "capabilities": [
+            "AFM / DOD delete tuning",
+            "HP Tuners ECM/TCM flashing",
+            "Datalog diagnostics",
+            "Diesel performance tuning",
+            "General automotive repair",
+        ],
+        "specialties": [],
+        "service_areas": [],
+        "hours": "",
+        "phone": "",
+        "address": "",
+        "notes": "",
+    }
+
+    async def _get_or_seed_profile(sid: str) -> Dict[str, Any]:
+        doc = await db.shop_profiles.find_one({"shop_id": sid}, {"_id": 0})
+        if doc:
+            return doc
+        seed = {
+            "shop_id": sid,
+            **DEFAULT_PROFILE,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await db.shop_profiles.insert_one(dict(seed))
+        seed.pop("_id", None)
+        return seed
+
+    @router.get("/shop/profile")
+    async def get_shop_profile(user=Depends(get_user)):
+        sid = user.get("shop_id") or DEFAULT_SHOP_ID
+        return await _get_or_seed_profile(sid)
+
+    @router.put("/shop/profile")
+    async def put_shop_profile(body: ShopCapabilityList, user=Depends(get_user)):
+        if (user.get("role") or "owner") != "owner":
+            raise HTTPException(403, "Only the shop owner can edit the shop profile.")
+        sid = user.get("shop_id") or DEFAULT_SHOP_ID
+        existing = await db.shop_profiles.find_one({"shop_id": sid}, {"_id": 0}) or {}
+        merged = {
+            **existing,
+            "shop_id": sid,
+            "name": body.name if body.name is not None else existing.get("name", ""),
+            "capabilities": [c.strip() for c in (body.capabilities or []) if c and c.strip()][:50],
+            "specialties": [c.strip() for c in (body.specialties or []) if c and c.strip()][:50],
+            "service_areas": [c.strip() for c in (body.service_areas or []) if c and c.strip()][:50],
+            "hours": body.hours or "",
+            "phone": body.phone or "",
+            "address": body.address or "",
+            "notes": body.notes or "",
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if not existing.get("created_at"):
+            merged["created_at"] = merged["updated_at"]
+        await db.shop_profiles.update_one({"shop_id": sid}, {"$set": merged}, upsert=True)
+        merged.pop("_id", None)
+        return merged
+
+    @router.get("/brain/shop-profile")
+    async def brain_shop_profile(shop_id: str = Query(...), _t: str = Depends(get_brain_token)):
+        """Partner-facing read of a shop's capabilities/specialties so their LLM
+        can ground responses (e.g. \"Yes, this shop does AFM delete tuning\")."""
+        return await _get_or_seed_profile(shop_id)
 
     # ----- Internal Cases endpoints (user JWT) -----
     @router.get("/cases")
@@ -481,10 +643,20 @@ def make_brain_router(db, get_user):
         r = await db.brain_cases.delete_one({"id": case_id, "shop_id": shop_id})
         return {"deleted": r.deleted_count > 0}
 
+    class CloseToCaseReq(BaseModel):
+        outcome: Literal["FIXED", "PARTIAL", "NOT_FIXED"] = "FIXED"
+        root_cause: Optional[str] = ""
+        repair_summary: Optional[str] = ""
+        parts: Optional[List[str]] = []
+        close_session: bool = True  # Also flip the chat session to status=closed
+
     @router.post("/cases/from-chat/{session_id}")
-    async def case_from_chat(session_id: str, user=Depends(get_user)):
-        """Convert a chat session into a draft case (Doc fills in root cause + repair after)."""
+    async def case_from_chat(session_id: str, body: Optional[CloseToCaseReq] = None, user=Depends(get_user)):
+        """Convert a chat session into a brain case (used when Doc hits CLOSE on a job).
+        Body is optional — if omitted, a draft case is created (legacy behavior).
+        If body.close_session is true, the chat session is also moved to status='closed'."""
         shop_id = user.get("shop_id") or DEFAULT_SHOP_ID
+        body = body or CloseToCaseReq()
         msgs = await db.chat_messages.find({"session_id": session_id, "user_id": user["id"]}, {"_id": 0}).sort("created_at", 1).to_list(100)
         if not msgs:
             raise HTTPException(404, "Chat session not found")
@@ -495,9 +667,19 @@ def make_brain_router(db, get_user):
         # Concat the assistant's last reply as the proposed root cause / repair starting point
         asst_msgs = [m for m in msgs if m.get("role") == "assistant"]
         last_reply = asst_msgs[-1]["content"] if asst_msgs else ""
-        # Try to find the linked vehicle in chat_sessions
+        # Pull the linked vehicle (if Doc tagged it on the session)
         vehicle = {}
-        # Build draft case
+        if sess.get("vehicle_id"):
+            v = await db.vehicles.find_one({"id": sess["vehicle_id"], "user_id": user["id"]}, {"_id": 0}) or {}
+            if v:
+                vehicle = {
+                    "year": str(v.get("year") or ""),
+                    "make": v.get("make") or "",
+                    "model": v.get("model") or "",
+                    "engine": v.get("engine_summary") or v.get("engine") or "",
+                    "vin": v.get("vin") or "",
+                }
+        # Build the case
         case_id = str(uuid.uuid4())
         doc = {
             "id": case_id,
@@ -505,22 +687,29 @@ def make_brain_router(db, get_user):
             "vehicle": vehicle,
             "symptom": symptom[:1000],
             "dtc_codes": [],
-            "root_cause": "",
-            "repair_summary": "",
-            "parts": [],
+            "root_cause": (body.root_cause or "")[:2000],
+            "repair_summary": (body.repair_summary or "")[:4000],
+            "parts": body.parts or [],
             "technician_name": user.get("name", ""),
             "technician_id": user.get("id", ""),
-            "outcome": "FIXED",
+            "outcome": body.outcome,
             "labor_hours": None,
             "photos_base64": [],
-            "confidence_note": f"Drafted from chat session {session_id[:8]}. Wrench's last reply:\n\n{last_reply[:800]}",
+            "confidence_note": f"Closed from chat session {session_id[:8]} (\"{sess.get('title') or 'untitled'}\"). Wrench's last reply:\n\n{last_reply[:800]}",
             "created_at": datetime.now(timezone.utc).isoformat(),
-            "source": "chat_draft",
+            "source": "chat_close",
             "linked_chat_session_id": session_id,
             "created_by_user_id": user.get("id"),
         }
         doc["embedding"] = await embed_text(case_text_blob(doc))
         await db.brain_cases.insert_one(doc)
+        # Flip the chat session to closed and link the case
+        if body.close_session:
+            await db.chat_sessions.update_one(
+                {"id": session_id, "user_id": user["id"]},
+                {"$set": {"status": "closed", "closed_at": doc["created_at"],
+                          "linked_brain_case_id": case_id, "close_outcome": body.outcome}},
+            )
         doc.pop("embedding", None)
         doc.pop("_id", None)
         return doc

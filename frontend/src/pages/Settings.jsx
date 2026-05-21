@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Play, Save, UserPlus, Trash2, Shield } from "lucide-react";
+import { Play, Save, UserPlus, Trash2, Shield, Wrench, Plus } from "lucide-react";
 import api, { API, getToken } from "@/api";
 
 const VOICES = ["onyx","ash","echo","fable","alloy","nova","sage","coral","shimmer"];
@@ -84,7 +84,115 @@ export default function Settings() {
       <button data-testid="save-settings" onClick={save} disabled={busy} className="btn-rust flex items-center gap-2"><Save size={14}/>SAVE</button>
       {msg && <div className="mt-3 text-ok text-xs uppercase tracking-widest">{msg}</div>}
 
+      {me?.role === "owner" && <ShopProfileEditor />}
       {me?.role === "owner" && <TechManager />}
+    </div>
+  );
+}
+
+function ShopProfileEditor() {
+  const [profile, setProfile] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    api.get("/shop/profile").then(r => setProfile(r.data)).catch(()=>{});
+  }, []);
+
+  if (!profile) return null;
+
+  const update = (k, v) => setProfile(p => ({ ...p, [k]: v }));
+  const updateListAt = (k, i, v) => setProfile(p => ({ ...p, [k]: p[k].map((x, idx) => idx === i ? v : x) }));
+  const addItem = (k) => setProfile(p => ({ ...p, [k]: [...(p[k] || []), ""] }));
+  const removeItem = (k, i) => setProfile(p => ({ ...p, [k]: p[k].filter((_, idx) => idx !== i) }));
+
+  const save = async () => {
+    setBusy(true); setErr(""); setMsg("");
+    try {
+      const r = await api.put("/shop/profile", {
+        name: profile.name,
+        capabilities: profile.capabilities || [],
+        specialties: profile.specialties || [],
+        service_areas: profile.service_areas || [],
+        hours: profile.hours || "",
+        phone: profile.phone || "",
+        address: profile.address || "",
+        notes: profile.notes || "",
+      });
+      setProfile(r.data);
+      setMsg("SHOP PROFILE SAVED");
+      setTimeout(() => setMsg(""), 1800);
+    } catch (e) {
+      setErr(e?.response?.data?.detail || "Save failed");
+    } finally { setBusy(false); }
+  };
+
+  const ListEditor = ({ field, label, placeholder }) => (
+    <div className="mb-3">
+      <label className="label-shop">{label}</label>
+      <div className="space-y-1">
+        {(profile[field] || []).map((val, i) => (
+          <div key={i} className="flex gap-1">
+            <input
+              data-testid={`profile-${field}-${i}`}
+              className="input-shop flex-1"
+              placeholder={placeholder}
+              value={val}
+              onChange={e => updateListAt(field, i, e.target.value)}
+            />
+            <button onClick={() => removeItem(field, i)} className="btn-ghost px-2" data-testid={`profile-${field}-remove-${i}`}>
+              <Trash2 size={12}/>
+            </button>
+          </div>
+        ))}
+        <button onClick={() => addItem(field)} className="btn-ghost text-xs flex items-center gap-1 mt-1" data-testid={`profile-${field}-add`}>
+          <Plus size={12}/>ADD
+        </button>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="panel p-4 mt-6" data-testid="shop-profile-editor">
+      <div className="flex items-center justify-between mb-3">
+        <label className="label-shop !mb-0 flex items-center gap-2"><Wrench size={14} className="text-rust"/>SHOP PROFILE</label>
+      </div>
+      <p className="text-[11px] text-ink-3 uppercase tracking-widest mb-3">
+        What this shop does. The brain shares this with the customer-facing app so it can tell people exactly what services you offer.
+      </p>
+
+      <div className="mb-3">
+        <label className="label-shop">SHOP NAME</label>
+        <input data-testid="profile-name" className="input-shop w-full" value={profile.name || ""} onChange={e => update("name", e.target.value)} />
+      </div>
+
+      <ListEditor field="capabilities" label="CAPABILITIES (WHAT YOU CAN DO)" placeholder="e.g. AFM/DOD delete tuning" />
+      <ListEditor field="specialties" label="SPECIALTIES (WHAT YOU'RE KNOWN FOR)" placeholder="e.g. GM 5.3 V8, Duramax diesels" />
+      <ListEditor field="service_areas" label="SERVICE AREAS" placeholder="e.g. Fort Smith AR" />
+
+      <div className="mb-3">
+        <label className="label-shop">PHONE</label>
+        <input data-testid="profile-phone" className="input-shop w-full" value={profile.phone || ""} onChange={e => update("phone", e.target.value)} />
+      </div>
+      <div className="mb-3">
+        <label className="label-shop">ADDRESS</label>
+        <input data-testid="profile-address" className="input-shop w-full" value={profile.address || ""} onChange={e => update("address", e.target.value)} />
+      </div>
+      <div className="mb-3">
+        <label className="label-shop">HOURS</label>
+        <input data-testid="profile-hours" className="input-shop w-full" value={profile.hours || ""} onChange={e => update("hours", e.target.value)} placeholder="e.g. Mon-Fri 8-5"/>
+      </div>
+      <div className="mb-3">
+        <label className="label-shop">SHOP NOTES (FOR THE BRAIN)</label>
+        <textarea data-testid="profile-notes" className="input-shop w-full min-h-[60px]" value={profile.notes || ""} onChange={e => update("notes", e.target.value)} placeholder="Anything else the partner app should know..."/>
+      </div>
+
+      {err && <div className="text-danger text-xs mb-2">{err}</div>}
+      <button data-testid="save-shop-profile" onClick={save} disabled={busy} className="btn-rust flex items-center gap-2 disabled:opacity-50">
+        <Save size={14}/>{busy ? "SAVING..." : "SAVE SHOP PROFILE"}
+      </button>
+      {msg && <span className="ml-3 text-ok text-xs uppercase tracking-widest">{msg}</span>}
     </div>
   );
 }

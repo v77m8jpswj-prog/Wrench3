@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Briefcase, Search, Pin, PinOff, CheckCircle2, RotateCcw, Trash2, Truck, Clock, MessageSquare } from "lucide-react";
+import { Briefcase, Search, Pin, PinOff, CheckCircle2, RotateCcw, Trash2, Truck, Clock, MessageSquare, Brain, X } from "lucide-react";
 import api from "@/api";
 import { useApp } from "@/AppContext";
 
@@ -28,6 +28,7 @@ export default function Jobs() {
   const [filter, setFilter] = useState("open"); // open | all | closed | pinned
   const [q, setQ] = useState("");
   const [vehicleMap, setVehicleMap] = useState({});
+  const [closing, setClosing] = useState(null); // session being closed (modal state)
 
   const refresh = async () => {
     setLoading(true);
@@ -72,7 +73,8 @@ export default function Jobs() {
     nav(`/?resume=${encodeURIComponent(s.id)}`);
   };
   const togglePin = async (s) => { await api.patch(`/chat/sessions/${s.id}`, { pinned: !s.pinned }); refresh(); };
-  const close = async (s) => { await api.patch(`/chat/sessions/${s.id}`, { status: "closed" }); refresh(); };
+  const close = (s) => setClosing(s); // open the close-to-brain modal
+  const closeSilently = async (s) => { await api.patch(`/chat/sessions/${s.id}`, { status: "closed" }); refresh(); };
   const reopen = async (s) => { await api.patch(`/chat/sessions/${s.id}`, { status: "open" }); refresh(); };
   const del = async (s) => {
     if (!window.confirm("Delete this job? Can't be undone.")) return;
@@ -176,6 +178,146 @@ export default function Jobs() {
           })}
         </div>
       )}
+      {closing && (
+        <CloseToBrainModal
+          session={closing}
+          vehicle={vehicleMap[closing.vehicle_id]}
+          onCancel={() => setClosing(null)}
+          onJustClose={async () => { await closeSilently(closing); setClosing(null); }}
+          onSaved={() => { setClosing(null); refresh(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+function CloseToBrainModal({ session, vehicle, onCancel, onJustClose, onSaved }) {
+  const [outcome, setOutcome] = useState("FIXED");
+  const [rootCause, setRootCause] = useState("");
+  const [repair, setRepair] = useState("");
+  const [partsStr, setPartsStr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const veh = vehicle ? [vehicle.year, vehicle.make, vehicle.model].filter(Boolean).join(" ") : "";
+
+  const saveToBrain = async () => {
+    setBusy(true); setErr("");
+    try {
+      const parts = partsStr.split(/[,\n]/).map(p => p.trim()).filter(Boolean);
+      await api.post(`/cases/from-chat/${session.id}`, {
+        outcome,
+        root_cause: rootCause,
+        repair_summary: repair,
+        parts,
+        close_session: true,
+      });
+      onSaved();
+    } catch (e) {
+      setErr(e?.response?.data?.detail || "Couldn't save to brain.");
+    } finally { setBusy(false); }
+  };
+
+  const outcomeBtn = (val, label, tone) => (
+    <button
+      key={val}
+      type="button"
+      data-testid={`outcome-${val.toLowerCase()}`}
+      onClick={() => setOutcome(val)}
+      className={`flex-1 px-3 py-3 border-2 text-xs uppercase tracking-widest font-bold transition ${
+        outcome === val
+          ? tone
+          : "border-line text-ink-2 hover:border-line-2"
+      }`}
+    >
+      {label}
+    </button>
+  );
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/70 flex items-end md:items-center justify-center p-0 md:p-4" data-testid="close-to-brain-modal" onClick={onCancel}>
+      <div className="bg-bg-1 border-t-2 md:border-2 border-rust w-full md:max-w-lg max-h-[92vh] overflow-y-auto" onClick={e=>e.stopPropagation()}>
+        <div className="p-4 border-b border-line flex items-center justify-between sticky top-0 bg-bg-1">
+          <div>
+            <h2 className="heading text-lg flex items-center gap-2"><Brain size={18} className="text-rust"/>CLOSE JOB → BRAIN</h2>
+            <div className="text-[11px] text-ink-3 uppercase tracking-widest mt-1 line-clamp-1">{session.title || "(untitled job)"}</div>
+          </div>
+          <button onClick={onCancel} className="text-ink-3 hover:text-ink p-1" data-testid="close-modal-x"><X size={18}/></button>
+        </div>
+
+        <div className="p-4 space-y-4">
+          {veh && (
+            <div className="text-amber2 text-xs uppercase tracking-widest font-bold flex items-center gap-1"><Truck size={12}/>{veh}</div>
+          )}
+
+          <div>
+            <div className="label-shop">DID IT FIX THE TRUCK?</div>
+            <div className="flex gap-2">
+              {outcomeBtn("FIXED", "FIXED", "border-ok text-ok bg-ok/10")}
+              {outcomeBtn("PARTIAL", "PARTIAL", "border-amber2 text-amber2 bg-amber2/10")}
+              {outcomeBtn("NOT_FIXED", "NOT FIXED", "border-danger text-danger bg-danger/10")}
+            </div>
+          </div>
+
+          <div>
+            <label className="label-shop">ROOT CAUSE (one-liner — what was wrong?)</label>
+            <input
+              data-testid="root-cause-input"
+              className="input-shop w-full"
+              placeholder="e.g. Failed cam phaser solenoid, bank 1"
+              value={rootCause}
+              onChange={e=>setRootCause(e.target.value)}
+            />
+          </div>
+
+          <div>
+            <label className="label-shop">WHAT YOU DID (repair summary — optional)</label>
+            <textarea
+              data-testid="repair-input"
+              className="input-shop w-full min-h-[70px]"
+              placeholder="e.g. Replaced both bank 1 VVT solenoids, cleared codes, road tested 20 mi — no return."
+              value={repair}
+              onChange={e=>setRepair(e.target.value)}
+            />
+          </div>
+
+          <div>
+            <label className="label-shop">PARTS USED (comma-separated — optional)</label>
+            <input
+              data-testid="parts-input"
+              className="input-shop w-full"
+              placeholder="e.g. ACDelco 12655420, Mobil1 5W-30"
+              value={partsStr}
+              onChange={e=>setPartsStr(e.target.value)}
+            />
+          </div>
+
+          {err && <div className="text-danger text-xs">{err}</div>}
+
+          <div className="border-t border-line pt-3 text-[11px] text-ink-3 uppercase tracking-widest">
+            The brain will remember this so Wrench can find it next time someone asks.
+          </div>
+        </div>
+
+        <div className="p-4 border-t border-line bg-bg-2 sticky bottom-0 flex flex-col gap-2" style={{paddingBottom: "calc(1rem + env(safe-area-inset-bottom))"}}>
+          <button
+            data-testid="save-to-brain-btn"
+            onClick={saveToBrain}
+            disabled={busy}
+            className="btn-rust w-full py-3 text-sm flex items-center justify-center gap-2 disabled:opacity-50"
+          >
+            <Brain size={14}/>{busy ? "SAVING..." : "CLOSE + SAVE TO BRAIN"}
+          </button>
+          <button
+            data-testid="close-without-saving-btn"
+            onClick={onJustClose}
+            disabled={busy}
+            className="btn-ghost w-full py-3 text-xs"
+          >
+            JUST CLOSE (DON'T SAVE TO BRAIN)
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
