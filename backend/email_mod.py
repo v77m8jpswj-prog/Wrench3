@@ -38,6 +38,7 @@ from pydantic import BaseModel, EmailStr
 
 log = logging.getLogger("datawrench.email")
 
+BRAIN_TOKEN = os.environ.get("BRAIN_INGRESS_TOKEN", "")
 MS_AUTHORITY = os.environ.get("MS_AUTHORITY", "https://login.microsoftonline.com/common")
 MS_CLIENT_ID = os.environ.get("MS_CLIENT_ID", "")
 MS_CLIENT_SECRET = os.environ.get("MS_CLIENT_SECRET", "")
@@ -425,4 +426,195 @@ def make_email_router(db, get_user):
             "draft_html": reply_html,
         }
 
+    # ----- Drafts staged by the partner brain (Foreman Mail bridge) -----
+    @router.get("/email/drafts")
+    async def list_drafts(user=Depends(get_user)):
+        """List pending drafts the partner brain has staged for this user/shop."""
+        sid = user.get("shop_id") or DEFAULT_SHOP_ID
+        cur = db.email_drafts.find(
+            {"user_id": user["id"], "shop_id": sid, "status": "pending_review"},
+            {"_id": 0},
+        ).sort("created_at", -1).limit(50)
+        return await cur.to_list(50)
+
+    class DraftEditReq(BaseModel):
+        subject: Optional[str] = None
+        body_html: Optional[str] = None
+
+    @router.put("/email/drafts/{draft_id}")
+    async def edit_draft(draft_id: str, body: DraftEditReq, user=Depends(get_user)):
+        patch: Dict[str, Any] = {"updated_at": _now().isoformat()}
+        if body.subject is not None:
+            patch["subject"] = body.subject
+        if body.body_html is not None:
+            patch["body_html"] = body.body_html[:50000]
+        r = await db.email_drafts.update_one(
+            {"id": draft_id, "user_id": user["id"], "status": "pending_review"},
+            {"$set": patch},
+        )
+        if r.matched_count == 0:
+            raise HTTPException(404, "Draft not found or already actioned.")
+        return {"ok": True}
+
+    @router.post("/email/drafts/{draft_id}/send")
+    async def send_draft(draft_id: str, user=Depends(get_user)):
+        """Doc tapped SEND. Fire the reply via Graph, then mark the draft sent."""
+        draft = await db.email_drafts.find_one({"id": draft_id, "user_id": user["id"], "status": "pending_review"})
+        if not draft:
+            raise HTTPException(404, "Draft not found.")
+        acct = await _get_account(user)
+        payload = {"message": {"body": {"contentType": "HTML", "content": draft["body_html"]}}}
+        await _graph("POST", f"/me/messages/{draft['message_id']}/reply", acct["access_token"], json=payload)
+        await db.email_drafts.update_one(
+            {"id": draft_id},
+            {"$set": {"status": "sent", "sent_at": _now().isoformat()}},
+        )
+        return {"ok": True, "sent": True}
+
+    @router.post("/email/drafts/{draft_id}/discard")
+    async def discard_draft(draft_id: str, user=Depends(get_user)):
+        r = await db.email_drafts.update_one(
+            {"id": draft_id, "user_id": user["id"], "status": "pending_review"},
+            {"$set": {"status": "discarded", "discarded_at": _now().isoformat()}},
+        )
+        if r.matched_count == 0:
+            raise HTTPException(404, "Draft not found.")
+        return {"ok": True, "discarded": True}
+
     return router
+
+
+# ============ Brain Bridge Router (bearer-token, partner-facing "Foreman Mail") ============
+def make_email_brain_router(db):
+    """Mounts /api/brain/inbox/* — read-only firehose + draft-staging for OG
+    (Dr. Underhood Live Assist). Strict separation of duties:
+      WE drafts (here, via POST /draft) → DOC reviews (in his Email UI)
+      → DOC sends (frontend hits the existing user-JWT /email/.../reply or /send).
+    Nothing auto-sends. Doc's tap is the trigger."""
+    from fastapi import Header
+    bbrain = APIRouter()
+
+    def _check_brain_token(authorization: Optional[str] = Header(None)):
+        if not BRAIN_TOKEN:
+            raise HTTPException(503, "Brain not configured.")
+        if not authorization or not authorization.startswith("Bearer ") or authorization[7:] != BRAIN_TOKEN:
+            raise HTTPException(401, "Invalid brain bearer token.")
+        return True
+
+    async def _acct_for_shop(shop_id: str) -> Dict[str, Any]:
+        acct = await db.email_accounts.find_one({"shop_id": shop_id, "provider": "microsoft"})
+        if not acct:
+            raise HTTPException(404, f"No mailbox connected for shop_id={shop_id}.")
+        # Refresh if needed (re-using the same logic)
+        if not MS_CLIENT_ID or not MS_CLIENT_SECRET:
+            raise HTTPException(503, "Email integration not configured (MS_CLIENT_ID/SECRET missing).")
+        exp = acct.get("expires_at")
+        if isinstance(exp, str):
+            try:
+                exp = datetime.fromisoformat(exp.replace("Z", "+00:00"))
+            except Exception:
+                exp = None
+        if exp and _now() + timedelta(minutes=5) < exp:
+            return acct
+        rt = acct.get("refresh_token")
+        if not rt:
+            raise HTTPException(401, "Mailbox needs reconnect (no refresh token).")
+        async with httpx.AsyncClient(timeout=30) as c:
+            r = await c.post(f"{MS_AUTHORITY}/oauth2/v2.0/token", data={
+                "client_id": MS_CLIENT_ID, "client_secret": MS_CLIENT_SECRET,
+                "grant_type": "refresh_token", "refresh_token": rt, "scope": MS_SCOPES,
+            })
+        if r.status_code != 200:
+            raise HTTPException(401, "Microsoft refresh rejected. Reconnect mailbox.")
+        tk = r.json()
+        new_exp = _now() + timedelta(seconds=int(tk.get("expires_in", 3600)))
+        patch = {"access_token": tk["access_token"], "refresh_token": tk.get("refresh_token", rt),
+                 "expires_at": new_exp.isoformat(), "scope": tk.get("scope", acct.get("scope", MS_SCOPES)),
+                 "updated_at": _now().isoformat()}
+        await db.email_accounts.update_one({"_id": acct["_id"]}, {"$set": patch})
+        acct.update(patch)
+        return acct
+
+    @bbrain.get("/brain/inbox/recent")
+    async def inbox_recent(
+        shop_id: str = Query(...),
+        limit: int = Query(20, ge=1, le=100),
+        unread_only: bool = Query(False),
+        _t: bool = Depends(_check_brain_token),
+    ):
+        """Firehose of recent inbox messages for the partner's classifier.
+        Lightweight payload (no full body) — just enough to classify."""
+        acct = await _acct_for_shop(shop_id)
+        params = {
+            "$top": limit,
+            "$orderby": "receivedDateTime desc",
+            "$select": "id,subject,from,toRecipients,receivedDateTime,isRead,bodyPreview,hasAttachments,importance,conversationId",
+        }
+        if unread_only:
+            params["$filter"] = "isRead eq false"
+        headers = {"Authorization": f"Bearer {acct['access_token']}"}
+        async with httpx.AsyncClient(timeout=45) as c:
+            r = await c.get(f"{GRAPH}/me/mailFolders/inbox/messages", headers=headers, params=params)
+        if r.status_code != 200:
+            raise HTTPException(r.status_code, f"Outlook said: {r.text[:200]}")
+        data = r.json()
+        return {
+            "shop_id": shop_id,
+            "account_email": acct.get("account_email", ""),
+            "count": len(data.get("value", [])),
+            "messages": data.get("value", []),
+        }
+
+    @bbrain.get("/brain/inbox/message/{message_id}")
+    async def inbox_message(
+        message_id: str,
+        shop_id: str = Query(...),
+        _t: bool = Depends(_check_brain_token),
+    ):
+        """Full body of one message (so the partner can RAG / classify the whole thing)."""
+        acct = await _acct_for_shop(shop_id)
+        headers = {"Authorization": f"Bearer {acct['access_token']}"}
+        async with httpx.AsyncClient(timeout=30) as c:
+            r = await c.get(f"{GRAPH}/me/messages/{message_id}", headers=headers,
+                            params={"$select": "id,subject,from,toRecipients,ccRecipients,receivedDateTime,isRead,body,conversationId"})
+        if r.status_code != 200:
+            raise HTTPException(r.status_code, f"Outlook said: {r.text[:200]}")
+        return r.json()
+
+    class BrainDraftReq(BaseModel):
+        shop_id: str
+        message_id: str  # the inbound message this draft is replying to
+        subject: str = ""  # optional override; default is Re: original
+        body_html: str
+        classification: Optional[str] = ""  # "estimate" | "status" | "complaint" | "spam" | "other"
+        confidence: Optional[float] = None
+        notes_for_doc: Optional[str] = ""  # one-liner the partner wants Doc to see
+
+    @bbrain.post("/brain/inbox/draft")
+    async def inbox_draft(body: BrainDraftReq, _t: bool = Depends(_check_brain_token)):
+        """Partner posts a draft reply. We persist it for Doc's review.
+        Doc sees it in his Email page → REVIEW → tap SEND (which fires the existing
+        user-JWT reply endpoint) or DISCARD. Never auto-sent."""
+        # Validate the inbound message exists (gives us nice error early)
+        acct = await _acct_for_shop(body.shop_id)
+        import uuid as _uuid
+        draft_id = _uuid.uuid4().hex
+        doc = {
+            "id": draft_id,
+            "shop_id": body.shop_id,
+            "user_id": acct["user_id"],  # the owner of the mailbox
+            "message_id": body.message_id,
+            "subject": body.subject or "",
+            "body_html": body.body_html[:50000],
+            "classification": (body.classification or "").lower(),
+            "confidence": body.confidence,
+            "notes_for_doc": (body.notes_for_doc or "")[:500],
+            "status": "pending_review",
+            "source": "brain_partner",
+            "created_at": _now().isoformat(),
+        }
+        await db.email_drafts.insert_one(doc)
+        doc.pop("_id", None)
+        return {"draft_id": draft_id, "status": "pending_review", "doc_will_review_in": acct.get("account_email", "")}
+
+    return bbrain

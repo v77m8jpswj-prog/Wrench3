@@ -53,6 +53,7 @@ class AskReq(BaseModel):
     dtc_codes: Optional[List[str]] = []
     image_base64: Optional[str] = None
     k: int = 5
+    case_ids_already_seen: Optional[List[str]] = []  # Partner sends ids from prior /ask calls in same diag session; we suppress them so re-diagnose surfaces FRESH matches.
 
 
 class CaseMatch(BaseModel):
@@ -288,8 +289,13 @@ def make_brain_router(db, get_user):
         # Pull all cases for this shop. For >10k cases swap to Atlas Vector Search.
         cur = db.brain_cases.find({"shop_id": shop_id}, {"_id": 0})
         all_cases = await cur.to_list(20000)
+        # Filter out cases the partner has already surfaced this diag session
+        seen = set((body.case_ids_already_seen or [])[:50])
         scored = []
         for c in all_cases:
+            cid = c.get("id") or c.get("case_id") or ""
+            if cid and cid in seen:
+                continue
             emb = c.get("embedding") or []
             sim = cosine(q_emb, emb) if q_emb and emb else 0.0
             scored.append((sim, c))

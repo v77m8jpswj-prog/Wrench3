@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Mail, Inbox, Send, Search, Archive, Reply, Bot, RefreshCw, X, AlertTriangle, CheckCircle2, Plus, Trash2 } from "lucide-react";
+import { Mail, Inbox, Send, Search, Archive, Reply, Bot, RefreshCw, X, AlertTriangle, CheckCircle2, Plus, Trash2, Edit3 } from "lucide-react";
 import api from "@/api";
 
 function timeAgo(iso) {
@@ -27,6 +27,8 @@ export default function Email() {
   const [composing, setComposing] = useState(false);
   const [replying, setReplying] = useState(false);
   const [flash, setFlash] = useState("");
+  const [drafts, setDrafts] = useState([]);
+  const [reviewingDraft, setReviewingDraft] = useState(null);
 
   const refreshStatus = async () => {
     try { const r = await api.get("/email/status"); setStatus(r.data); }
@@ -52,6 +54,12 @@ export default function Email() {
 
   useEffect(() => { refreshStatus(); }, []);
   useEffect(() => { if (status?.connected) refreshList(); /* eslint-disable-next-line */ }, [status?.connected, unreadOnly]);
+
+  const refreshDrafts = async () => {
+    if (!status?.connected) return;
+    try { const r = await api.get("/email/drafts"); setDrafts(r.data || []); } catch {/*ignore*/}
+  };
+  useEffect(() => { if (status?.connected) { refreshDrafts(); const t = setInterval(refreshDrafts, 30000); return () => clearInterval(t); } /* eslint-disable-next-line */ }, [status?.connected]);
 
   // Handle ?status=connected redirect from oauth/callback
   useEffect(() => {
@@ -183,6 +191,35 @@ export default function Email() {
       {flash && <div className="mb-3 border border-ok bg-ok/10 text-ok text-xs uppercase tracking-widest p-2" data-testid="email-flash">{flash}</div>}
       {err && <div className="mb-3 border border-danger bg-danger/10 text-danger text-sm p-2" data-testid="email-err">{err}</div>}
 
+      {drafts.length > 0 && (
+        <div className="mb-3 border-2 border-amber2 bg-amber2/5" data-testid="brain-drafts-strip">
+          <div className="px-3 py-2 bg-amber2/10 border-b border-amber2/30 flex items-center gap-2">
+            <Bot size={14} className="text-amber2"/>
+            <div className="text-xs uppercase tracking-widest font-bold text-amber2">{drafts.length} DRAFT{drafts.length>1?"S":""} FROM BRAIN — REVIEW BEFORE SENDING</div>
+          </div>
+          <div className="divide-y divide-amber2/20 max-h-60 overflow-auto">
+            {drafts.map(d => (
+              <button
+                key={d.id}
+                onClick={()=>setReviewingDraft(d)}
+                data-testid={`brain-draft-${d.id}`}
+                className="w-full text-left px-3 py-2 hover:bg-amber2/10 flex items-start gap-2"
+              >
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {d.classification && <span className="text-[9px] uppercase tracking-widest font-bold border border-amber2/60 text-amber2 px-1.5 py-0.5">{d.classification}</span>}
+                    <span className="text-xs text-ink-2">{timeAgo(d.created_at)}</span>
+                  </div>
+                  {d.notes_for_doc && <div className="text-[11px] text-ink-2 mt-1 italic">"{d.notes_for_doc}"</div>}
+                  <div className="text-sm truncate mt-1">{d.subject || "(no subject)"}</div>
+                </div>
+                <Edit3 size={14} className="text-amber2 shrink-0 mt-1"/>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Filter bar */}
       <div className="flex flex-wrap gap-2 mb-3">
         <button onClick={()=>{setSearchMode(false); setUnreadOnly(false);}} className={`px-3 py-1.5 text-[11px] uppercase tracking-widest border ${!searchMode && !unreadOnly?"border-rust text-rust":"border-line text-ink-2"}`} data-testid="email-filter-all">ALL</button>
@@ -256,6 +293,86 @@ export default function Email() {
 
       {composing && <ComposeModal onClose={()=>setComposing(false)} onSent={()=>{ setComposing(false); setFlash("Sent."); setTimeout(()=>setFlash(""), 1800); }} />}
       {replying && selected && <ReplyModal message={selected} onClose={()=>setReplying(false)} onSent={()=>{ setReplying(false); setFlash("Replied."); setTimeout(()=>setFlash(""), 1800); }} />}
+      {reviewingDraft && (
+        <BrainDraftReviewModal
+          draft={reviewingDraft}
+          onClose={()=>setReviewingDraft(null)}
+          onSent={()=>{ setReviewingDraft(null); setFlash("Reply sent."); refreshDrafts(); setTimeout(()=>setFlash(""), 1800); }}
+          onDiscarded={()=>{ setReviewingDraft(null); refreshDrafts(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+function BrainDraftReviewModal({ draft, onClose, onSent, onDiscarded }) {
+  const [body, setBody] = useState(draft.body_html || "");
+  const [subject, setSubject] = useState(draft.subject || "");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const saveEdits = async () => {
+    await api.put(`/email/drafts/${draft.id}`, { subject, body_html: body });
+  };
+
+  const send = async () => {
+    setErr(""); setBusy(true);
+    try {
+      await saveEdits();
+      await api.post(`/email/drafts/${draft.id}/send`);
+      onSent();
+    } catch (e) { setErr(e?.response?.data?.detail || "Send failed"); }
+    finally { setBusy(false); }
+  };
+
+  const discard = async () => {
+    if (!window.confirm("Discard this draft? You can't get it back.")) return;
+    setBusy(true);
+    try {
+      await api.post(`/email/drafts/${draft.id}/discard`);
+      onDiscarded();
+    } catch (e) { setErr(e?.response?.data?.detail || "Discard failed"); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/70 flex items-end md:items-center justify-center p-0 md:p-4" onClick={onClose} data-testid="brain-draft-review">
+      <div className="bg-bg-1 border-t-2 md:border-2 border-amber2 w-full md:max-w-xl max-h-[92vh] overflow-y-auto" onClick={e=>e.stopPropagation()}>
+        <div className="p-4 border-b border-line flex items-center justify-between sticky top-0 bg-bg-1">
+          <div className="flex items-center gap-2">
+            <Bot size={18} className="text-amber2"/>
+            <div>
+              <h2 className="heading text-lg">BRAIN DRAFT — REVIEW</h2>
+              {draft.classification && <div className="text-[10px] text-amber2 uppercase tracking-widest mt-1">CLASSIFIED AS: {draft.classification.toUpperCase()}</div>}
+            </div>
+          </div>
+          <button onClick={onClose} className="text-ink-3 hover:text-ink p-1" data-testid="brain-draft-close"><X size={18}/></button>
+        </div>
+        <div className="p-4 space-y-3">
+          {draft.notes_for_doc && (
+            <div className="border border-amber2/40 bg-amber2/5 p-2 text-sm italic text-amber2">
+              "{draft.notes_for_doc}"
+            </div>
+          )}
+          {err && <div className="text-danger text-xs">{err}</div>}
+          <div>
+            <label className="label-shop">SUBJECT (OPTIONAL)</label>
+            <input data-testid="brain-draft-subject" className="input-shop w-full" value={subject} onChange={e=>setSubject(e.target.value)}/>
+          </div>
+          <div>
+            <label className="label-shop">REPLY BODY (EDIT BEFORE SENDING IF YOU WANT)</label>
+            <textarea data-testid="brain-draft-body" rows={10} className="input-shop w-full font-mono text-sm" value={body} onChange={e=>setBody(e.target.value)}/>
+          </div>
+        </div>
+        <div className="p-4 border-t border-line bg-bg-2 flex gap-2" style={{paddingBottom: "calc(1rem + env(safe-area-inset-bottom))"}}>
+          <button data-testid="brain-draft-send" onClick={send} disabled={busy} className="btn-rust flex-1 py-3 text-sm flex items-center justify-center gap-2 disabled:opacity-50">
+            <Send size={14}/>{busy ? "SENDING..." : "SEND REPLY"}
+          </button>
+          <button data-testid="brain-draft-discard" onClick={discard} disabled={busy} className="btn-ghost px-4 py-3 text-sm text-ink-3 hover:text-danger flex items-center gap-2">
+            <Trash2 size={14}/>DISCARD
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
