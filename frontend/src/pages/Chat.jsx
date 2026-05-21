@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Mic, Send, Volume2, VolumeX, ChevronRight, Square, History, Settings2, X, Paperclip, FolderPlus } from "lucide-react";
+import { Mic, Send, Volume2, VolumeX, ChevronRight, Square, History, Settings2, X, Paperclip, FolderPlus, Truck, Plus, Check, AlertCircle } from "lucide-react";
 import api, { API, getToken } from "@/api";
 import { useApp } from "@/AppContext";
 
@@ -17,6 +17,7 @@ export default function Chat() {
   const [voiceOn, setVoiceOn] = useState(true);
   const [vehicleId, setVehicleId] = useState(app?.activeVehicleId || "");
   const [vehicles, setVehicles] = useState([]);
+  const [showVinModal, setShowVinModal] = useState(false);
   const [sessions, setSessions] = useState([]);
   const [showSessions, setShowSessions] = useState(false);
   const [showOptions, setShowOptions] = useState(false);
@@ -563,6 +564,28 @@ export default function Chat() {
         <button data-testid="m-options" onClick={()=>setShowOptions(true)} className="text-[11px] uppercase tracking-widest border border-line px-2 py-1 text-ink-2 flex items-center gap-1"><Settings2 size={12}/></button>
       </div>
 
+      {/* VEHICLE STRIP — always visible, top priority. Techs see this BEFORE anything else. */}
+      <ActiveVehicleBar
+        vehicleId={vehicleId}
+        vehicles={vehicles}
+        onPickExisting={() => setShowVinModal(true)}
+        onAddVin={() => setShowVinModal(true)}
+        onClear={() => { setVehicleId(""); app?.setActiveVehicleId(""); }}
+      />
+
+      {showVinModal && (
+        <VinPullModal
+          vehicles={vehicles}
+          onClose={() => setShowVinModal(false)}
+          onPicked={(v) => {
+            setVehicleId(v.id);
+            app?.setActiveVehicleId(v.id);
+            setVehicles(prev => prev.some(x=>x.id===v.id) ? prev : [v, ...prev]);
+            setShowVinModal(false);
+          }}
+        />
+      )}
+
       {/* Messages — order-3 on mobile (below input), order-2 on desktop (above input) */}
       <div className="flex-1 overflow-auto order-3 md:order-2" data-testid="messages-area">
         {/* Call artifacts panel — links/notes/vehicles Wrench sent during a call */}
@@ -919,4 +942,164 @@ function renderWithLinks(text) {
   }
   if (last < text.length) parts.push(text.slice(last));
   return parts;
+}
+
+
+// ===================== Active Vehicle Bar (always-visible) =====================
+function ActiveVehicleBar({ vehicleId, vehicles, onPickExisting, onAddVin, onClear }) {
+  const v = vehicles.find(x => x.id === vehicleId);
+  if (!v) {
+    return (
+      <div className="order-2 px-3 md:px-6 py-2 border-b border-line bg-bg-3 flex items-center justify-between gap-2" data-testid="vin-bar-empty">
+        <div className="text-[11px] uppercase tracking-widest text-ink-3 flex items-center gap-2">
+          <Truck size={12} className="text-rust"/> NO VEHICLE — ADD ONE SO WRENCH KNOWS THE TRUCK
+        </div>
+        <div className="flex gap-1.5">
+          {vehicles.length > 0 && (
+            <button onClick={onPickExisting} className="text-[11px] uppercase tracking-widest border border-line text-ink-2 px-2 py-1 hover:border-rust hover:text-rust" data-testid="vin-bar-pick">
+              PICK
+            </button>
+          )}
+          <button onClick={onAddVin} className="text-[11px] uppercase tracking-widest border-2 border-rust bg-rust text-black px-3 py-1 flex items-center gap-1 font-bold" data-testid="vin-bar-add">
+            <Plus size={12}/>VIN
+          </button>
+        </div>
+      </div>
+    );
+  }
+  const label = [v.year, v.make, v.model].filter(Boolean).join(" ") || (v.vin ? v.vin.slice(-6) : "vehicle");
+  return (
+    <div className="order-2 px-3 md:px-6 py-2 border-b border-line bg-bg-3 flex items-center justify-between gap-2" data-testid="vin-bar-active">
+      <div className="flex items-center gap-2 min-w-0">
+        <Truck size={14} className="text-rust shrink-0"/>
+        <div className="text-sm text-amber2 font-bold truncate" data-testid="vin-bar-label">{label}</div>
+        {v.engine_summary && <span className="text-[11px] text-ink-3 hidden md:inline">· {v.engine_summary}</span>}
+      </div>
+      <div className="flex gap-1.5 shrink-0">
+        <button onClick={onAddVin} className="text-[11px] uppercase tracking-widest border border-line text-ink-2 px-2 py-1 hover:border-rust hover:text-rust flex items-center gap-1" data-testid="vin-bar-switch">
+          <Plus size={11}/>VIN
+        </button>
+        <button onClick={onClear} className="text-[11px] uppercase tracking-widest text-ink-3 hover:text-danger px-2 py-1" title="Clear active vehicle" data-testid="vin-bar-clear">
+          <X size={12}/>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ===================== VIN Pull Modal — paste VIN → NHTSA → save → set active =====================
+function VinPullModal({ vehicles, onClose, onPicked }) {
+  const [vin, setVin] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [decoded, setDecoded] = useState(null);
+  const [err, setErr] = useState("");
+
+  const cleanVin = vin.replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+  const ready = cleanVin.length >= 11;
+
+  const decode = async () => {
+    setErr(""); setDecoded(null);
+    if (!ready) { setErr("VIN looks short — need at least 11 characters."); return; }
+    setBusy(true);
+    try {
+      const r = await api.get(`/vin/decode/${cleanVin}`);
+      const d = r.data;
+      if (!d.year && !d.make && d.error_text) { setErr(`VIN decoder couldn't read that: ${d.error_text.slice(0, 120)}`); }
+      setDecoded(d);
+    } catch (e) {
+      setErr(e?.response?.data?.detail || "VIN lookup failed");
+    } finally { setBusy(false); }
+  };
+
+  const saveAndActivate = async () => {
+    if (!decoded) return;
+    setBusy(true); setErr("");
+    try {
+      const payload = {
+        vin: cleanVin,
+        year: decoded.year || "",
+        make: decoded.make || "",
+        model: decoded.model || "",
+        trim: decoded.trim || "",
+        engine_summary: decoded.engine_summary || "",
+        notes: "",
+        mods: "",
+      };
+      const r = await api.post("/vehicles", payload);
+      onPicked(r.data);
+    } catch (e) {
+      setErr(e?.response?.data?.detail || "Save failed");
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/70 flex items-end md:items-center justify-center p-0 md:p-4" onClick={onClose} data-testid="vin-modal">
+      <div className="bg-bg-1 border-t-2 md:border-2 border-rust w-full md:max-w-md max-h-[92vh] overflow-y-auto" onClick={e=>e.stopPropagation()}>
+        <div className="p-4 border-b border-line flex items-center justify-between sticky top-0 bg-bg-1">
+          <h2 className="heading text-lg flex items-center gap-2"><Truck size={16} className="text-rust"/>PULL VIN</h2>
+          <button onClick={onClose} className="text-ink-3 hover:text-ink p-1" data-testid="vin-modal-close"><X size={18}/></button>
+        </div>
+        <div className="p-4 space-y-4">
+          <div>
+            <label className="label-shop">VIN (17 CHARS — PASTE FROM CUSTOMER OR DOOR JAMB)</label>
+            <input
+              data-testid="vin-input"
+              className="input-shop w-full font-mono uppercase tracking-widest text-base py-3"
+              placeholder="1GCRCREC4HZ123456"
+              value={vin}
+              onChange={e=>setVin(e.target.value)}
+              autoFocus
+              maxLength={20}
+              onKeyDown={(e)=>{ if (e.key === "Enter" && !decoded) decode(); }}
+            />
+            <div className="text-[10px] text-ink-3 mt-1 uppercase tracking-widest">
+              {cleanVin.length}/17 chars · {ready ? "ready" : "keep typing"}
+            </div>
+          </div>
+
+          {err && <div className="text-danger text-sm border border-danger/40 bg-danger/10 p-2 flex items-start gap-2"><AlertCircle size={14} className="shrink-0 mt-0.5"/>{err}</div>}
+
+          {!decoded ? (
+            <button data-testid="vin-decode-btn" onClick={decode} disabled={!ready || busy} className="btn-rust w-full py-3 text-base disabled:opacity-40">
+              {busy ? "LOOKING IT UP..." : "DECODE VIN"}
+            </button>
+          ) : (
+            <>
+              <div className="border border-ok/40 bg-ok/5 p-3 space-y-1" data-testid="vin-decoded">
+                <div className="text-[10px] text-ok uppercase tracking-widest font-bold mb-1 flex items-center gap-1"><Check size={12}/>NHTSA SAID:</div>
+                <div className="text-base font-bold text-amber2">{[decoded.year, decoded.make, decoded.model].filter(Boolean).join(" ") || "—"}</div>
+                {decoded.trim && <div className="text-xs text-ink-2">Trim: {decoded.trim}</div>}
+                {decoded.engine_summary && <div className="text-xs text-ink-2">Engine: {decoded.engine_summary}</div>}
+                {decoded.transmission && <div className="text-xs text-ink-2">Trans: {decoded.transmission}</div>}
+                {decoded.drive && <div className="text-xs text-ink-2">Drive: {decoded.drive}</div>}
+              </div>
+              <button data-testid="vin-save-btn" onClick={saveAndActivate} disabled={busy} className="btn-rust w-full py-3 text-base disabled:opacity-40 flex items-center justify-center gap-2">
+                <Check size={14}/>{busy ? "SAVING..." : "SAVE + MAKE ACTIVE"}
+              </button>
+              <button onClick={()=>{ setDecoded(null); setVin(""); }} className="btn-ghost w-full py-2 text-xs">CHANGE VIN</button>
+            </>
+          )}
+
+          {vehicles.length > 0 && !decoded && (
+            <div className="pt-3 border-t border-line">
+              <div className="label-shop">OR PICK A VEHICLE YOU ALREADY HAVE</div>
+              <div className="space-y-1 max-h-40 overflow-auto">
+                {vehicles.map(v => (
+                  <button
+                    key={v.id}
+                    onClick={()=>onPicked(v)}
+                    data-testid={`vin-existing-${v.id}`}
+                    className="w-full text-left border border-line hover:border-rust px-3 py-2 text-sm flex items-center justify-between gap-2"
+                  >
+                    <span className="truncate">{[v.year, v.make, v.model].filter(Boolean).join(" ") || (v.vin || "untitled")}</span>
+                    {v.vin && <span className="text-[10px] text-ink-3 font-mono shrink-0">{v.vin.slice(-6)}</span>}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }
