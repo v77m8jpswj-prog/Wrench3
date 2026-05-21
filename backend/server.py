@@ -2,7 +2,7 @@
 Data Wrench - AI Foreman Backend
 FastAPI app for Dr. Underhood Automotive's personal AI shop assistant.
 """
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, UploadFile, File, Form, Header
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, UploadFile, File, Form, Header, Query
 from fastapi.responses import Response
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -587,7 +587,7 @@ async def chat(body: ChatReq, user=Depends(get_user)):
             veh_ctx = ""
             if vehicle:
                 veh_ctx = f"{vehicle.get('year','')} {vehicle.get('make','')} {vehicle.get('model','')} {vehicle.get('engine_summary','')}".strip()
-            search_res = await _openai_web_search(body.message, veh_ctx, diagram_mode=diagram_intent)
+            search_res = await _openai_web_search(body.message, veh_ctx, diagram_mode=diagram_intent, scope_id=(user.get("shop_id") or os.environ.get("DEFAULT_SHOP_ID", "drunderhood-fortsmith")))
             search_images = search_res.get("image_urls", [])[:8]
             srch_text = (search_res.get("answer") or "")[:2500]
             cit_lines = "\n".join(f"  - {c['title']}: {c['url']}" for c in (search_res.get("citations") or [])[:6])
@@ -755,19 +755,40 @@ async def update_session(session_id: str, body: SessionUpdateReq, user=Depends(g
 
 # ============ Web search — Wrench can pull diagrams, pics, articles ============
 import httpx  # noqa: E402
+import hashlib  # noqa: E402
 
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+SEARCH_CACHE_TTL_DAYS = 7
 
 class SearchReq(BaseModel):
     query: str
-    mode: Literal["web", "diagram"] = "web"  # diagram biases the query toward images
-    vehicle_context: Optional[str] = ""  # e.g. "2014 Chevy Silverado 5.3"
+    mode: Literal["web", "diagram"] = "web"
+    vehicle_context: Optional[str] = ""
 
 
-async def _openai_web_search(query: str, vehicle_context: str = "", diagram_mode: bool = False) -> Dict[str, Any]:
-    """Hit OpenAI Responses API with web_search_preview. Returns {answer, citations[], images[]}."""
+def _search_cache_key(scope_id: str, query: str, vehicle_context: str, mode: str) -> str:
+    """Stable hash so two requests with the same (shop, query, vehicle, mode) hit the same cache slot."""
+    norm = f"{scope_id}::{(query or '').strip().lower()}::{(vehicle_context or '').strip().lower()}::{mode}"
+    return hashlib.sha256(norm.encode()).hexdigest()[:32]
+
+
+async def _openai_web_search(query: str, vehicle_context: str = "", diagram_mode: bool = False, scope_id: str = "default") -> Dict[str, Any]:
+    """Hit OpenAI Responses API with web_search_preview. Caches by (scope_id, query, vehicle_context, mode) for 7 days
+    so identical lookups within the same shop don't burn OpenAI credits twice."""
     if not OPENAI_API_KEY:
         raise HTTPException(503, "Web search not configured (no OPENAI_API_KEY).")
+
+    mode_str = "diagram" if diagram_mode else "web"
+    cache_key = _search_cache_key(scope_id, query, vehicle_context, mode_str)
+    now = datetime.now(timezone.utc)
+    cutoff = (now - timedelta(days=SEARCH_CACHE_TTL_DAYS)).isoformat()
+
+    cached = await db.search_cache.find_one({"key": cache_key, "created_at": {"$gte": cutoff}}, {"_id": 0})
+    if cached:
+        # Bump hit count for cost-savings telemetry
+        await db.search_cache.update_one({"key": cache_key}, {"$inc": {"hits": 1}, "$set": {"last_hit_at": now.isoformat()}})
+        return {**cached["result"], "cached": True}
+
     full_query = query
     if vehicle_context:
         full_query = f"For a {vehicle_context}: {query}"
@@ -781,16 +802,11 @@ async def _openai_web_search(query: str, vehicle_context: str = "", diagram_mode
         r = await client.post(
             "https://api.openai.com/v1/responses",
             headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"},
-            json={
-                "model": "gpt-5.2",
-                "tools": [{"type": "web_search_preview"}],
-                "input": full_query,
-            },
+            json={"model": "gpt-5.2", "tools": [{"type": "web_search_preview"}], "input": full_query},
         )
     if r.status_code != 200:
         raise HTTPException(502, f"Search failed: {r.text[:200]}")
     data = r.json()
-    # Pull the assistant text + url citations
     text = ""
     citations = []
     for item in data.get("output", []):
@@ -801,29 +817,70 @@ async def _openai_web_search(query: str, vehicle_context: str = "", diagram_mode
                     for a in c.get("annotations", []) or []:
                         if a.get("type") == "url_citation":
                             citations.append({"url": a.get("url",""), "title": a.get("title",""), "start": a.get("start_index"), "end": a.get("end_index")})
-    # Extract image URLs from the text (anything ending in image extension)
     image_urls = list({
         m for m in re.findall(r"https?://[^\s<>\)\"]+?\.(?:png|jpe?g|gif|webp)(?:\?[^\s<>\)\"]*)?", text, flags=re.I)
     })
-    return {"answer": text, "citations": citations, "image_urls": image_urls, "query": full_query}
+    result = {"answer": text, "citations": citations, "image_urls": image_urls, "query": full_query}
+    # Write to cache (best-effort)
+    try:
+        await db.search_cache.update_one(
+            {"key": cache_key},
+            {"$set": {"key": cache_key, "scope_id": scope_id, "query": query, "vehicle_context": vehicle_context,
+                      "mode": mode_str, "result": result, "created_at": now.isoformat(), "last_hit_at": now.isoformat()},
+             "$setOnInsert": {"hits": 0}},
+            upsert=True,
+        )
+    except Exception as e:
+        log.warning(f"search cache write failed: {e}")
+    return {**result, "cached": False}
 
 
 @api.post("/search/web")
 async def search_web(body: SearchReq, user=Depends(get_user)):
-    return await _openai_web_search(body.query, body.vehicle_context or "", diagram_mode=(body.mode == "diagram"))
+    shop_id = user.get("shop_id") or os.environ.get("DEFAULT_SHOP_ID", "drunderhood-fortsmith")
+    return await _openai_web_search(body.query, body.vehicle_context or "", diagram_mode=(body.mode == "diagram"), scope_id=shop_id)
 
 
-# Bearer-token gated for the partner's app to use too
+# Bearer-token gated for partner apps (Dr. Underhood Live Assist) — same cache, scoped per shop_id
+class BrainSearchReq(BaseModel):
+    shop_id: str
+    query: str
+    mode: Literal["web", "diagram"] = "web"
+    vehicle_context: Optional[str] = ""
+
+
 @api.post("/brain/search-web")
-async def brain_search_web(body: Dict[str, Any]):
-    auth = body.get("_bearer", "")  # alternate path if needed; keep simple
-    if os.environ.get("BRAIN_INGRESS_TOKEN") and auth != os.environ.get("BRAIN_INGRESS_TOKEN"):
-        raise HTTPException(401, "Invalid token")
-    return await _openai_web_search(
-        body.get("query",""),
-        body.get("vehicle_context",""),
-        diagram_mode=(body.get("mode") == "diagram"),
-    )
+async def brain_search_web(body: BrainSearchReq, authorization: Optional[str] = Header(None)):
+    expected = os.environ.get("BRAIN_INGRESS_TOKEN", "")
+    if not expected:
+        raise HTTPException(503, "Brain not configured")
+    if not authorization or not authorization.startswith("Bearer ") or authorization[7:] != expected:
+        raise HTTPException(401, "Invalid brain bearer token")
+    return await _openai_web_search(body.query, body.vehicle_context or "", diagram_mode=(body.mode == "diagram"), scope_id=body.shop_id)
+
+
+@api.get("/brain/search-stats")
+async def brain_search_stats(shop_id: str = Query(...), authorization: Optional[str] = Header(None)):
+    expected = os.environ.get("BRAIN_INGRESS_TOKEN", "")
+    if not expected:
+        raise HTTPException(503, "Brain not configured")
+    if not authorization or not authorization.startswith("Bearer ") or authorization[7:] != expected:
+        raise HTTPException(401, "Invalid brain bearer token")
+    pipeline = [
+        {"$match": {"scope_id": shop_id}},
+        {"$group": {"_id": None, "queries": {"$sum": 1}, "total_hits": {"$sum": "$hits"}}},
+    ]
+    agg = await db.search_cache.aggregate(pipeline).to_list(1)
+    if not agg:
+        return {"shop_id": shop_id, "unique_queries_cached": 0, "cache_hits_saved": 0, "estimated_openai_calls_saved": 0, "ttl_days": SEARCH_CACHE_TTL_DAYS}
+    a = agg[0]
+    return {
+        "shop_id": shop_id,
+        "unique_queries_cached": a["queries"],
+        "cache_hits_saved": a["total_hits"],
+        "estimated_openai_calls_saved": a["total_hits"],
+        "ttl_days": SEARCH_CACHE_TTL_DAYS,
+    }
 
 
 # ============ Chat with image (vision) — Doc drops a snip/schematic ============
