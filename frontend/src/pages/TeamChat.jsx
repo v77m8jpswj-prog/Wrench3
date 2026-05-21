@@ -136,7 +136,7 @@ export default function TeamChat() {
           <div ref={endRef} />
         </div>
 
-        <div className="border-t border-line bg-bg-2 px-3 md:px-6 py-3 flex gap-2" data-testid="team-chat-input-bar">
+        <div className="border-t border-line bg-bg-2 px-3 md:px-6 py-3 flex gap-2 safe-bottom" data-testid="team-chat-input-bar">
           <textarea
             data-testid="team-chat-input"
             rows={1}

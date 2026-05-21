@@ -48,11 +48,17 @@ export default function Shell({ user, setUser, children }) {
 
   return (
     <div className="min-h-screen flex flex-col bg-bg-1 text-ink relative">
+      {/* iOS notch / Dynamic Island safe-area padding (mobile only) */}
+      <div className="md:hidden bg-bg-2" style={{ height: "env(safe-area-inset-top)" }} />
       {/* Hazard stripe top */}
       <div className="h-1 hazard" />
 
       {/* MOBILE top bar */}
-      <header className="md:hidden bg-bg-2 border-b border-line flex items-center px-3 py-2 sticky top-0 z-30" data-testid="mobile-topbar">
+      <header
+        className="md:hidden bg-bg-2 border-b border-line flex items-center px-3 py-2 sticky z-30"
+        style={{ top: "env(safe-area-inset-top)" }}
+        data-testid="mobile-topbar"
+      >
         <button onClick={()=>setDrawerOpen(true)} data-testid="open-drawer" className="p-2 -ml-2 mr-2 text-white">
           <Menu size={22} />
         </button>

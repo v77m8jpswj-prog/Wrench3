@@ -613,7 +613,7 @@ export default function Chat() {
       </div>
 
       {/* Input bar — order-2 on mobile (top, under header), order-3 on desktop (bottom) */}
-      <div className="order-2 md:order-3 border-y md:border-y-0 md:border-t border-line bg-bg-2 px-3 md:px-6 py-3 md:py-4 md:sticky md:bottom-0 z-20">
+      <div className="order-2 md:order-3 border-y md:border-y-0 md:border-t border-line bg-bg-2 px-3 md:px-6 py-3 md:py-4 md:sticky md:bottom-0 z-20 safe-bottom">
         {micError && messages.length > 0 && (
           <MicHelpPanel error={micError} expanded={showMicHelp} onToggle={()=>setShowMicHelp(s=>!s)} onRetry={startRecord} compact />
         )}

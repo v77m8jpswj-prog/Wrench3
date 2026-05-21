@@ -25,6 +25,12 @@ body {
 input, textarea, select, button { font-size: 16px; } /* prevent iOS zoom */
 @media (min-width: 768px){ input, textarea, select { font-size: 14px; } }
 
+/* iOS safe-area helpers (for iPhone notch, Dynamic Island, and home indicator) */
+.safe-top { padding-top: env(safe-area-inset-top); }
+.safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
+.safe-bottom-add { padding-bottom: calc(0.75rem + env(safe-area-inset-bottom)); }
+.sticky-bottom-safe { position: sticky; bottom: 0; padding-bottom: env(safe-area-inset-bottom); }
+
 ::selection { background: #FF5722; color: #000; }
 
 /* Custom scrollbar - shop tool feel */
