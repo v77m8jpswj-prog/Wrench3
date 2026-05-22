@@ -556,7 +556,6 @@ async function doCopy() {{
     btn.classList.add('copied');
     btn.textContent = '✓ COPIED — NOW PASTE IT';
     hint.textContent = 'Tap home, switch to other chat, long-press, PASTE';
-    setTimeout(() => {{ btn.classList.remove('copied'); btn.textContent = 'TAP TO COPY AGAIN'; }}, 4500);
   }} catch(e) {{
     // Fallback for older iOS — select the text instead
     const range = document.createRange();
