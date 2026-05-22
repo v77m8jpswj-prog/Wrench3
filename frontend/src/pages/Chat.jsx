@@ -900,7 +900,7 @@ function MessageRow({ m, idx }) {
         </div>
       )}
       <div className="mt-1 text-ink text-[13px] md:text-sm leading-relaxed">
-        {renderWithLinks(m.content)}
+        {renderRichContent(m.content)}
       </div>
       {m.citations && m.citations.length > 0 && (
         <div className="mt-2 text-[10px] md:text-[11px] text-ink-3 border-l-2 border-line pl-3">
@@ -908,6 +908,94 @@ function MessageRow({ m, idx }) {
           {m.citations.map((c,i)=>(<div key={i} className="mb-1">› {c.source}: <span className="text-ink-2">{c.snippet}</span></div>))}
         </div>
       )}
+    </div>
+  );
+}
+
+// Detect a markdown ```...``` fenced block OR a multi-line tab-separated block.
+// For each, render a one-tap COPY TABLE button + the raw monospaced text.
+// Outside those blocks, fall back to renderWithLinks for clickable URLs / images.
+function renderRichContent(text) {
+  if (!text) return null;
+  const blocks = [];
+  let i = 0;
+  const fenceRe = /```([^\n]*)\n([\s\S]*?)```/g;
+  let m;
+  while ((m = fenceRe.exec(text)) !== null) {
+    if (m.index > i) blocks.push({ kind: "text", text: text.slice(i, m.index) });
+    blocks.push({ kind: "code", lang: (m[1] || "").trim(), text: m[2].replace(/\n+$/, "") });
+    i = m.index + m[0].length;
+  }
+  if (i < text.length) blocks.push({ kind: "text", text: text.slice(i) });
+
+  // Further split each "text" block: if it contains a chunk of >=3 lines with >=2 tabs each, treat that chunk as a TSV table.
+  const out = [];
+  blocks.forEach((b, bi) => {
+    if (b.kind === "code") {
+      out.push(<CopyableBlock key={`b${bi}`} text={b.text} lang={b.lang} />);
+      return;
+    }
+    const lines = b.text.split("\n");
+    let buf = [];
+    let tsvBuf = [];
+    const flushBuf = (label) => {
+      if (buf.length) {
+        out.push(<span key={`${bi}-t-${label}`}>{renderWithLinks(buf.join("\n"))}</span>);
+        buf = [];
+      }
+    };
+    const flushTsv = (label) => {
+      if (tsvBuf.length >= 3) {
+        out.push(<CopyableBlock key={`${bi}-tsv-${label}`} text={tsvBuf.join("\n")} lang="tsv" />);
+      } else {
+        buf.push(...tsvBuf);
+      }
+      tsvBuf = [];
+    };
+    lines.forEach((ln, li) => {
+      const looksTsv = (ln.match(/\t/g) || []).length >= 2 || /^([-+]?\d+(\.\d+)?[\t ,]+){4,}[-+]?\d+(\.\d+)?$/.test(ln.trim());
+      if (looksTsv) {
+        flushBuf(li);
+        tsvBuf.push(ln);
+      } else {
+        if (tsvBuf.length) flushTsv(li);
+        buf.push(ln);
+      }
+    });
+    flushTsv("end");
+    flushBuf("end");
+  });
+
+  return out;
+}
+
+function CopyableBlock({ text, lang }) {
+  const [copied, setCopied] = React.useState(false);
+  const isTable = lang === "tsv" || /\t/.test(text);
+  const label = isTable ? "COPY TABLE (HP TUNERS READY)" : `COPY ${(lang||"BLOCK").toUpperCase()}`;
+  const copy = async (e) => {
+    e.preventDefault(); e.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(()=>setCopied(false), 1500);
+    } catch {/* fall back to selection */}
+  };
+  return (
+    <div className="my-3 border-2 border-amber2/40 bg-bg-1" data-testid="copy-block">
+      <div className="flex items-center justify-between px-2 py-1 bg-amber2/10 border-b border-amber2/30">
+        <div className="text-[10px] uppercase tracking-widest text-amber2 font-bold">
+          {isTable ? "TABLE · TAB-SEPARATED · USE PASTE SPECIAL IN HP TUNERS" : (lang || "CODE")}
+        </div>
+        <button
+          onClick={copy}
+          data-testid="copy-table-btn"
+          className={`text-[10px] uppercase tracking-widest font-bold px-3 py-1.5 ${copied ? "bg-ok text-black" : "bg-rust text-white hover:bg-rust/80"}`}
+        >
+          {copied ? "✓ COPIED" : label}
+        </button>
+      </div>
+      <pre className="px-2 py-2 text-[11px] md:text-xs font-mono text-ink whitespace-pre overflow-x-auto leading-snug">{text}</pre>
     </div>
   );
 }
