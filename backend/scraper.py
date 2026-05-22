@@ -34,17 +34,18 @@ log = logging.getLogger("datawrench.scraper")
 # Mapping: domain -> (login_url, username_selector, password_selector, submit_selector, success_wait_selector or None)
 LOGIN_RECIPES: Dict[str, Dict[str, Any]] = {
     "alldatadiy.com": {
-        "login_url": "https://www.alldatadiy.com/auth/login",
-        "username_selector": "input[name=username], input[type=email]",
-        "password_selector": "input[name=password], input[type=password]",
-        "submit_selector": "button[type=submit]",
-        "success_marker": "logged",  # heuristic
+        # alldatadiy.com redirects to alldata.com/diy-us/en — use that login form
+        "login_url": "https://www.alldata.com/diy-us/en/diy/login",
+        "username_selector": "#edit-username",
+        "password_selector": "#edit-password",
+        "submit_selector": "#edit-submit",
+        "success_marker": "logout",
     },
     "alldata.com": {
-        "login_url": "https://my.alldata.com/login",
-        "username_selector": "input[type=email], input[name=username]",
-        "password_selector": "input[type=password]",
-        "submit_selector": "button[type=submit]",
+        "login_url": "https://www.alldata.com/diy-us/en/diy/login",
+        "username_selector": "#edit-username",
+        "password_selector": "#edit-password",
+        "submit_selector": "#edit-submit",
         "success_marker": "logout",
     },
     "identifix.com": {
@@ -104,34 +105,40 @@ async def _fetch_public(url: str) -> Dict[str, str]:
 
 async def _fetch_with_login(url: str, recipe: Dict[str, Any], username: str, password: str) -> Dict[str, str]:
     from playwright.async_api import async_playwright
+    # The container ships system Chromium at /usr/bin/chromium and exposes
+    # PLAYWRIGHT_CHROME_EXECUTABLE_PATH. Prefer that — installing Playwright's
+    # own bundled browser into /pw-browsers is environment-specific and fragile.
+    chrome_exec = os.environ.get("PLAYWRIGHT_CHROME_EXECUTABLE_PATH") or "/usr/bin/chromium"
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(
             headless=True,
-            args=["--no-sandbox", "--disable-dev-shm-usage"],
+            executable_path=chrome_exec if os.path.exists(chrome_exec) else None,
+            args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
         )
         try:
             ctx = await browser.new_context(user_agent="Mozilla/5.0 (DataWrenchBrain/1.0)")
             page = await ctx.new_page()
-            await page.goto(recipe["login_url"], wait_until="domcontentloaded", timeout=30000)
+            await page.goto(recipe["login_url"], wait_until="load", timeout=45000)
+            await asyncio.sleep(2.5)  # let JS bootstrap
             # Fill creds
             try:
-                await page.fill(recipe["username_selector"], username, timeout=10000)
+                await page.fill(recipe["username_selector"], username, timeout=15000)
                 await page.fill(recipe["password_selector"], password, timeout=10000)
             except Exception as e:
-                raise HTTPException(502, f"Login form fields not found on {recipe['login_url']}: {e}. They may have changed it.")
+                raise HTTPException(502, f"Login form fields not found on {recipe['login_url']}: {e}. The site may have changed it.")
             await page.click(recipe["submit_selector"], timeout=10000)
             # Wait for navigation / login completion
             try:
-                await page.wait_for_load_state("networkidle", timeout=20000)
+                await page.wait_for_load_state("load", timeout=25000)
             except Exception:
                 pass
-            await asyncio.sleep(1.5)
+            await asyncio.sleep(2.5)
+            # Heuristic: if we land back at the login URL, login probably failed
+            if page.url.rstrip("/") == recipe["login_url"].rstrip("/"):
+                raise HTTPException(401, f"Login appears to have failed on {urlparse(recipe['login_url']).hostname}. Wrong username/password, captcha, or 2FA prompt.")
             # Now navigate to the target URL
-            await page.goto(url, wait_until="domcontentloaded", timeout=45000)
-            try:
-                await page.wait_for_load_state("networkidle", timeout=15000)
-            except Exception:
-                pass
+            await page.goto(url, wait_until="load", timeout=45000)
+            await asyncio.sleep(2)
             html = await page.content()
             return _clean_text_from_html(html)
         finally:
