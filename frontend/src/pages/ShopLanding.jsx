@@ -28,7 +28,7 @@ export default function ShopLanding() {
             <div className="text-[11px] text-ink-3 uppercase tracking-widest">PERFORMANCE · DIAGNOSTICS · TUNING</div>
           </div>
           <h1 className="heading text-4xl md:text-6xl lg:text-7xl leading-none mb-3">
-            {shop.name?.toUpperCase() || "DR. UNDERHOOD"}
+            {shop.name?.toUpperCase() || "DR. UNDERHOOD™"}
           </h1>
           {shop.service_areas?.length > 0 && (
             <div className="text-sm text-amber2 uppercase tracking-widest mb-4">

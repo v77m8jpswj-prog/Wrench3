@@ -568,7 +568,8 @@ def make_brain_router(db, get_user):
         can ground responses (e.g. \"Yes, this shop does AFM delete tuning\")."""
         return await _get_or_seed_profile(shop_id)
 
-    # ----- Recent outcomes (partner polls this to learn from closed jobs) -----    @router.get("/brain/recent-outcomes")
+    # ----- Recent outcomes (partner polls this to learn from closed jobs) -----
+    @router.get("/brain/recent-outcomes")
     async def brain_recent_outcomes(
         shop_id: str = Query(...),
         since: Optional[str] = Query(None, description="ISO-8601 timestamp. Returns only events created after this. Omit for last 50 events."),
@@ -594,6 +595,57 @@ def make_brain_router(db, get_user):
             "count": len(events),
             "events": events,
         }
+
+    # ----- Tune history (partner pulls Doc's prior tuning edits per VIN) -----
+    @router.get("/brain/tune-history")
+    async def brain_tune_history(
+        shop_id: str = Query(...),
+        vehicle_vin: Optional[str] = Query(None, description="17-char VIN. If omitted, returns most recent tune edits across the shop."),
+        limit: int = Query(50, ge=1, le=500),
+        _t: str = Depends(get_brain_token),
+    ):
+        """Returns Doc's structured tune log per VIN for use by partner agents.
+
+        Use cases:
+          a) Repeat-visit context — inject last 3-5 edits into the partner LLM prompt
+             when a previously-tuned vehicle returns with a new complaint.
+          b) UI affordance — render a "PREVIOUSLY TUNED" pill if events > 0.
+          c) Disambiguation when a customer owns multiple similar vehicles.
+
+        Auth: bearer token, same as ask/learn/stats.
+        """
+        # Find users belonging to this shop, then their tune_log entries
+        shop_user_ids = [u["id"] async for u in db.users.find({"shop_id": shop_id}, {"_id": 0, "id": 1})]
+        if not shop_user_ids:
+            return {"shop_id": shop_id, "vin": vehicle_vin, "events": []}
+        q = {"user_id": {"$in": shop_user_ids}}
+        if vehicle_vin:
+            # Map VIN → vehicle_id(s)
+            vids = [v["id"] async for v in db.vehicles.find(
+                {"user_id": {"$in": shop_user_ids}, "vin": vehicle_vin},
+                {"_id": 0, "id": 1}
+            )]
+            if not vids:
+                return {"shop_id": shop_id, "vin": vehicle_vin, "events": []}
+            q["vehicle_id"] = {"$in": vids}
+        cur = db.tune_log.find(q, {"_id": 0}).sort("created_at", -1).limit(limit)
+        rows = await cur.to_list(limit)
+        events = [
+            {
+                "ts": r.get("created_at"),
+                "vehicle_id": r.get("vehicle_id"),
+                "section": r.get("section", ""),
+                "tab": r.get("tab", ""),
+                "subtab": r.get("subtab", ""),
+                "table_name": r.get("table_name", ""),
+                "symptom": r.get("symptom", ""),
+                "instruction": r.get("instruction", ""),
+                "before": r.get("before_table", ""),
+                "after": r.get("after_table", ""),
+            }
+            for r in rows
+        ]
+        return {"shop_id": shop_id, "vin": vehicle_vin, "count": len(events), "events": events}
 
     # ----- Internal Cases endpoints (user JWT) -----
     @router.get("/cases")

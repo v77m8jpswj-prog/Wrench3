@@ -59,7 +59,7 @@ export default function Login() {
             Talks like a mechanic, not a chatbot.
           </p>
           <div className="mt-8 text-[10px] uppercase tracking-[0.3em] text-ink-3">
-            DR. UNDERHOOD AUTOMOTIVE // PRIVATE BUILD
+            DR. UNDERHOOD™ AUTOMOTIVE SPECIALIST // PRIVATE BUILD
           </div>
         </div>
         <div className="text-[10px] text-ink-3 uppercase tracking-[0.25em]">
