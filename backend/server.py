@@ -1483,6 +1483,49 @@ def extract_pdf(raw: bytes) -> str:
     except Exception:
         return ""
 
+class LibraryPasteReq(BaseModel):
+    title: str
+    text: str
+    source_url: Optional[str] = ""
+
+
+@api.post("/library/paste")
+async def lib_paste(body: LibraryPasteReq, user=Depends(get_user)):
+    """Paste raw text directly into the library — no file upload. For when Doc copies a TSB,
+    repair article, forum thread, or GM SI page text and just wants Wrench to learn it."""
+    title = (body.title or "").strip() or "Pasted text"
+    text = (body.text or "").strip()
+    if len(text) < 30:
+        raise HTTPException(400, "Need at least 30 characters of real text.")
+    item_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+    # Chunk into ~1800-char windows so RAG can pull tight matches
+    chunk_size = 1800
+    chunks = [text[i:i+chunk_size] for i in range(0, len(text), chunk_size)]
+    await db.library_items.insert_one({
+        "id": item_id,
+        "user_id": user["id"],
+        "name": title[:240],
+        "kind": "paste",
+        "size": len(text),
+        "source_url": body.source_url or "",
+        "created_at": now,
+        "chunk_count": len(chunks),
+        "status": "ready",
+    })
+    rows = [{
+        "id": str(uuid.uuid4()),
+        "user_id": user["id"],
+        "item_id": item_id,
+        "source": title[:240],
+        "text": c,
+        "created_at": now,
+    } for c in chunks]
+    if rows:
+        await db.library_chunks.insert_many(rows)
+    return {"ok": True, "item_id": item_id, "title": title, "chunks_ingested": len(chunks), "chars": len(text)}
+
+
 @api.post("/library/upload")
 async def lib_upload(file: UploadFile = File(...), user=Depends(get_user)):
     raw = await file.read()

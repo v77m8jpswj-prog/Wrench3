@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from "react";
-import { Upload, Trash2, FileText, FileSpreadsheet, BookOpen, RefreshCw, Link as LinkIcon, ExternalLink, Loader } from "lucide-react";
+import { Upload, Trash2, FileText, FileSpreadsheet, BookOpen, RefreshCw, Link as LinkIcon, ExternalLink, Loader, ClipboardPaste } from "lucide-react";
 import api from "@/api";
 
 export default function Library() {
@@ -9,6 +9,11 @@ export default function Library() {
   const [url, setUrl] = useState("");
   const [urlBusy, setUrlBusy] = useState(false);
   const [urlMsg, setUrlMsg] = useState("");
+  const [pasteOpen, setPasteOpen] = useState(false);
+  const [pasteTitle, setPasteTitle] = useState("");
+  const [pasteText, setPasteText] = useState("");
+  const [pasteBusy, setPasteBusy] = useState(false);
+  const [pasteMsg, setPasteMsg] = useState("");
   const fileRef = useRef(null);
 
   const refresh = async () => {
@@ -42,7 +47,7 @@ export default function Library() {
     refresh();
   };
 
-  const iconFor = (k) => k === "url" ? LinkIcon : k === "pdf" ? FileText : k === "csv" ? FileSpreadsheet : BookOpen;
+  const iconFor = (k) => k === "url" ? LinkIcon : k === "pdf" ? FileText : k === "csv" ? FileSpreadsheet : k === "paste" ? ClipboardPaste : BookOpen;
 
   const feedUrl = async () => {
     setErr(""); setUrlMsg("");
@@ -56,6 +61,21 @@ export default function Library() {
     } catch (e) {
       setErr(e?.response?.data?.detail || e.message || "Scrape failed");
     } finally { setUrlBusy(false); }
+  };
+
+  const feedPaste = async () => {
+    setErr(""); setPasteMsg("");
+    if (!pasteText.trim()) { setErr("Paste some text first."); return; }
+    setPasteBusy(true);
+    try {
+      const r = await api.post("/library/paste", { title: pasteTitle || "Pasted text", text: pasteText });
+      setPasteMsg(`✓ "${r.data.title?.slice(0,60)}" — ${r.data.chunks_ingested} chunks, ${r.data.chars} chars.`);
+      setPasteText(""); setPasteTitle("");
+      refresh();
+      setTimeout(() => setPasteMsg(""), 4000);
+    } catch (e) {
+      setErr(e?.response?.data?.detail || "Paste failed");
+    } finally { setPasteBusy(false); }
   };
 
   return (
@@ -107,6 +127,43 @@ export default function Library() {
           </button>
         </div>
         {urlMsg && <div className="mt-2 text-xs text-ok" data-testid="url-feed-msg">{urlMsg}</div>}
+      </div>
+
+      <div className="panel mb-6 p-4 border-l-4 border-amber2" data-testid="paste-feeder">
+        <button onClick={()=>setPasteOpen(o=>!o)} className="flex items-center gap-2 w-full text-left" data-testid="paste-toggle">
+          <ClipboardPaste size={16} className="text-amber2"/>
+          <div className="heading text-base flex-1">PASTE TEXT INTO BRAIN</div>
+          <div className="text-[10px] text-ink-3 uppercase tracking-widest">{pasteOpen ? "HIDE" : "OPEN"}</div>
+        </button>
+        {pasteOpen && (
+          <div className="mt-3">
+            <p className="text-xs text-ink-2 mb-3">
+              Copy text from anywhere (GM SI, behind 2FA sites, PDFs you can't upload, your own notes) and paste it here. Wrench learns it instantly.
+            </p>
+            <input
+              data-testid="paste-title"
+              value={pasteTitle}
+              onChange={e=>setPasteTitle(e.target.value)}
+              placeholder="Title — e.g. '2014 Silverado P0011 TSB' or 'My cam swap notes'"
+              className="input-shop w-full text-sm mb-2"
+            />
+            <textarea
+              data-testid="paste-textarea"
+              value={pasteText}
+              onChange={e=>setPasteText(e.target.value)}
+              placeholder="Paste the text here..."
+              rows={8}
+              className="input-shop w-full text-sm font-mono"
+            />
+            <div className="flex items-center justify-between mt-2">
+              <div className="text-[10px] text-ink-3 uppercase tracking-widest">{pasteText.length} chars</div>
+              <button onClick={feedPaste} disabled={pasteBusy || pasteText.length < 30} className="btn-rust px-4 py-2 text-sm flex items-center gap-2 disabled:opacity-40" data-testid="paste-submit">
+                {pasteBusy ? <Loader size={14} className="animate-spin"/> : <ClipboardPaste size={14}/>}{pasteBusy ? "LEARNING..." : "FEED TO BRAIN"}
+              </button>
+            </div>
+            {pasteMsg && <div className="mt-2 text-xs text-ok" data-testid="paste-msg">{pasteMsg}</div>}
+          </div>
+        )}
       </div>
 
       <div className="panel">

@@ -34,7 +34,6 @@ log = logging.getLogger("datawrench.scraper")
 # Mapping: domain -> (login_url, username_selector, password_selector, submit_selector, success_wait_selector or None)
 LOGIN_RECIPES: Dict[str, Dict[str, Any]] = {
     "alldatadiy.com": {
-        # alldatadiy.com redirects to alldata.com/diy-us/en — use that login form
         "login_url": "https://www.alldata.com/diy-us/en/diy/login",
         "username_selector": "#edit-username",
         "password_selector": "#edit-password",
@@ -42,21 +41,35 @@ LOGIN_RECIPES: Dict[str, Dict[str, Any]] = {
         "success_marker": "logout",
     },
     "alldata.com": {
-        "login_url": "https://www.alldata.com/diy-us/en/diy/login",
-        "username_selector": "#edit-username",
-        "password_selector": "#edit-password",
-        "submit_selector": "#edit-submit",
+        # Pro / shop subscription. Login lives on my.alldata.com root.
+        "login_url": "https://my.alldata.com/",
+        "username_selector": "input[name=valUserName]",
+        "password_selector": "input[name=valPassword]",
+        "submit_selector": "#btnLogin",
+        "success_marker": "logout",
+    },
+    "my.alldata.com": {
+        "login_url": "https://my.alldata.com/",
+        "username_selector": "input[name=valUserName]",
+        "password_selector": "input[name=valPassword]",
+        "submit_selector": "#btnLogin",
         "success_marker": "logout",
     },
     "identifix.com": {
-        "login_url": "https://identifix.com/login",
-        "username_selector": "input[name=username], input[type=email]",
-        "password_selector": "input[name=password], input[type=password]",
-        "submit_selector": "button[type=submit], input[type=submit]",
+        "login_url": "https://dh.identifix.com/Default/LogOnIdentifix",
+        "username_selector": "#UserName",
+        "password_selector": "#Password",
+        "submit_selector": "#Login",
+        "success_marker": "logout",
+    },
+    "dh.identifix.com": {
+        "login_url": "https://dh.identifix.com/Default/LogOnIdentifix",
+        "username_selector": "#UserName",
+        "password_selector": "#Password",
+        "submit_selector": "#Login",
         "success_marker": "logout",
     },
     "forum.hptuners.com": {
-        # Forum is public for reading; login only needed for posting.
         "login_url": None,
     },
     "hptuners.com": {
@@ -164,21 +177,52 @@ def make_scraper_router(db, get_user, embed_text):
         needs_login = bool(recipe and recipe.get("login_url"))
         cred = None
         if needs_login:
-            if not body.vault_credential_id:
-                # Try to auto-pick a credential whose 'site' or 'url' matches the domain
-                host = urlparse(url).hostname or ""
-                cur = db.credentials.find({"user_id": user["id"]}, {"_id": 0})
-                creds = await cur.to_list(200)
-                for c in creds:
-                    if host and (host in (c.get("url") or "") or host in (c.get("site") or "").lower().replace(" ", "")):
-                        cred = c
-                        break
-                if not cred:
-                    raise HTTPException(400, f"This site requires login. Save credentials in your Vault for {host}, then try again.")
-            else:
+            # Figure out the canonical domain word ("alldata" / "identifix")
+            # We use this to match the credential by site/URL — Doc isn't going to
+            # paste hostnames into his Vault. He's going to write "AllData".
+            host = (urlparse(url).hostname or "").lower().replace("www.", "")
+            # Domain "root word" — first part before .com, e.g. "alldata", "identifix"
+            domain_root = ""
+            for d in LOGIN_RECIPES:
+                if host == d or host.endswith("." + d) or d.split(".")[0] in host:
+                    domain_root = d.split(".")[0]
+                    break
+            if not domain_root and host:
+                # fallback: just the part before .com
+                parts = host.split(".")
+                if len(parts) >= 2:
+                    domain_root = parts[-2]
+
+            def _matches(c):
+                """Match if any of: vault site/url contains the domain root word, or hostname.
+                Also tolerates common typos in the site field (idintifix -> identifix)."""
+                site = (c.get("site") or "").lower().replace(" ", "")
+                vurl = (c.get("url") or "").lower().replace("www.", "").replace(" ", "")
+                if domain_root and (domain_root in site or domain_root in vurl):
+                    return True
+                # Fuzzy: ignore vowels in match to absorb typos like "idintifix"/"identifix"
+                def _devowel(s):
+                    return "".join(ch for ch in s if ch not in "aeiou")
+                if domain_root and (_devowel(domain_root) in _devowel(site) or _devowel(domain_root) in _devowel(vurl)):
+                    return True
+                if host and (host in vurl or host in site):
+                    return True
+                return False
+
+            if body.vault_credential_id:
                 cred = await db.credentials.find_one({"id": body.vault_credential_id, "user_id": user["id"]}, {"_id": 0})
                 if not cred:
                     raise HTTPException(404, "Vault credential not found.")
+            else:
+                cur = db.credentials.find({"user_id": user["id"]}, {"_id": 0})
+                creds = await cur.to_list(200)
+                for c in creds:
+                    if _matches(c):
+                        cred = c
+                        break
+                if not cred:
+                    available = ", ".join([(c.get("site") or "?") for c in creds[:10]]) or "none"
+                    raise HTTPException(400, f"No Vault credential matches {host or 'this site'}. Saved sites: {available}. Make sure the SITE field in Vault contains '{domain_root or host}'.")
             if not cred.get("username") or not cred.get("password"):
                 raise HTTPException(400, "Vault credential is missing username or password.")
         # Fetch
