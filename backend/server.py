@@ -1678,6 +1678,16 @@ async def vehicle_create(body: VehicleReq, user=Depends(get_user)):
 
 @api.get("/vehicles")
 async def vehicle_list(user=Depends(get_user)):
+    # Auto-cleanup: drop vehicles with no year/make/model/VIN — they clutter the dropdown
+    await db.vehicles.delete_many({
+        "user_id": user["id"],
+        "$and": [
+            {"$or": [{"year": {"$in": [None, "", 0]}}, {"year": {"$exists": False}}]},
+            {"$or": [{"make": {"$in": [None, ""]}}, {"make": {"$exists": False}}]},
+            {"$or": [{"model": {"$in": [None, ""]}}, {"model": {"$exists": False}}]},
+            {"$or": [{"vin": {"$in": [None, ""]}}, {"vin": {"$exists": False}}]},
+        ]
+    })
     cur = db.vehicles.find({"user_id": user["id"]}, {"_id": 0}).sort("created_at", -1)
     return await cur.to_list(500)
 

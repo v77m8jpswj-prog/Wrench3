@@ -19,7 +19,7 @@ export default function Charts() {
   const [instruction, setInstruction] = useState("");
   const [label, setLabel] = useState("spark table");
   const [vehicleId, setVehicleId] = useState(app?.activeVehicleId || "");
-  const [vehicles, setVehicles] = useState([]);
+  const vehicles = app?.vehicles || [];
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -30,15 +30,14 @@ export default function Charts() {
   // Sync with global active vehicle whenever it changes
   useEffect(() => { if (app?.activeVehicleId) setVehicleId(app.activeVehicleId); }, [app?.activeVehicleId]);
 
-  // Load vehicles list — refresh on mount AND when window regains focus (catches newly-added vehicles)
-  const loadVehicles = async () => {
-    try { const r = await api.get("/vehicles"); setVehicles(r.data || []); } catch {/* ignore */}
-  };
+  // Refresh vehicles list — pulls from AppContext (single source of truth across pages)
+  const loadVehicles = () => { app?.refreshVehicles?.(); };
   useEffect(() => {
     loadVehicles();
     const onFocus = () => loadVehicles();
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Listen for image paste anywhere on this page (Cmd+V with image in clipboard)
@@ -191,7 +190,9 @@ export default function Charts() {
             >
               <option value="">-- NO VEHICLE --</option>
               {vehicles.map(v => {
-                const label = [v.year, v.make, v.model, v.engine_summary || v.engine].filter(Boolean).join(" ").trim() || (v.vin ? v.vin.slice(-6) : v.id.slice(0,6));
+                const ymm = [v.year, v.make, v.model].filter(Boolean).join(" ").trim();
+                const tail = v.vin ? `VIN ····${String(v.vin).slice(-6)}` : `ID ${v.id.slice(0,6)}`;
+                const label = ymm ? `${ymm}${v.engine_summary ? " · " + v.engine_summary : ""}` : tail;
                 return <option key={v.id} value={v.id}>{label}</option>;
               })}
             </select>

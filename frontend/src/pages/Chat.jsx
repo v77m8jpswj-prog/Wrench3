@@ -16,7 +16,7 @@ export default function Chat() {
   const [mode, setMode] = useState("direct");
   const [voiceOn, setVoiceOn] = useState(true);
   const [vehicleId, setVehicleId] = useState(app?.activeVehicleId || "");
-  const [vehicles, setVehicles] = useState([]);
+  const vehicles = app?.vehicles || [];
   const [showVinModal, setShowVinModal] = useState(false);
   const [sessions, setSessions] = useState([]);
   const [showSessions, setShowSessions] = useState(false);
@@ -78,9 +78,10 @@ export default function Chat() {
   const hasNativeSpeech = !!SR;
 
   useEffect(() => {
-    api.get("/vehicles").then(r => setVehicles(r.data || [])).catch(()=>{});
+    app?.refreshVehicles?.();
     refreshSessions();
     setTimeout(() => inputRef.current?.focus(), 300);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Sync vehicle with global active vehicle
@@ -533,9 +534,13 @@ export default function Chat() {
           <span className="text-ink-3 text-xs">{sessionId ? `SID: ${sessionId.slice(0,8)}` : "NEW SESSION"}</span>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <select data-testid="vehicle-select" value={vehicleId} onChange={e=>setVehicleId(e.target.value)} className="input-shop text-xs py-1" style={{width:"auto"}}>
+          <select data-testid="vehicle-select" value={vehicleId} onChange={e=>{setVehicleId(e.target.value); app?.setActiveVehicleId?.(e.target.value);}} className="input-shop text-xs py-1" style={{width:"auto"}}>
             <option value="">-- NO VEHICLE --</option>
-            {vehicles.map(v => <option key={v.id} value={v.id}>{`${v.year} ${v.make} ${v.model}`.trim() || v.id.slice(0,6)}</option>)}
+            {vehicles.map(v => {
+              const ymm = [v.year, v.make, v.model].filter(Boolean).join(" ").trim();
+              const tail = v.vin ? `VIN ····${String(v.vin).slice(-6)}` : `ID ${v.id.slice(0,6)}`;
+              return <option key={v.id} value={v.id}>{ymm || tail}</option>;
+            })}
           </select>
           <button data-testid="mode-toggle" onClick={()=>setMode(mode==="direct"?"dream":"direct")} className="btn-ghost text-xs">
             MODE: <span className={mode==="direct"?"text-rust":"text-amber2"}>{mode === "direct" ? "DIRECT" : "DREAM"}</span>
@@ -580,7 +585,7 @@ export default function Chat() {
           onPicked={(v) => {
             setVehicleId(v.id);
             app?.setActiveVehicleId(v.id);
-            setVehicles(prev => prev.some(x=>x.id===v.id) ? prev : [v, ...prev]);
+            app?.refreshVehicles?.();
             setShowVinModal(false);
           }}
         />
@@ -764,9 +769,13 @@ export default function Chat() {
               <button onClick={()=>setShowOptions(false)} className="text-ink-2 p-1"><X size={18}/></button>
             </div>
             <label className="label-shop">VEHICLE</label>
-            <select value={vehicleId} onChange={e=>setVehicleId(e.target.value)} className="input-shop mb-4">
+            <select value={vehicleId} onChange={e=>{setVehicleId(e.target.value); app?.setActiveVehicleId?.(e.target.value);}} className="input-shop mb-4">
               <option value="">-- NO VEHICLE --</option>
-              {vehicles.map(v => <option key={v.id} value={v.id}>{`${v.year} ${v.make} ${v.model}`.trim() || v.id.slice(0,6)}</option>)}
+              {vehicles.map(v => {
+                const ymm = [v.year, v.make, v.model].filter(Boolean).join(" ").trim();
+                const tail = v.vin ? `VIN ····${String(v.vin).slice(-6)}` : `ID ${v.id.slice(0,6)}`;
+                return <option key={v.id} value={v.id}>{ymm || tail}</option>;
+              })}
             </select>
             <button onClick={()=>setShowOptions(false)} className="btn-rust w-full">DONE</button>
           </div>
