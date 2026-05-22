@@ -908,7 +908,7 @@ function MessageRow({ m, idx }) {
           {m.imageName && <div className="text-[10px] text-ink-3 uppercase tracking-widest mt-1">SNIP: {m.imageName}</div>}
         </div>
       )}
-      <div className="mt-1 text-ink text-[13px] md:text-sm leading-relaxed">
+      <div className="mt-1 text-ink text-[15px] md:text-[15px] leading-[1.65]" style={{fontFamily:"'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif"}}>
         {renderRichContent(m.content)}
       </div>
       {m.citations && m.citations.length > 0 && (
@@ -1009,11 +1009,24 @@ function CopyableBlock({ text, lang }) {
   );
 }
 
+// Strip stray markdown (bold/italic asterisks, heading hashes) that the model occasionally leaks.
+// Only applied OUTSIDE code blocks — code blocks are passed through untouched.
+function stripMarkdown(s) {
+  if (!s) return s;
+  return s
+    .replace(/\*\*\*([^*\n]+?)\*\*\*/g, "$1")
+    .replace(/\*\*([^*\n]+?)\*\*/g, "$1")
+    .replace(/(^|\s)\*([^*\n]+?)\*(?=\s|[.,!?;:]|$)/g, "$1$2")
+    .replace(/__([^_\n]+?)__/g, "$1")
+    .replace(/^#{1,6}\s+/gm, "");
+}
+
 // Render text with URLs auto-linked as clickable <a> tags + image URLs as inline images
 const URL_RE = /\b(https?:\/\/[^\s<>"')]+)|(\bwww\.[^\s<>"')]+)/gi;
 const IMG_EXT_RE = /\.(?:png|jpe?g|gif|webp|bmp|svg)(?:\?[^\s<>")]*)?$/i;
 function renderWithLinks(text) {
   if (!text) return null;
+  text = stripMarkdown(text);
   const parts = [];
   let last = 0;
   let m;
