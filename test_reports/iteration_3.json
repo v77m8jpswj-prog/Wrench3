@@ -1,0 +1,63 @@
+{
+  "summary": "Owner-only regression of COPY/PASTE flows, VIN follow-through across Charts/Chat, and the Active Vehicle dropdown fix. Backend: 7/7 pytest assertions passed against /app/backend/tests/test_regression_charts_chat.py (login, vehicles count=8, no blank, Tahoe present, VIN decode, chart/edit table_text_out, letter HTML). Frontend Playwright: chart-vehicle and vehicle-select both list the same 8 vehicles with Tahoe at TOP and zero undefined entries; AppContext single-source-of-truth verified end-to-end (Charts→Chat→Charts switch propagates correctly); VIN-pull modal decodes 1GNSKBKC7GR197364 to 2016 Chevrolet Tahoe; chart LOAD EXAMPLE→APPLY CHANGES→COPY copies a 306-char tab-separated table to clipboard; Letter page renders pre#letter and the orange TAP TO COPY button works.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "Chat /chat — SEND button",
+        "issue": "SEND button is missing data-testid=\"chat-send\". Playwright had to fall back to button:has-text(\"SEND\"). Add data-testid for test stability.",
+        "selector": "button:has-text(\"SEND\")",
+        "priority": "LOW"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "Chat → CopyableBlock / COPY TABLE button",
+        "issue": "Could not independently verify the copy-table-btn click→'✓ COPIED' flow. With Tahoe active, the prompt 'paste me a 5x5 spark table … pure data only inside a code block' returned a guardrail reply (4 pre-flight clarification questions) instead of a fenced code block, so renderRichContent never instantiated CopyableBlock. The component code path exists; this is an LLM behaviour observation, not a code bug. To regression-test deterministically, either (a) seed a chat reply with a ``` fenced block, or (b) tune the system prompt so 'pure data only inside a code block' bypasses the pre-flight checklist.",
+        "affected_selectors": ["[data-testid=\"copy-block\"]", "[data-testid=\"copy-table-btn\"]"]
+      }
+    ],
+    "design_issues": [
+      {
+        "screen": "Letter page (/api/letter/fan-table-tahoe-v1)",
+        "issues": ["Spec wanted post-click button text '✓ COPIED — NOW PASTE IT', actual is 'TAP TO COPY AGAIN'. Visual feedback still confirms copy succeeded; flag only as a copy-text deviation from PRD."]
+      },
+      {
+        "screen": "ActiveVehicleBar (/chat)",
+        "issues": ["vin-bar-active text concatenates label + 'VIN' button label with no whitespace ('2016 CHEVROLET Tahoe LTVIN' in innerText). Visually separated, but innerText scrape shows them joined — minor a11y hint."]
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_regression_charts_chat.py",
+    "/app/test_reports/pytest/regression_charts_chat.xml"
+  ],
+  "action_items": [
+    "(LOW) Add data-testid=\"chat-send\" to the Chat SEND button.",
+    "(LOW / product) Confirm desired letter-page post-click copy: spec says '✓ COPIED — NOW PASTE IT'; current is 'TAP TO COPY AGAIN'.",
+    "(Optional) Consider tightening the WRENCH system prompt so explicit requests with 'pure data only inside a code block' skip the 4-question pre-flight and emit a fenced block immediately — would also enable a deterministic regression test for CopyableBlock."
+  ],
+  "critical_code_review_comments": [
+    "AppContext single-source-of-truth refactor is solid: selecting a vehicle on either Charts or Chat propagates to the other immediately on next mount. localStorage('dw_active_vehicle') persists across reloads.",
+    "Backend GET /api/vehicles auto-cleanup confirmed: blank-year/make/model/vin rows are gone, count is exactly 8.",
+    "Tahoe (1GNSKBKC7GR197364) renders at the TOP of both dropdowns (newest-first ordering) — good UX after the fix.",
+    "VIN modal opens via data-testid=\"vin-bar-add\" (when no active vehicle) or vin-bar-switch (when one is set). NHTSA decode returns within ~3s and surfaces 2016/CHEVROLET/Tahoe in the modal.",
+    "Chart /api/chart/edit response field is table_text_out (matches frontend); copy-result button copies 306 chars containing both tabs and newlines — clipboard verified via navigator.clipboard.readText()."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_regression_charts_chat.py (new)"
+  ],
+  "success_rate": {
+    "backend": "100% (7/7)",
+    "frontend": "95% (1 sub-flow — CopyableBlock click — could not be triggered because LLM returned a pre-flight reply instead of a fenced block; all other flows green)"
+  },
+  "test_credentials": "Owner doc@drunderhood.com / wrench — works.",
+  "seed_data_creation": "None. No vehicles created or deleted. Two short chat messages were sent to the Tahoe session for the CopyableBlock test; safe to leave in DB.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Run /app/backend/tests/test_regression_charts_chat.py first (~3s, 7 tests). Vehicles are expected to be exactly 8 with Tahoe (1GNSKBKC7GR197364) at the top. /api/chart/edit takes body { table_text, instruction } — NOT table_text_in. To re-test the chat CopyableBlock, send a prompt that bypasses the pre-flight checklist (e.g. 'NO pre-flight, just dump a 5x5 spark sample, mock data ok, fenced block').",
+  "rca_of_the_issue": "No real bug found in the AppContext refactor or the auto-cleanup logic. The single observable miss vs. PRD is the chat CopyableBlock click — root cause is the LLM safety prompt returning clarification questions rather than a code block; the React component (Chat.jsx renderRichContent + CopyableBlock) is wired correctly. One test-script issue fixed during this run: /api/chart/edit field name is `table_text` not `table_text_in`."
+}
