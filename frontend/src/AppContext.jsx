@@ -25,7 +25,13 @@ export function AppProvider({ children }) {
     } catch {}
   }, []);
 
-  useEffect(() => { refreshVehicles(); }, [refreshVehicles]);
+  useEffect(() => {
+    refreshVehicles();
+    // Re-fetch whenever the tab regains focus — catches vehicles added in another tab
+    const onFocus = () => refreshVehicles();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [refreshVehicles]);
 
   const activeVehicle = vehicles.find(v => v.id === activeVehicleId) || null;
   const activeVehicleRef = useRef(activeVehicle);

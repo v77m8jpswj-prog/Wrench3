@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Copy, Wand2, ClipboardPaste, RefreshCw, ImagePlus, Type, Camera } from "lucide-react";
+import { Copy, Wand2, ClipboardPaste, RefreshCw, ImagePlus, Type, Camera, Truck } from "lucide-react";
 import api from "@/api";
+import { useApp } from "@/AppContext";
 
 const EXAMPLE = `\tRPM 800\tRPM 1600\tRPM 2400\tRPM 3200\tRPM 4000\tRPM 4800\tRPM 5600\tRPM 6400
 kPa 20\t8.0\t10.5\t14.0\t18.5\t22.0\t24.5\t25.0\t25.5
@@ -10,13 +11,14 @@ kPa 80\t13.5\t18.0\t22.0\t25.5\t27.5\t28.0\t28.0\t27.5
 kPa 100\t14.0\t19.0\t22.5\t25.0\t26.5\t26.5\t26.0\t25.0`;
 
 export default function Charts() {
+  const app = useApp();
   const [mode, setMode] = useState("text"); // "text" or "image"
   const [tableText, setTableText] = useState("");
   const [imageFile, setImageFile] = useState(null);
   const [imagePreview, setImagePreview] = useState(null);
   const [instruction, setInstruction] = useState("");
   const [label, setLabel] = useState("spark table");
-  const [vehicleId, setVehicleId] = useState("");
+  const [vehicleId, setVehicleId] = useState(app?.activeVehicleId || "");
   const [vehicles, setVehicles] = useState([]);
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -25,7 +27,19 @@ export default function Charts() {
   const fileInputRef = useRef(null);
   const pasteAreaRef = useRef(null);
 
-  useEffect(() => { api.get("/vehicles").then(r => setVehicles(r.data || [])).catch(()=>{}); }, []);
+  // Sync with global active vehicle whenever it changes
+  useEffect(() => { if (app?.activeVehicleId) setVehicleId(app.activeVehicleId); }, [app?.activeVehicleId]);
+
+  // Load vehicles list — refresh on mount AND when window regains focus (catches newly-added vehicles)
+  const loadVehicles = async () => {
+    try { const r = await api.get("/vehicles"); setVehicles(r.data || []); } catch {/* ignore */}
+  };
+  useEffect(() => {
+    loadVehicles();
+    const onFocus = () => loadVehicles();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, []);
 
   // Listen for image paste anywhere on this page (Cmd+V with image in clipboard)
   useEffect(() => {
@@ -72,7 +86,7 @@ export default function Charts() {
         if (vehicleId) fd.append("vehicle_id", vehicleId);
         r = await api.post("/chart/edit-image", fd, { headers: { "Content-Type": "multipart/form-data" }, timeout: 90000 });
       } else if (mode === "text" && tableText.trim()) {
-        r = await api.post("/chart/edit", { table_text: tableText, instruction, table_label: label }, { timeout: 90000 });
+        r = await api.post("/chart/edit", { table_text: tableText, instruction, table_label: label, vehicle_id: vehicleId || undefined }, { timeout: 90000 });
       } else {
         throw new Error(mode === "image" ? "Upload or paste an image first." : "Paste a table first.");
       }
@@ -160,11 +174,32 @@ export default function Charts() {
           </div>
 
           <div className="mt-3">
-            <label className="label-shop">VEHICLE (for context-aware tuning)</label>
-            <select data-testid="chart-vehicle" value={vehicleId} onChange={e=>setVehicleId(e.target.value)} className="input-shop">
+            <div className="flex items-center justify-between mb-1">
+              <label className="label-shop !mb-0 flex items-center gap-1"><Truck size={11}/>VEHICLE (CONTEXT-AWARE TUNING)</label>
+              <button onClick={loadVehicles} className="text-[10px] uppercase tracking-widest text-ink-3 hover:text-rust flex items-center gap-1" data-testid="refresh-vehicles" title="Refresh vehicle list">
+                <RefreshCw size={10}/>REFRESH
+              </button>
+            </div>
+            <select
+              data-testid="chart-vehicle"
+              value={vehicleId}
+              onChange={e=>{
+                setVehicleId(e.target.value);
+                app?.setActiveVehicleId?.(e.target.value); // propagate to global, so CHAT/DIFF also see it
+              }}
+              className="input-shop"
+            >
               <option value="">-- NO VEHICLE --</option>
-              {vehicles.map(v => <option key={v.id} value={v.id}>{`${v.year} ${v.make} ${v.model} ${v.engine||""}`.trim() || v.id.slice(0,6)}</option>)}
+              {vehicles.map(v => {
+                const label = [v.year, v.make, v.model, v.engine_summary || v.engine].filter(Boolean).join(" ").trim() || (v.vin ? v.vin.slice(-6) : v.id.slice(0,6));
+                return <option key={v.id} value={v.id}>{label}</option>;
+              })}
             </select>
+            {vehicleId && vehicles.find(v=>v.id===vehicleId) && (
+              <div className="text-[10px] text-amber2 mt-1 uppercase tracking-widest">
+                ACTIVE: {(() => { const v = vehicles.find(x=>x.id===vehicleId); return [v.year,v.make,v.model].filter(Boolean).join(" "); })()}
+              </div>
+            )}
           </div>
 
           <div className="mt-3">
