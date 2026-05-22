@@ -784,6 +784,29 @@ async def chat(body: ChatReq, user=Depends(get_user)):
 
     sys_prompt = build_system_prompt(user, body.mode, heat, vehicle, memory_facts, lib_chunks)
 
+    # --- LEARNING: inject recent tune log entries for the active vehicle so Wrench remembers Doc's prior tunes ---
+    if vehicle and vehicle.get("id"):
+        try:
+            tune_history = await db.tune_log.find(
+                {"user_id": user["id"], "vehicle_id": vehicle["id"]},
+                {"_id": 0}
+            ).sort("created_at", -1).limit(8).to_list(8)
+            # Also pull active session OS/cal/fuel/goal context
+            tune_sess = await db.tune_sessions.find_one(
+                {"user_id": user["id"], "vehicle_id": vehicle["id"], "active": True},
+                {"_id": 0}, sort=[("created_at", -1)]
+            )
+            if tune_history or tune_sess:
+                tune_block = "\n\nTUNE MEMORY FOR THIS VEHICLE (Wrench learned this from Doc's past edits — recall it):\n"
+                if tune_sess:
+                    tune_block += f"  Active session: OS={tune_sess.get('os_family','')} cal={tune_sess.get('cal_id','')} engine={tune_sess.get('engine_code','')} fuel={tune_sess.get('fuel','')} goal={tune_sess.get('goal','')}\n"
+                for e in tune_history:
+                    path = f"{e.get('section','')} > {e.get('tab','')}" + (f" > {e.get('subtab')}" if e.get('subtab') else "")
+                    tune_block += f"  · {path} [{e.get('table_name','')}] sym=\"{e.get('symptom','')}\" — {e.get('instruction','')[:140]}\n"
+                sys_prompt += tune_block
+        except Exception as _e:
+            log.warning(f"tune memory inject failed: {_e}")
+
     # --- Auto web-search trigger ---
     # If Doc's message has visual / lookup intent, run a web search first and inject results.
     msg_lower = body.message.lower()
@@ -2229,6 +2252,7 @@ from brain import make_brain_router, embed_text as _brain_embed, case_text_blob 
 from team_chat import make_team_chat_router  # noqa: E402
 from email_mod import make_email_router, make_email_brain_router  # noqa: E402
 from scraper import make_scraper_router  # noqa: E402
+from tune_mod import build_router as build_tune_router  # noqa: E402
 brain_router = make_brain_router(db, get_user)
 api.include_router(brain_router)
 team_chat_router = make_team_chat_router(db, get_user, embed_text=_brain_embed, case_text_blob=_brain_case_blob)
@@ -2239,6 +2263,8 @@ email_brain_router = make_email_brain_router(db)
 api.include_router(email_brain_router)
 scraper_router = make_scraper_router(db, get_user, embed_text=_brain_embed)
 api.include_router(scraper_router)
+tune_router = build_tune_router(db, get_user)
+api.include_router(tune_router)
 
 
 # ============ Register router ============

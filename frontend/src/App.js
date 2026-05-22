@@ -18,6 +18,7 @@ import Letters from "@/pages/Letters";
 import Jobs from "@/pages/Jobs";
 import Email from "@/pages/Email";
 import DiffTune from "@/pages/DiffTune";
+import Tune from "@/pages/Tune";
 import Leads from "@/pages/Leads";
 import ShopLanding from "@/pages/ShopLanding";
 import Settings from "@/pages/Settings";
@@ -64,6 +65,7 @@ function App() {
                 <Route path="/jobs" element={<Protected><Jobs /></Protected>} />
                 <Route path="/email" element={<Protected><Email /></Protected>} />
                 <Route path="/diff" element={<Protected><DiffTune /></Protected>} />
+                <Route path="/tune" element={<Protected><Tune /></Protected>} />
                 <Route path="/leads" element={<Protected><Leads /></Protected>} />
                 <Route path="/settings" element={<Protected><Settings /></Protected>} />
                 <Route path="*" element={<Navigate to="/" />} />

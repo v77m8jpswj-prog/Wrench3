@@ -14,7 +14,7 @@ const NAV = [
   { to: "/cases", icon: FolderArchive, label: "CASES", id: "nav-cases" },
   { to: "/letters", icon: Mail, label: "LETTERS", id: "nav-letters" },
   { to: "/charts", icon: Grid3x3, label: "CHARTS", id: "nav-charts" },
-  { to: "/diff", icon: GitCompare, label: "DIFF TUNE", id: "nav-diff" },
+  { to: "/tune", icon: Wrench, label: "TUNE", id: "nav-tune" },
   { to: "/library", icon: BookOpen, label: "LIBRARY", id: "nav-library" },
   { to: "/datalog", icon: Activity, label: "DATALOG", id: "nav-datalog" },
   { to: "/vehicles", icon: Truck, label: "VEHICLES", id: "nav-vehicles" },
