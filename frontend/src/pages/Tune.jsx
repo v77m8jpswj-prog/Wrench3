@@ -217,8 +217,45 @@ export default function Tune() {
         </div>
       </div>
 
-      {/* Messages */}
+      {/* Pending image preview strip */}
+      {pendingImage && (
+        <div className="border-b border-line bg-bg-2 px-3 py-2 flex items-center gap-3" data-testid="pending-image">
+          <img src={pendingImage.preview} alt="snip" className="h-14 border border-line"/>
+          <div className="text-[11px] text-amber2 uppercase tracking-widest">SNIP READY — TYPE INSTRUCTION & SEND</div>
+          <button onClick={()=>setPendingImage(null)} className="ml-auto btn-ghost text-[10px] !py-1 !px-2" data-testid="clear-pending-image">✕ CLEAR</button>
+        </div>
+      )}
+
+      {/* Input bar — TOP (replies appear below it) */}
+      <div className="border-b border-line bg-bg-2 p-3 flex items-end gap-2 sticky top-0 z-20">
+        <input ref={fileRef} type="file" accept="image/*" hidden onChange={e=>e.target.files?.[0] && handleFile(e.target.files[0])} data-testid="tune-file-input"/>
+        <button onClick={()=>fileRef.current?.click()} className="btn-ghost !p-3" title="Attach snip" data-testid="tune-attach">
+          <Paperclip size={16}/>
+        </button>
+        <textarea
+          ref={inputRef}
+          data-testid="tune-input"
+          value={input}
+          onChange={e=>setInput(e.target.value)}
+          onKeyDown={e=>{ if (e.key==="Enter" && !e.shiftKey){ e.preventDefault(); send(); } }}
+          placeholder='Type or paste a table (Ctrl+V) · attach a snip · Wrench answers in HP Tuners path + paste-ready table'
+          rows={2}
+          className="input-shop flex-1 resize-none text-sm py-3"
+        />
+        <button onClick={send} disabled={busy || (!input.trim() && !pendingImage)} className="btn-rust h-14 px-4 flex items-center gap-2" data-testid="tune-send">
+          <Send size={16}/>SEND
+        </button>
+      </div>
+
+      {err && <div className="px-4 py-2 border-b border-danger bg-danger/10 text-danger text-xs uppercase tracking-widest">ERR: {err}</div>}
+
+      {/* Messages — newest first under the input */}
       <div ref={scrollRef} className="flex-1 overflow-auto" data-testid="tune-messages">
+        {busy && (
+          <div className="px-6 py-3 text-ink-3 text-xs uppercase tracking-widest flex items-center gap-2 border-b border-line">
+            <RefreshCw size={12} className="animate-spin"/> WRENCH WORKING...
+          </div>
+        )}
         {messages.length === 0 ? (
           <div className="p-8 text-center text-ink-3 max-w-xl mx-auto">
             <ClipboardPaste size={28} className="mx-auto mb-3 text-rust"/>
@@ -241,45 +278,8 @@ export default function Tune() {
             </div>
           </div>
         ) : (
-          messages.map((m, i) => <Msg key={i} m={m} idx={i}/>)
+          [...messages].reverse().map((m, i) => <Msg key={messages.length - 1 - i} m={m} idx={messages.length - 1 - i}/>)
         )}
-        {busy && (
-          <div className="px-6 py-3 text-ink-3 text-xs uppercase tracking-widest flex items-center gap-2">
-            <RefreshCw size={12} className="animate-spin"/> WRENCH WORKING...
-          </div>
-        )}
-      </div>
-
-      {err && <div className="px-4 py-2 border-t border-danger bg-danger/10 text-danger text-xs uppercase tracking-widest">ERR: {err}</div>}
-
-      {/* Pending image preview strip */}
-      {pendingImage && (
-        <div className="border-t border-line bg-bg-2 px-3 py-2 flex items-center gap-3" data-testid="pending-image">
-          <img src={pendingImage.preview} alt="snip" className="h-14 border border-line"/>
-          <div className="text-[11px] text-amber2 uppercase tracking-widest">SNIP READY — TYPE INSTRUCTION & SEND</div>
-          <button onClick={()=>setPendingImage(null)} className="ml-auto btn-ghost text-[10px] !py-1 !px-2" data-testid="clear-pending-image">✕ CLEAR</button>
-        </div>
-      )}
-
-      {/* Input bar */}
-      <div className="border-t border-line bg-bg-2 p-3 flex items-end gap-2">
-        <input ref={fileRef} type="file" accept="image/*" hidden onChange={e=>e.target.files?.[0] && handleFile(e.target.files[0])} data-testid="tune-file-input"/>
-        <button onClick={()=>fileRef.current?.click()} className="btn-ghost !p-3" title="Attach snip" data-testid="tune-attach">
-          <Paperclip size={16}/>
-        </button>
-        <textarea
-          ref={inputRef}
-          data-testid="tune-input"
-          value={input}
-          onChange={e=>setInput(e.target.value)}
-          onKeyDown={e=>{ if (e.key==="Enter" && !e.shiftKey){ e.preventDefault(); send(); } }}
-          placeholder='Type or paste a table (Ctrl+V) · attach a snip · Wrench answers in HP Tuners path + paste-ready table'
-          rows={2}
-          className="input-shop flex-1 resize-none text-sm py-3"
-        />
-        <button onClick={send} disabled={busy || (!input.trim() && !pendingImage)} className="btn-rust h-14 px-4 flex items-center gap-2" data-testid="tune-send">
-          <Send size={16}/>SEND
-        </button>
       </div>
     </div>
   );

@@ -130,12 +130,29 @@ export default function TeamChat() {
           </div>
         )}
 
+        {/* Input bar — TOP under header (Doc's standard layout) */}
+        <div className="border-b border-line bg-bg-2 px-3 md:px-6 py-3 flex gap-2 sticky top-0 z-10" data-testid="team-chat-input-bar">
+          <textarea
+            data-testid="team-chat-input"
+            rows={1}
+            value={input}
+            onChange={e=>setInput(e.target.value)}
+            onKeyDown={e=>{ if (e.key==="Enter" && !e.shiftKey){ e.preventDefault(); send(); } }}
+            placeholder={activeThread?.kind==="channel"?`Message #${activeThread.name}`:`Message ${activeThread?.name || "..."}`}
+            className="input-shop flex-1 resize-none text-sm py-3"
+            style={{minHeight:"48px"}}
+          />
+          <button data-testid="team-chat-send" onClick={send} className="btn-rust px-4 flex items-center gap-1.5">
+            <Send size={16}/><span className="hidden sm:inline">SEND</span>
+          </button>
+        </div>
+
         <div className="flex-1 overflow-auto px-3 md:px-6 py-3 space-y-2" data-testid="thread-messages">
           {messages.length === 0 ? (
             <div className="text-ink-3 text-sm text-center py-8">
               {activeThread?.kind === "channel" ? "No shop messages yet. Drop the first one." : "No messages yet. Say something."}
             </div>
-          ) : messages.map(m => {
+          ) : [...messages].reverse().map(m => {
             const isMe = me && m.from_user_id === me.id;
             return (
               <div key={m.id} className={`flex ${isMe?"justify-end":"justify-start"}`} data-testid={`msg-${m.id}`}>
@@ -150,22 +167,6 @@ export default function TeamChat() {
             );
           })}
           <div ref={endRef} />
-        </div>
-
-        <div className="border-t border-line bg-bg-2 px-3 md:px-6 py-3 flex gap-2 safe-bottom" data-testid="team-chat-input-bar">
-          <textarea
-            data-testid="team-chat-input"
-            rows={1}
-            value={input}
-            onChange={e=>setInput(e.target.value)}
-            onKeyDown={e=>{ if (e.key==="Enter" && !e.shiftKey){ e.preventDefault(); send(); } }}
-            placeholder={activeThread?.kind==="channel"?`Message #${activeThread.name}`:`Message ${activeThread?.name || "..."}`}
-            className="input-shop flex-1 resize-none text-sm py-3"
-            style={{minHeight:"48px"}}
-          />
-          <button data-testid="team-chat-send" onClick={send} className="btn-rust px-4 flex items-center gap-1.5">
-            <Send size={16}/><span className="hidden sm:inline">SEND</span>
-          </button>
         </div>
       </main>
     </div>

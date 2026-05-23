@@ -290,6 +290,13 @@ function TechManager() {
       )}
 
       <div className="space-y-1">
+        {techs.length === 0 && (
+          <div className="border-2 border-amber2/40 bg-amber2/5 px-3 py-3 text-xs text-amber2 uppercase tracking-widest" data-testid="techs-empty-warning">
+            {typeof window !== "undefined" && /preview\.emergentagent\.com/.test(window.location.hostname)
+              ? "⚠ YOU'RE ON PREVIEW. YOUR REAL TECHS LIVE ON FOREMAN.DRUNDERHOOD.COM — THEY ARE NOT GONE."
+              : "No techs yet. Add the first one above."}
+          </div>
+        )}
         {techs.map(t => (
           <div key={t.id} className="flex items-center justify-between border border-line bg-bg-1 px-3 py-2" data-testid={`tech-row-${t.id}`}>
             <div className="min-w-0">
