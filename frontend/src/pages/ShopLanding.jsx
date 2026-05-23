@@ -24,7 +24,7 @@ export default function ShopLanding() {
         <div className="absolute inset-0 grain opacity-30"/>
         <div className="relative max-w-5xl mx-auto">
           <div className="flex items-center gap-3 mb-2">
-            <WrenchIcon size={28} className="text-rust"/>
+            <img src="/drunderhood-logo.jpg" alt="" className="w-12 h-12 md:w-14 md:h-14 object-contain"/>
             <div className="text-[11px] text-ink-3 uppercase tracking-widest">PERFORMANCE · DIAGNOSTICS · TUNING</div>
           </div>
           <h1 className="heading text-4xl md:text-6xl lg:text-7xl leading-none mb-3">

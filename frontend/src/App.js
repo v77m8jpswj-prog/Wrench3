@@ -22,6 +22,7 @@ import DiffTune from "@/pages/DiffTune";
 import Tune from "@/pages/Tune";
 import Leads from "@/pages/Leads";
 import ShopLanding from "@/pages/ShopLanding";
+import { Navigate } from "react-router-dom";
 import Settings from "@/pages/Settings";
 import Shell from "@/components/Shell";
 
@@ -49,6 +50,7 @@ function App() {
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route path="/shop/:shopId" element={<ShopLanding />} />
+          <Route path="/quote" element={<Navigate to="/shop/drunderhood-fortsmith" replace />} />
           <Route path="/*" element={
             <AppProvider>
               <Routes>
