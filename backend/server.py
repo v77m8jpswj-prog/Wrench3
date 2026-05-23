@@ -248,7 +248,7 @@ DEFAULT MODE: Be yourself. Gruff, a little smart-ass, but useful first, funny se
             base += f"- {f}\n"
 
     if lib_chunks:
-        base += "\nLIBRARY CONTEXT (cite by source name when used):\n"
+        base += "\nLIBRARY CONTEXT (use ONLY if directly relevant to Doc's question — DO NOT dump these as SOURCES unless he explicitly asks for citations. Most messages do NOT need a library dump.):\n"
         for c in lib_chunks[:8]:
             base += f"[Source: {c.get('source','unknown')}] {c.get('text','')[:600]}\n---\n"
 
@@ -401,12 +401,17 @@ def score_chunk(query_tokens: List[str], chunk_text: str) -> int:
 
 async def retrieve_library(user_id: str, query: str, k: int = 5) -> List[Dict]:
     qt = [t for t in tokenize(query) if len(t) > 2]
-    if not qt:
+    # Skip RAG entirely for short/chitchat messages — they trigger garbage matches
+    # ("are you here", "yo", "hey wrench", "ping", "still there", etc.)
+    if len(qt) < 3:
         return []
     cursor = db.library_chunks.find({"user_id": user_id}, {"_id": 0})
     chunks = await cursor.to_list(2000)
     scored = [(score_chunk(qt, c["text"]), c) for c in chunks]
-    scored = [s for s in scored if s[0] > 0]
+    # Require AT LEAST 2 matching tokens AND a minimum match-to-query-length ratio.
+    # Old code dumped any chunk with score > 0, which surfaced junk on any 1-keyword hit.
+    min_score = max(2, len(qt) // 3)
+    scored = [s for s in scored if s[0] >= min_score]
     scored.sort(key=lambda x: x[0], reverse=True)
     return [c for _, c in scored[:k]]
 
