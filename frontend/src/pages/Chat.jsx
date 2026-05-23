@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { Mic, Send, Volume2, VolumeX, ChevronRight, Square, History, Settings2, X, Paperclip, FolderPlus, Truck, Plus, Check, AlertCircle } from "lucide-react";
 import api, { API, getToken } from "@/api";
 import { useApp } from "@/AppContext";
+import { useWakeLock } from "@/hooks/useWakeLock";
 
 const setStatus = (label, color) => window.dispatchEvent(new CustomEvent("wrench-status", { detail: { label, color } }));
 
@@ -55,6 +56,9 @@ export default function Chat() {
   const speechRecRef = useRef(null);
   const audioElRef = useRef(null);
   const audioUnlockedRef = useRef(false);
+
+  // Keep the screen on while Chat is open (so it doesn't sleep mid-tune under a truck)
+  useWakeLock(true);
 
   // Unlock iOS audio playback — must be called inside a user gesture
   const unlockAudio = () => {

@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { Phone, PhoneOff, Mic, MicOff, Volume2 } from "lucide-react";
 import { useApp } from "@/AppContext";
+import { useWakeLock } from "@/hooks/useWakeLock";
 
 export default function Call() {
   const {
@@ -8,6 +9,9 @@ export default function Call() {
     setCallVolume, startCall, endCall, sendCallText, toggleCallMute, haltWrench,
     activeVehicle,
   } = useApp();
+
+  // Keep the screen on while on a call (any state — listening, connecting, connected)
+  useWakeLock(callState !== "idle");
   const [typed, setTyped] = useState("");
 
   const send = () => {

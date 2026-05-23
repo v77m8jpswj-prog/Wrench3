@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import { useApp } from "@/AppContext";
 import api from "@/api";
+import { useWakeLock } from "@/hooks/useWakeLock";
 import { Send, Paperclip, Truck, Copy, Check, RefreshCw, ClipboardPaste, AlertTriangle } from "lucide-react";
 
 // ───────────────────────────────────────────────────────────────────────────────
@@ -32,6 +33,9 @@ export default function Tune() {
   const fileRef = useRef(null);
   const inputRef = useRef(null);
   const scrollRef = useRef(null);
+
+  // Keep the screen on while Tune page is open
+  useWakeLock(true);
 
   // Load OS list once
   useEffect(() => { api.get("/tune/os-list").then(r => setOsList(r.data || [])).catch(()=>{}); }, []);
