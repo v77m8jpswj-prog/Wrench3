@@ -1,18 +1,16 @@
-import React, { useState, useEffect, useMemo, useRef } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { useApp } from "@/AppContext";
 import api from "@/api";
-import {
-  ChevronRight, ChevronDown, RefreshCw, Wand2, Copy, ImagePlus, Type,
-  ArrowRight, BookOpen, Truck, AlertTriangle, Check, Camera, ClipboardPaste
-} from "lucide-react";
+import { Send, Paperclip, Truck, Copy, Check, RefreshCw, ClipboardPaste, AlertTriangle } from "lucide-react";
 
 // ───────────────────────────────────────────────────────────────────────────────
-// TUNE — OS-aware ordered tuning workflow.
-// Left rail: HP Tuners menu structure for the active OS.
-// Center: current tab — paste/snip the actual chart, give instruction, get clean
-//         paste-ready table back in Doc's locked format.
-// Right: tune log for this vehicle (Wrench's memory of past edits).
+// TUNE — focused chat for Doc to do HP Tuners work.
+// No forms. Just: vehicle context, message history, input box.
+// Paste cells or snip anywhere → goes to Wrench → he returns locked-format
+// tables with one-tap COPY back into HP Tuners.
 // ───────────────────────────────────────────────────────────────────────────────
+
+const TUNE_SESSION_KEY = "dw_tune_session";
 
 export default function Tune() {
   const app = useApp();
@@ -20,161 +18,145 @@ export default function Tune() {
   const activeVehicleId = app?.activeVehicleId || "";
   const activeVehicle = vehicles.find(v => v.id === activeVehicleId);
 
-  // OS state
-  const [osList, setOsList] = useState([]);
-  const [session, setSession] = useState(null); // current tune session for this vehicle
+  const [session, setSession] = useState(null);
   const [showSessionSetup, setShowSessionSetup] = useState(false);
+  const [osList, setOsList] = useState([]);
 
-  // OS tree + selection
-  const [osTree, setOsTree] = useState(null);
-  const [selectedPath, setSelectedPath] = useState(null); // {section, tab, subtab, path}
-  const [collapsed, setCollapsed] = useState({});         // section → collapsed?
-
-  // Chart edit state
-  const [tableText, setTableText] = useState("");
-  const [imageFile, setImageFile] = useState(null);
-  const [imagePreview, setImagePreview] = useState(null);
-  const [instruction, setInstruction] = useState("");
-  const [symptom, setSymptom] = useState("");
-  const [tableName, setTableName] = useState("");
-  const [mode, setMode] = useState("text");
-  const [result, setResult] = useState(null);
+  const [messages, setMessages] = useState([]);
+  const [sessionId, setSessionId] = useState(() => localStorage.getItem(TUNE_SESSION_KEY) || null);
+  const [input, setInput] = useState("");
+  const [pendingImage, setPendingImage] = useState(null); // {file, preview}
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
-  const [copied, setCopied] = useState(false);
 
-  // Tune log
-  const [tuneLog, setTuneLog] = useState([]);
   const fileRef = useRef(null);
+  const inputRef = useRef(null);
+  const scrollRef = useRef(null);
 
   // Load OS list once
   useEffect(() => { api.get("/tune/os-list").then(r => setOsList(r.data || [])).catch(()=>{}); }, []);
 
-  // Whenever active vehicle changes — load session + log
+  // Load tune session for the active vehicle
   useEffect(() => {
-    if (!activeVehicleId) { setSession(null); setOsTree(null); setTuneLog([]); return; }
+    if (!activeVehicleId) { setSession(null); return; }
     (async () => {
       try {
         const r = await api.get(`/tune/session/${activeVehicleId}`);
         const s = r.data && Object.keys(r.data).length ? r.data : null;
         setSession(s);
-        if (s?.os_family) {
-          const t = await api.get(`/tune/os-tree/${s.os_family}`);
-          setOsTree(t.data);
-        } else {
-          setShowSessionSetup(true);
-        }
-      } catch {/* ignore */}
-      try {
-        const r = await api.get(`/tune/log/${activeVehicleId}?limit=50`);
-        setTuneLog(r.data || []);
+        if (!s) setShowSessionSetup(true);
       } catch {/* ignore */}
     })();
   }, [activeVehicleId]);
 
-  const flat = osTree?.flat || [];
-  const currentIdx = flat.findIndex(p => p.path === selectedPath?.path);
-  const nextPath = currentIdx >= 0 && currentIdx < flat.length - 1 ? flat[currentIdx + 1] : null;
+  // Persist + restore tune chat session
+  useEffect(() => {
+    if (sessionId) {
+      localStorage.setItem(TUNE_SESSION_KEY, sessionId);
+      // Restore messages for this session
+      api.get(`/chat/sessions/${sessionId}`).then(r => {
+        const msgs = r.data?.messages || [];
+        if (msgs.length) setMessages(msgs);
+      }).catch(()=>{});
+    }
+  }, [sessionId]);
 
-  // Page-level paste handler — auto-detect image (Win+Shift+S snip from HP Tuners)
-  // vs tab-separated text (cell copy from HP Tuners). Works anywhere on the page.
+  // Auto-scroll to bottom on new message
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+  }, [messages, busy]);
+
+  // Page-level paste: text → input, image → pending attachment
   useEffect(() => {
     const onPaste = (e) => {
+      // If user is in the textarea typing, let text paste behave normally
+      const inTextarea = document.activeElement?.tagName === "TEXTAREA";
       const items = e.clipboardData?.items;
       if (!items) return;
-      // First pass: look for an image (snip)
       for (const it of items) {
         if (it.type && it.type.startsWith("image/")) {
           const blob = it.getAsFile();
           if (blob) {
-            setMode("image");
-            handleFile(blob);
+            setPendingImage({ file: blob, preview: URL.createObjectURL(blob) });
             e.preventDefault();
             return;
           }
         }
       }
-      // Second pass: tab-separated text (HP Tuners cell copy)
-      const text = e.clipboardData.getData("text");
-      if (text && (text.includes("\t") || text.split("\n").length >= 2)) {
-        setMode("text");
-        setTableText(prev => prev ? prev : text);
-        // don't preventDefault — let it also land inside textarea if focused
+      if (!inTextarea) {
+        const text = e.clipboardData.getData("text");
+        if (text) {
+          setInput(prev => prev ? prev + "\n" + text : text);
+        }
       }
     };
     window.addEventListener("paste", onPaste);
     return () => window.removeEventListener("paste", onPaste);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleFile = (file) => {
-    setImageFile(file);
-    const url = URL.createObjectURL(file);
-    setImagePreview(url);
+    setPendingImage({ file, preview: URL.createObjectURL(file) });
   };
 
-  const runEdit = async () => {
-    if (!selectedPath) { setErr("Pick a tab on the left first."); return; }
-    if (!instruction.trim()) { setErr("Write what you want changed."); return; }
-    setBusy(true); setErr(""); setResult(null);
-    try {
-      const contextHeader = `OS: ${session?.os_family}${session?.cal_id ? ` (cal ${session.cal_id})` : ""} | Engine: ${session?.engine_code || activeVehicle?.engine || "unknown"} | Fuel: ${session?.fuel || "?"} | Goal: ${session?.goal || "daily"}\nHP Tuners path: ${selectedPath.path}\nTable name: ${tableName || "(unspecified)"}\nSymptom: ${symptom || "(none stated)"}\n\n${instruction}`;
-      let r;
-      if (mode === "image" && imageFile) {
-        const fd = new FormData();
-        fd.append("file", imageFile);
-        fd.append("instruction", contextHeader);
-        fd.append("table_label", tableName || selectedPath.tab);
-        if (activeVehicleId) fd.append("vehicle_id", activeVehicleId);
-        r = await api.post("/chart/edit-image", fd, { timeout: 90000, headers: { "Content-Type": "multipart/form-data" }});
-      } else {
-        r = await api.post("/chart/edit", {
-          table_text: tableText, instruction: contextHeader, table_label: tableName || selectedPath.tab,
-          vehicle_id: activeVehicleId || undefined
-        }, { timeout: 90000 });
-      }
-      setResult(r.data);
+  const send = async () => {
+    if (busy) return;
+    if (!input.trim() && !pendingImage) return;
+    if (!session?.os_family) { setShowSessionSetup(true); return; }
 
-      // Log to tune log automatically (learning)
-      try {
-        await api.post("/tune/log", {
-          vehicle_id: activeVehicleId,
-          session_id: session?.id || "",
-          section: selectedPath.section,
-          tab: selectedPath.tab,
-          subtab: selectedPath.subtab || "",
-          table_name: tableName || "",
-          before_table: r.data?.table_text_in || tableText || "",
-          after_table: r.data?.table_text_out || "",
-          instruction: instruction,
-          symptom: symptom || "",
-        });
-        const log = await api.get(`/tune/log/${activeVehicleId}?limit=50`);
-        setTuneLog(log.data || []);
-      } catch (e) {/* non-blocking */}
+    setBusy(true); setErr("");
+    const text = input.trim();
+    const userMsgContent = text || "(snip attached)";
+    const newUserMsg = { role: "user", content: userMsgContent, imagePreview: pendingImage?.preview };
+    setMessages(prev => [...prev, newUserMsg]);
+    setInput("");
+    const imgToSend = pendingImage;
+    setPendingImage(null);
+
+    try {
+      // Build the tagged tune message — backend sees [TUNE] and switches Wrench into tune mode
+      const tunePrefix = `[TUNE] OS=${session.os_family} | Engine=${session.engine_code || activeVehicle?.engine || "?"} | Fuel=${session.fuel || "?"} | Goal=${session.goal || "daily"}\n`;
+      const finalText = tunePrefix + (text || "Read the attached snip and walk me through what to change.");
+
+      let resp;
+      if (imgToSend?.file) {
+        const fd = new FormData();
+        fd.append("file", imgToSend.file);
+        fd.append("message", finalText);
+        fd.append("mode", "direct");
+        if (sessionId) fd.append("session_id", sessionId);
+        if (activeVehicleId) fd.append("vehicle_id", activeVehicleId);
+        resp = await api.post("/chat/vision", fd, { timeout: 120000, headers: { "Content-Type": "multipart/form-data" }});
+      } else {
+        resp = await api.post("/chat", {
+          message: finalText,
+          mode: "direct",
+          session_id: sessionId || undefined,
+          vehicle_id: activeVehicleId || undefined,
+        }, { timeout: 120000 });
+      }
+
+      if (resp.data?.session_id && !sessionId) setSessionId(resp.data.session_id);
+      const reply = resp.data?.reply || "";
+      setMessages(prev => [...prev, { role: "assistant", content: reply }]);
     } catch (e) {
       setErr(e?.response?.data?.detail || e.message);
+      setMessages(prev => [...prev, { role: "assistant", content: "Hit a snag: " + (e?.response?.data?.detail || e.message) }]);
     } finally {
       setBusy(false);
+      inputRef.current?.focus();
     }
   };
 
-  const copyOut = async () => {
-    if (!result?.table_text_out) return;
-    try { await navigator.clipboard.writeText(result.table_text_out); setCopied(true); setTimeout(()=>setCopied(false), 1500); } catch {}
-  };
-
-  const goNext = () => {
-    if (!nextPath) return;
-    setSelectedPath(nextPath);
-    setResult(null); setTableText(""); setInstruction(""); setSymptom(""); setTableName(""); setImageFile(null); setImagePreview(null); setMode("text"); setErr("");
+  const newSession = () => {
+    setMessages([]); setSessionId(null); setInput(""); setPendingImage(null);
+    localStorage.removeItem(TUNE_SESSION_KEY);
   };
 
   // ─── No active vehicle gate ────────────────────────────────────────────────────
   if (!activeVehicleId) {
     return (
       <div className="p-6 max-w-2xl mx-auto">
-        <h1 className="heading text-2xl mb-3">TUNE <span className="text-rust">// WORKFLOW</span></h1>
+        <h1 className="heading text-2xl mb-3">TUNE <span className="text-rust">// CHAT</span></h1>
         <div className="panel p-6 text-center">
           <Truck size={32} className="mx-auto mb-3 text-rust"/>
           <div className="text-ink-2 mb-2">Pick an active vehicle first.</div>
@@ -184,277 +166,216 @@ export default function Tune() {
     );
   }
 
-  // ─── Session setup modal ──────────────────────────────────────────────────────
+  // ─── Session setup (OS gate) ──────────────────────────────────────────────────
   if (showSessionSetup || !session) {
     return <SessionSetup
       vehicle={activeVehicle}
       osList={osList}
+      existing={session}
       onClose={() => setShowSessionSetup(false)}
       onStart={async (payload) => {
         const r = await api.post("/tune/session", { vehicle_id: activeVehicleId, ...payload });
         setSession(r.data);
         setShowSessionSetup(false);
-        const t = await api.get(`/tune/os-tree/${r.data.os_family}`);
-        setOsTree(t.data);
       }}
     />;
   }
 
-  // ─── Main 3-column layout ────────────────────────────────────────────────────
+  // ─── Main chat view ────────────────────────────────────────────────────────────
   return (
     <div className="h-full flex flex-col">
-      {/* Top context bar */}
-      <div className="border-b border-line bg-bg-2 px-4 py-3 flex items-center justify-between gap-3 flex-wrap" data-testid="tune-context-bar">
+      {/* Top context bar — vehicle + OS, edit-session button */}
+      <div className="border-b border-line bg-bg-2 px-4 py-2.5 flex items-center justify-between gap-3 flex-wrap" data-testid="tune-context-bar">
         <div className="flex items-center gap-3 min-w-0">
           <Truck size={16} className="text-rust shrink-0"/>
           <div className="text-sm text-amber2 font-bold truncate">
             {activeVehicle?.year} {activeVehicle?.make} {activeVehicle?.model}
           </div>
           <div className="text-[11px] text-ink-3 uppercase tracking-widest">
-            OS: <span className="text-amber2 font-bold">{session.os_family}</span>
+            OS <span className="text-amber2 font-bold">{session.os_family}</span>
             {session.cal_id && <> · CAL {session.cal_id}</>}
             {session.engine_code && <> · {session.engine_code}</>}
             {session.fuel && <> · {session.fuel}</>}
-            {session.goal && <> · {session.goal}</>}
           </div>
         </div>
-        <button onClick={()=>setShowSessionSetup(true)} className="btn-ghost text-xs" data-testid="edit-session">EDIT SESSION</button>
+        <div className="flex gap-2">
+          <button onClick={()=>setShowSessionSetup(true)} className="btn-ghost text-xs" data-testid="edit-session">EDIT</button>
+          <button onClick={newSession} className="btn-ghost text-xs" data-testid="tune-new-session">+ NEW</button>
+        </div>
       </div>
 
-      <div className="flex-1 grid grid-cols-1 lg:grid-cols-[260px_1fr_300px] min-h-0">
-        {/* LEFT: HP Tuners menu rail */}
-        <aside className="border-r border-line bg-bg-1 overflow-auto" data-testid="tune-menu-rail">
-          <div className="px-3 py-3 border-b border-line">
-            <div className="text-[10px] uppercase tracking-widest text-ink-3">HP TUNERS ORDER</div>
-            <div className="text-xs text-ink-2 mt-1">Walk top → bottom. Click a tab to start.</div>
-          </div>
-          {osTree?.menu?.map((section, si) => (
-            <div key={si} className="border-b border-line">
-              <button
-                onClick={() => setCollapsed(c => ({...c, [section.section]: !c[section.section]}))}
-                className="w-full px-3 py-2 flex items-center justify-between text-left bg-bg-2/40 hover:bg-bg-2"
-                data-testid={`section-${section.section}`}
-              >
-                <span className="text-xs uppercase tracking-widest font-bold text-rust">{section.section}</span>
-                {collapsed[section.section] ? <ChevronRight size={12} className="text-ink-3"/> : <ChevronDown size={12} className="text-ink-3"/>}
-              </button>
-              {!collapsed[section.section] && (
-                <div>
-                  {section.tabs.map((tab, ti) => (
-                    <TabRow key={ti} section={section.section} tab={tab}
-                      selectedPath={selectedPath}
-                      onPick={(p) => { setSelectedPath(p); setResult(null); setTableText(""); setInstruction(""); setSymptom(""); setTableName(""); setErr(""); }}
-                    />
-                  ))}
-                </div>
-              )}
+      {/* Messages */}
+      <div ref={scrollRef} className="flex-1 overflow-auto" data-testid="tune-messages">
+        {messages.length === 0 ? (
+          <div className="p-8 text-center text-ink-3 max-w-xl mx-auto">
+            <ClipboardPaste size={28} className="mx-auto mb-3 text-rust"/>
+            <div className="text-amber2 uppercase tracking-widest text-sm mb-2">SAY THE WORD, DOC.</div>
+            <div className="text-sm leading-relaxed">
+              Paste cells (Ctrl+V), drop a snip (Win+Shift+S), or just type what the truck is doing.
+              I'll lead you through HP Tuners top → bottom and hand back paste-ready tables with a copy button.
             </div>
-          ))}
-        </aside>
-
-        {/* CENTER: chart edit area */}
-        <main className="overflow-auto p-4" data-testid="tune-editor">
-          {!selectedPath ? (
-            <div className="panel p-6 text-center text-ink-3 mt-12">
-              <BookOpen size={32} className="mx-auto mb-3 text-rust"/>
-              <div className="text-ink-2 mb-2">Pick a tab on the left.</div>
-              <div className="text-xs uppercase tracking-widest">Start at top — Engine &gt; General.</div>
-            </div>
-          ) : (
-            <>
-              <div className="flex items-baseline justify-between gap-2 mb-4 flex-wrap">
-                <div>
-                  <div className="text-[10px] uppercase tracking-widest text-ink-3">CURRENT TAB</div>
-                  <div className="heading text-xl">{selectedPath.path}</div>
-                </div>
-                {nextPath && (
-                  <button onClick={goNext} className="btn-ghost text-xs flex items-center gap-1" data-testid="next-tab">
-                    NEXT: {nextPath.subtab || nextPath.tab} <ArrowRight size={12}/>
-                  </button>
-                )}
-              </div>
-
-              <div className="panel p-4">
-                {/* Mega paste-anywhere hint */}
-                <div className="border-2 border-dashed border-amber2/40 bg-amber2/5 px-3 py-2 mb-3 flex items-center gap-2" data-testid="paste-hint">
-                  <ClipboardPaste size={14} className="text-amber2 shrink-0"/>
-                  <div className="text-[11px] uppercase tracking-widest text-amber2">
-                    PASTE ANYWHERE ON THIS PAGE — Ctrl+V (HP TUNERS CELLS) OR Win+Shift+S SNIP. AUTO-DETECTS.
-                  </div>
-                </div>
-                <div className="flex gap-2 mb-3">
-                  <button onClick={()=>setMode("text")} className={`btn-ghost text-xs ${mode==="text"?"!border-rust !text-rust":""}`} data-testid="mode-text">
-                    <Type size={12} className="inline mr-1"/>PASTE TEXT
-                  </button>
-                  <button onClick={()=>setMode("image")} className={`btn-ghost text-xs ${mode==="image"?"!border-rust !text-rust":""}`} data-testid="mode-image">
-                    <Camera size={12} className="inline mr-1"/>SNIP / IMAGE
-                  </button>
-                </div>
-
-                <label className="label-shop">TABLE NAME (OPTIONAL — HELPS WRENCH RECALL LATER)</label>
-                <input data-testid="table-name" value={tableName} onChange={e=>setTableName(e.target.value)} className="input-shop" placeholder='e.g. "Initial Cold Cranking VE", "High Octane Spark", "MAF Calibration"'/>
-
-                <label className="label-shop mt-3">SYMPTOM (OPTIONAL — WHAT IS THE TRUCK DOING?)</label>
-                <input data-testid="symptom" value={symptom} onChange={e=>setSymptom(e.target.value)} className="input-shop" placeholder='e.g. "cold stumble — fire/die/restart", "lean cruise codes", "knock at 4k WOT"'/>
-
-                {mode === "text" ? (
-                  <>
-                    <label className="label-shop mt-3">CURRENT TABLE (TAB-SEPARATED — PASTE FROM HP TUNERS)</label>
-                    <textarea data-testid="tune-table-input" value={tableText} onChange={e=>setTableText(e.target.value)} rows={6} className="input-shop font-mono text-xs" placeholder="Paste cells here from HP Tuners (Ctrl+V works anywhere on this page). Include row/column headers if visible."/>
-                  </>
-                ) : (
-                  <>
-                    <label className="label-shop mt-3">SNIP / SCREENSHOT</label>
-                    <input ref={fileRef} type="file" accept="image/*" hidden onChange={e=>e.target.files?.[0] && handleFile(e.target.files[0])} data-testid="tune-file-input"/>
-                    {!imagePreview ? (
-                      <div
-                        onClick={()=>fileRef.current?.click()}
-                        onDragOver={(e)=>{e.preventDefault();}}
-                        onDrop={(e)=>{e.preventDefault(); const f=e.dataTransfer?.files?.[0]; if(f) handleFile(f);}}
-                        className="border-2 border-dashed border-rust/40 bg-rust/5 p-6 text-center cursor-pointer hover:border-rust hover:bg-rust/10 transition-colors"
-                        data-testid="tune-dropzone"
-                      >
-                        <ImagePlus size={28} className="mx-auto mb-2 text-rust"/>
-                        <div className="text-sm text-amber2 font-bold uppercase tracking-widest">PASTE · DROP · OR CLICK TO UPLOAD</div>
-                        <div className="text-[10px] text-ink-3 uppercase tracking-widest mt-1">
-                          Ctrl+V a snip from HP Tuners · drag-drop a PNG · or click to browse
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="relative">
-                        <img src={imagePreview} alt="snip" className="max-h-72 border border-line w-full object-contain bg-black/40" data-testid="tune-image-preview"/>
-                        <button onClick={()=>{setImageFile(null); setImagePreview(null);}} className="absolute top-2 right-2 btn-ghost text-[10px] !py-1 !px-2" data-testid="tune-clear-image">✕ CLEAR</button>
-                      </div>
-                    )}
-                  </>
-                )}
-
-                <label className="label-shop mt-3">INSTRUCTION — WHAT WRENCH SHOULD DO</label>
-                <textarea data-testid="tune-instruction" value={instruction} onChange={e=>setInstruction(e.target.value)} rows={3} className="input-shop" placeholder='e.g. "Bump initial cold cranking VE +2-3% only in the -4F to 50F + 65-75 kPa cells. Keep rest unchanged."'/>
-
-                <button data-testid="run-tune-edit" onClick={runEdit} disabled={busy} className="btn-rust mt-4 w-full flex items-center justify-center gap-2">
-                  {busy ? <><RefreshCw size={16} className="animate-spin"/>WORKING...</> : <><Wand2 size={16}/>APPLY CHANGE</>}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-6 text-left">
+              {[
+                "Cold start stumble — fire / die / restart. Where do I start?",
+                "Pinging at 4000 RPM WOT. Walk me through it.",
+                "Here is my high octane spark table — bump it for 93 carefully.",
+                "Want to add cooling fans on earlier. Send me the new table.",
+              ].map((p,i) => (
+                <button key={i} onClick={()=>{ setInput(p); inputRef.current?.focus(); }} className="border border-line p-2 hover:border-rust hover:bg-bg-2 text-xs text-ink-2 text-left" data-testid={`tune-suggest-${i}`}>
+                  › {p}
                 </button>
-                {err && <div className="mt-3 text-danger text-xs uppercase border border-danger p-2 break-words" data-testid="tune-err">ERR: {err}</div>}
-              </div>
-
-              {result && (
-                <div className="panel p-4 mt-4" data-testid="tune-result">
-                  <div className="flex items-center justify-between mb-2">
-                    <div>
-                      <div className="text-[10px] uppercase tracking-widest text-ink-3">MODIFIED TABLE</div>
-                      <div className="text-xs text-amber2">Tab-separated · paste in HP Tuners</div>
-                    </div>
-                    <button onClick={copyOut} className={`btn-rust !py-1.5 !px-3 text-xs flex items-center gap-1 ${copied?"!bg-ok":""}`} data-testid="copy-tune-result">
-                      {copied ? <><Check size={12}/>COPIED</> : <><Copy size={12}/>COPY</>}
-                    </button>
-                  </div>
-                  <pre className="bg-bg-1 border border-line p-3 text-[11px] md:text-xs font-mono whitespace-pre overflow-x-auto leading-snug">{result.table_text_out}</pre>
-                  {result.notes && (
-                    <div className="mt-3 text-xs text-ink-2 leading-relaxed">
-                      <div className="text-[10px] uppercase tracking-widest text-amber2 mb-1">WRENCH NOTES</div>
-                      {result.notes}
-                    </div>
-                  )}
-                  {nextPath && (
-                    <button onClick={goNext} className="btn-ghost text-xs mt-3 w-full flex items-center justify-center gap-1" data-testid="next-tab-after-apply">
-                      NEXT TAB: {nextPath.path} <ArrowRight size={12}/>
-                    </button>
-                  )}
-                </div>
-              )}
-            </>
-          )}
-        </main>
-
-        {/* RIGHT: tune log (Wrench's memory of this vehicle) */}
-        <aside className="border-l border-line bg-bg-1 overflow-auto p-3 hidden lg:block" data-testid="tune-log-panel">
-          <div className="text-[10px] uppercase tracking-widest text-ink-3 mb-2">TUNE LOG · {tuneLog.length} entries</div>
-          {tuneLog.length === 0 ? (
-            <div className="text-xs text-ink-3 italic">No edits yet. As you tune, Wrench learns from each change.</div>
-          ) : (
-            <div className="space-y-2">
-              {tuneLog.map((e) => (
-                <div key={e.id} className="border border-line p-2 bg-bg-2/40">
-                  <div className="text-[10px] text-amber2 uppercase tracking-widest truncate">{e.section} &gt; {e.tab}{e.subtab ? ` > ${e.subtab}` : ""}</div>
-                  {e.table_name && <div className="text-[11px] text-ink-2 mt-0.5">{e.table_name}</div>}
-                  {e.symptom && <div className="text-[10px] text-ink-3 mt-0.5 italic">"{e.symptom}"</div>}
-                  <div className="text-[10px] text-ink-2 mt-1 line-clamp-2">{e.instruction}</div>
-                  <div className="text-[9px] text-ink-3 uppercase mt-1">{new Date(e.created_at).toLocaleString()}</div>
-                </div>
               ))}
             </div>
-          )}
-        </aside>
+          </div>
+        ) : (
+          messages.map((m, i) => <Msg key={i} m={m} idx={i}/>)
+        )}
+        {busy && (
+          <div className="px-6 py-3 text-ink-3 text-xs uppercase tracking-widest flex items-center gap-2">
+            <RefreshCw size={12} className="animate-spin"/> WRENCH WORKING...
+          </div>
+        )}
+      </div>
+
+      {err && <div className="px-4 py-2 border-t border-danger bg-danger/10 text-danger text-xs uppercase tracking-widest">ERR: {err}</div>}
+
+      {/* Pending image preview strip */}
+      {pendingImage && (
+        <div className="border-t border-line bg-bg-2 px-3 py-2 flex items-center gap-3" data-testid="pending-image">
+          <img src={pendingImage.preview} alt="snip" className="h-14 border border-line"/>
+          <div className="text-[11px] text-amber2 uppercase tracking-widest">SNIP READY — TYPE INSTRUCTION & SEND</div>
+          <button onClick={()=>setPendingImage(null)} className="ml-auto btn-ghost text-[10px] !py-1 !px-2" data-testid="clear-pending-image">✕ CLEAR</button>
+        </div>
+      )}
+
+      {/* Input bar */}
+      <div className="border-t border-line bg-bg-2 p-3 flex items-end gap-2">
+        <input ref={fileRef} type="file" accept="image/*" hidden onChange={e=>e.target.files?.[0] && handleFile(e.target.files[0])} data-testid="tune-file-input"/>
+        <button onClick={()=>fileRef.current?.click()} className="btn-ghost !p-3" title="Attach snip" data-testid="tune-attach">
+          <Paperclip size={16}/>
+        </button>
+        <textarea
+          ref={inputRef}
+          data-testid="tune-input"
+          value={input}
+          onChange={e=>setInput(e.target.value)}
+          onKeyDown={e=>{ if (e.key==="Enter" && !e.shiftKey){ e.preventDefault(); send(); } }}
+          placeholder='Type or paste a table (Ctrl+V) · attach a snip · Wrench answers in HP Tuners path + paste-ready table'
+          rows={2}
+          className="input-shop flex-1 resize-none text-sm py-3"
+        />
+        <button onClick={send} disabled={busy || (!input.trim() && !pendingImage)} className="btn-rust h-14 px-4 flex items-center gap-2" data-testid="tune-send">
+          <Send size={16}/>SEND
+        </button>
       </div>
     </div>
   );
 }
 
-// ── Sidebar tab row (with subtabs) ───────────────────────────────────────────────
-function TabRow({ section, tab, selectedPath, onPick }) {
-  const [open, setOpen] = useState(false);
-  const subtabs = tab.subtabs || [];
-  const hasSub = subtabs.length > 0;
-  const isSelected = selectedPath?.section === section && selectedPath?.tab === tab.name && !selectedPath?.subtab;
+// ── Stripped markdown leak + URL render helpers (mirrors Chat.jsx) ─────────────
+function stripMarkdown(s) {
+  if (!s) return s;
+  return s
+    .replace(/\*\*\*([^*\n]+?)\*\*\*/g, "$1")
+    .replace(/\*\*([^*\n]+?)\*\*/g, "$1")
+    .replace(/(^|\s)\*([^*\n]+?)\*(?=\s|[.,!?;:]|$)/g, "$1$2")
+    .replace(/__([^_\n]+?)__/g, "$1")
+    .replace(/^#{1,6}\s+/gm, "");
+}
+
+// ── Message row ────────────────────────────────────────────────────────────────
+function Msg({ m, idx }) {
+  const isUser = m.role === "user";
   return (
-    <div>
-      <button
-        onClick={() => hasSub ? setOpen(o => !o) : onPick({ section, tab: tab.name, subtab: "", path: `${section} > ${tab.name}` })}
-        className={`w-full px-3 py-1.5 flex items-center justify-between text-left text-xs hover:bg-bg-2 ${isSelected?"bg-bg-2 border-l-2 border-rust pl-[10px] text-amber2":"text-ink-2"}`}
-        data-testid={`tab-${tab.name}`}
-      >
-        <span className="truncate">{tab.name}</span>
-        {hasSub && (open ? <ChevronDown size={10} className="text-ink-3"/> : <ChevronRight size={10} className="text-ink-3"/>)}
-      </button>
-      {hasSub && open && (
-        <div className="bg-bg-1">
-          {subtabs.map((st, i) => {
-            const path = { section, tab: tab.name, subtab: st, path: `${section} > ${tab.name} > ${st}` };
-            const sel = selectedPath?.path === path.path;
-            return (
-              <button key={i} onClick={()=>onPick(path)}
-                className={`w-full px-3 py-1 text-left text-[11px] hover:bg-bg-2 pl-7 ${sel?"text-amber2 border-l-2 border-rust pl-[26px]":"text-ink-3"}`}
-                data-testid={`subtab-${tab.name}-${st}`}
-              >
-                {st}
-              </button>
-            );
-          })}
-        </div>
+    <div className={`px-4 md:px-6 py-3 border-b border-line whitespace-pre-wrap break-words ${idx%2===0?"bg-bg-1":"bg-bg-2"}`} data-testid={`tune-msg-${idx}`}>
+      <div className="text-[11px] uppercase tracking-widest font-bold mb-1">
+        <span className={isUser ? "text-amber2" : "text-rust"}>[{isUser?"DOC":"WRENCH"}]</span>
+      </div>
+      {m.imagePreview && (
+        <img src={m.imagePreview} alt="snip" className="max-h-56 border border-line bg-black/40 mb-2"/>
       )}
+      <div className="text-ink text-[15px] leading-[1.65]" style={{fontFamily:"'Inter', system-ui, -apple-system, sans-serif"}}>
+        {renderTuneContent(m.content)}
+      </div>
     </div>
   );
 }
 
-// ── Session setup modal ───────────────────────────────────────────────────────
-function SessionSetup({ vehicle, osList, onClose, onStart }) {
-  const [os, setOs] = useState("E80");
-  const [cal, setCal] = useState("");
-  const [engine, setEngine] = useState(vehicle?.engine_summary || vehicle?.engine || "");
-  const [fuel, setFuel] = useState("");
-  const [goal, setGoal] = useState("daily");
+// Render assistant text — extract fenced code blocks as one-tap COPY blocks
+function renderTuneContent(text) {
+  if (!text) return null;
+  // Strip the leading [TUNE] tag from user messages
+  text = text.replace(/^\[TUNE\][^\n]*\n?/, "");
+  const out = [];
+  const fenceRe = /```([^\n]*)\n([\s\S]*?)```/g;
+  let last = 0;
+  let m;
+  while ((m = fenceRe.exec(text)) !== null) {
+    if (m.index > last) out.push(<span key={`t${last}`}>{stripMarkdown(text.slice(last, m.index))}</span>);
+    out.push(<CopyBlock key={`c${m.index}`} text={m[2].replace(/\n+$/, "")} lang={(m[1]||"").trim()}/>);
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) out.push(<span key={`t${last}`}>{stripMarkdown(text.slice(last))}</span>);
+  return out;
+}
+
+function CopyBlock({ text, lang }) {
+  const [copied, setCopied] = useState(false);
+  const isTable = lang === "tsv" || /\t/.test(text);
+  const copy = async (e) => {
+    e.preventDefault(); e.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(()=>setCopied(false), 2000);
+    } catch {}
+  };
+  return (
+    <div className="my-3 border-2 border-amber2/40 bg-bg-1" data-testid="tune-copy-block">
+      <div className="flex items-center justify-between px-2 py-1 bg-amber2/10 border-b border-amber2/30 gap-2">
+        <div className="text-[10px] uppercase tracking-widest text-amber2 font-bold truncate">
+          {isTable ? "PASTE INTO HP TUNERS · TAB-SEPARATED" : (lang || "TEXT")}
+        </div>
+        <button
+          onClick={copy}
+          data-testid="tune-copy-table-btn"
+          className={`text-[10px] uppercase tracking-widest font-bold px-3 py-1.5 flex items-center gap-1 shrink-0 ${copied ? "bg-ok text-black" : "bg-rust text-white hover:bg-rust/80"}`}
+        >
+          {copied ? <><Check size={11}/>COPIED</> : <><Copy size={11}/>COPY</>}
+        </button>
+      </div>
+      <pre className="px-3 py-2 text-[12px] md:text-sm font-mono text-ink whitespace-pre overflow-x-auto leading-snug">{text}</pre>
+    </div>
+  );
+}
+
+// ── Session setup (OS + cal + engine + fuel + goal) ────────────────────────────
+function SessionSetup({ vehicle, osList, existing, onClose, onStart }) {
+  const [os, setOs] = useState(existing?.os_family || "E80");
+  const [cal, setCal] = useState(existing?.cal_id || "");
+  const [engine, setEngine] = useState(existing?.engine_code || vehicle?.engine_summary || vehicle?.engine || "");
+  const [fuel, setFuel] = useState(existing?.fuel || "");
+  const [goal, setGoal] = useState(existing?.goal || "daily");
   const [busy, setBusy] = useState(false);
+
   const submit = async () => {
     setBusy(true);
     try { await onStart({ os_family: os, cal_id: cal, engine_code: engine, fuel, goal }); }
     finally { setBusy(false); }
   };
+
   return (
     <div className="p-6 max-w-2xl mx-auto" data-testid="tune-session-setup">
-      <h1 className="heading text-2xl mb-1">TUNE <span className="text-rust">// SESSION SETUP</span></h1>
+      <h1 className="heading text-2xl mb-1">TUNE <span className="text-rust">// {existing ? "EDIT SESSION" : "START SESSION"}</span></h1>
       <div className="text-xs text-ink-3 uppercase tracking-widest mb-4">
         {vehicle ? `${vehicle.year || ""} ${vehicle.make || ""} ${vehicle.model || ""}`.trim() : "VEHICLE"}
       </div>
       <div className="panel p-5 space-y-4">
         <div>
-          <label className="label-shop">OS FAMILY (PICK YOUR ECM)</label>
+          <label className="label-shop">OS / ECM</label>
           <select value={os} onChange={e=>setOs(e.target.value)} className="input-shop" data-testid="setup-os">
-            {osList.map(o => <option key={o.os} value={o.os}>{o.os} — {o.label.split("—")[1]?.trim()}</option>)}
+            {osList.map(o => <option key={o.os} value={o.os}>{o.os} — {o.label.split("—")[1]?.trim() || o.label}</option>)}
           </select>
-          <div className="text-[10px] text-ink-3 uppercase tracking-widest mt-1">
-            Wrench will only show tabs/charts that exist on this OS.
-          </div>
         </div>
         <div className="grid grid-cols-2 gap-3">
           <div>
@@ -462,7 +383,7 @@ function SessionSetup({ vehicle, osList, onClose, onStart }) {
             <input value={cal} onChange={e=>setCal(e.target.value)} className="input-shop" placeholder="12656931" data-testid="setup-cal"/>
           </div>
           <div>
-            <label className="label-shop">ENGINE CODE</label>
+            <label className="label-shop">ENGINE</label>
             <input value={engine} onChange={e=>setEngine(e.target.value)} className="input-shop" placeholder="L83, L86, LT1..." data-testid="setup-engine"/>
           </div>
           <div>
@@ -479,22 +400,22 @@ function SessionSetup({ vehicle, osList, onClose, onStart }) {
           <div>
             <label className="label-shop">GOAL</label>
             <select value={goal} onChange={e=>setGoal(e.target.value)} className="input-shop" data-testid="setup-goal">
-              <option value="daily">DAILY DRIVER</option>
+              <option value="daily">DAILY</option>
               <option value="tow">TOW</option>
               <option value="street">STREET</option>
-              <option value="strip">STRIP / DYNO HUNT</option>
+              <option value="strip">STRIP / DYNO</option>
             </select>
           </div>
         </div>
         <div className="flex gap-2">
           <button onClick={submit} disabled={busy} className="btn-rust flex-1" data-testid="setup-start">
-            {busy ? "STARTING..." : "START TUNE"}
+            {busy ? "STARTING..." : (existing ? "UPDATE" : "START")}
           </button>
-          <button onClick={onClose} className="btn-ghost" data-testid="setup-cancel">CANCEL</button>
+          {existing && <button onClick={onClose} className="btn-ghost" data-testid="setup-cancel">CANCEL</button>}
         </div>
         <div className="border-t border-line pt-3 flex items-start gap-2 text-xs text-ink-3">
           <AlertTriangle size={14} className="text-amber2 shrink-0 mt-0.5"/>
-          <div>If you're not sure of the OS, open VCM Editor → bottom-left status bar shows it (e.g. "E80-A001"). Or snip that area into chat and Wrench will tell you.</div>
+          <div>Wrench keeps the HP Tuners menu order in his head and only suggests tabs that exist on your OS. Tells you the exact path before every change.</div>
         </div>
       </div>
     </div>

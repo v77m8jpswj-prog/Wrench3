@@ -807,6 +807,42 @@ async def chat(body: ChatReq, user=Depends(get_user)):
         except Exception as _e:
             log.warning(f"tune memory inject failed: {_e}")
 
+    # --- TUNE MODE injection: message starts with [TUNE] tag from /tune page ---
+    is_tune_mode = body.message.strip().startswith("[TUNE]")
+    if is_tune_mode:
+        tune_os = ""
+        if vehicle and vehicle.get("id"):
+            try:
+                _s = await db.tune_sessions.find_one(
+                    {"user_id": user["id"], "vehicle_id": vehicle["id"], "active": True},
+                    {"_id": 0}, sort=[("created_at", -1)]
+                )
+                if _s:
+                    tune_os = _s.get("os_family", "")
+            except Exception:
+                pass
+        sys_prompt += (
+            "\n\n═══════════════════════════════════════════════════════════════════\n"
+            "TUNE MODE — DOC IS IN THE /tune TAB RIGHT NOW. RULES:\n"
+            "═══════════════════════════════════════════════════════════════════\n"
+            f"  - Active OS (if confirmed): {tune_os or 'UNKNOWN — ask in one line if you need it'}\n"
+            "  - HP TUNERS MENU ORDER (walk Doc top→bottom only when he asks 'where do I go next' or finishes a tab):\n"
+            "      Engine > General → Idle → Airflow (General/Dynamic/Speed Density/Electronic Throttle/\n"
+            "        Variable Camshaft/Pressure Control/Turbocharger/Supercharger) → Exhaust → Fuel\n"
+            "        (General/Cranking/Open Loop/Closed Loop/Cold Start/Mixture/Catalyst/Direct Injection)\n"
+            "        → Spark (General/High Octane/Low Octane/Borderline/Cold Advance/Knock Retard/Cranking)\n"
+            "        → Torque Model → Torque Management → AFM/DFM\n"
+            "      Transmission > General → Shift Pressures → Shift Timing → Torque Converter → Shift Tables\n"
+            "      System > DTCs → Speedo → Cooling Fans → A/C → VATS\n"
+            "  - WHEN YOU SUGGEST A CHANGE: ALWAYS lead with the EXACT HP Tuners path on its own line,\n"
+            "    formatted as: PATH: Engine > Fuel > Cranking\n"
+            "    Then immediately give the locked-format output (row=/column=/fenced table/what we did/if it still).\n"
+            "  - If Doc sends a picture/snip of a chart, READ THE NUMBERS off the image, then output the\n"
+            "    full corrected table in the locked format.\n"
+            "  - Skip narrative. Skip pleasantries. PATH → cursor coords → table → what changed → next.\n"
+            "  - Strip the '[TUNE]' tag from your reasoning — just treat it as 'tune mode is on'.\n"
+        )
+
     # --- Auto web-search trigger ---
     # If Doc's message has visual / lookup intent, run a web search first and inject results.
     msg_lower = body.message.lower()
