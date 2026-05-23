@@ -3,7 +3,7 @@ import { useApp } from "@/AppContext";
 import api from "@/api";
 import {
   ChevronRight, ChevronDown, RefreshCw, Wand2, Copy, ImagePlus, Type,
-  ArrowRight, BookOpen, Truck, AlertTriangle, Check, Camera
+  ArrowRight, BookOpen, Truck, AlertTriangle, Check, Camera, ClipboardPaste
 } from "lucide-react";
 
 // ───────────────────────────────────────────────────────────────────────────────
@@ -75,6 +75,37 @@ export default function Tune() {
   const flat = osTree?.flat || [];
   const currentIdx = flat.findIndex(p => p.path === selectedPath?.path);
   const nextPath = currentIdx >= 0 && currentIdx < flat.length - 1 ? flat[currentIdx + 1] : null;
+
+  // Page-level paste handler — auto-detect image (Win+Shift+S snip from HP Tuners)
+  // vs tab-separated text (cell copy from HP Tuners). Works anywhere on the page.
+  useEffect(() => {
+    const onPaste = (e) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      // First pass: look for an image (snip)
+      for (const it of items) {
+        if (it.type && it.type.startsWith("image/")) {
+          const blob = it.getAsFile();
+          if (blob) {
+            setMode("image");
+            handleFile(blob);
+            e.preventDefault();
+            return;
+          }
+        }
+      }
+      // Second pass: tab-separated text (HP Tuners cell copy)
+      const text = e.clipboardData.getData("text");
+      if (text && (text.includes("\t") || text.split("\n").length >= 2)) {
+        setMode("text");
+        setTableText(prev => prev ? prev : text);
+        // don't preventDefault — let it also land inside textarea if focused
+      }
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleFile = (file) => {
     setImageFile(file);
@@ -244,6 +275,13 @@ export default function Tune() {
               </div>
 
               <div className="panel p-4">
+                {/* Mega paste-anywhere hint */}
+                <div className="border-2 border-dashed border-amber2/40 bg-amber2/5 px-3 py-2 mb-3 flex items-center gap-2" data-testid="paste-hint">
+                  <ClipboardPaste size={14} className="text-amber2 shrink-0"/>
+                  <div className="text-[11px] uppercase tracking-widest text-amber2">
+                    PASTE ANYWHERE ON THIS PAGE — Ctrl+V (HP TUNERS CELLS) OR Win+Shift+S SNIP. AUTO-DETECTS.
+                  </div>
+                </div>
                 <div className="flex gap-2 mb-3">
                   <button onClick={()=>setMode("text")} className={`btn-ghost text-xs ${mode==="text"?"!border-rust !text-rust":""}`} data-testid="mode-text">
                     <Type size={12} className="inline mr-1"/>PASTE TEXT
@@ -262,19 +300,32 @@ export default function Tune() {
                 {mode === "text" ? (
                   <>
                     <label className="label-shop mt-3">CURRENT TABLE (TAB-SEPARATED — PASTE FROM HP TUNERS)</label>
-                    <textarea data-testid="tune-table-input" value={tableText} onChange={e=>setTableText(e.target.value)} rows={6} className="input-shop font-mono text-xs" placeholder="Paste cells here from HP Tuners. Include row/column headers if visible."/>
+                    <textarea data-testid="tune-table-input" value={tableText} onChange={e=>setTableText(e.target.value)} rows={6} className="input-shop font-mono text-xs" placeholder="Paste cells here from HP Tuners (Ctrl+V works anywhere on this page). Include row/column headers if visible."/>
                   </>
                 ) : (
                   <>
                     <label className="label-shop mt-3">SNIP / SCREENSHOT</label>
                     <input ref={fileRef} type="file" accept="image/*" hidden onChange={e=>e.target.files?.[0] && handleFile(e.target.files[0])} data-testid="tune-file-input"/>
-                    <div className="flex gap-2">
-                      <button onClick={()=>fileRef.current?.click()} className="btn-ghost text-xs flex items-center gap-1" data-testid="tune-upload">
-                        <ImagePlus size={12}/>UPLOAD
-                      </button>
-                      {imagePreview && <span className="text-[10px] text-ok uppercase tracking-widest self-center">✓ READY</span>}
-                    </div>
-                    {imagePreview && <img src={imagePreview} alt="snip" className="mt-2 max-h-48 border border-line"/>}
+                    {!imagePreview ? (
+                      <div
+                        onClick={()=>fileRef.current?.click()}
+                        onDragOver={(e)=>{e.preventDefault();}}
+                        onDrop={(e)=>{e.preventDefault(); const f=e.dataTransfer?.files?.[0]; if(f) handleFile(f);}}
+                        className="border-2 border-dashed border-rust/40 bg-rust/5 p-6 text-center cursor-pointer hover:border-rust hover:bg-rust/10 transition-colors"
+                        data-testid="tune-dropzone"
+                      >
+                        <ImagePlus size={28} className="mx-auto mb-2 text-rust"/>
+                        <div className="text-sm text-amber2 font-bold uppercase tracking-widest">PASTE · DROP · OR CLICK TO UPLOAD</div>
+                        <div className="text-[10px] text-ink-3 uppercase tracking-widest mt-1">
+                          Ctrl+V a snip from HP Tuners · drag-drop a PNG · or click to browse
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="relative">
+                        <img src={imagePreview} alt="snip" className="max-h-72 border border-line w-full object-contain bg-black/40" data-testid="tune-image-preview"/>
+                        <button onClick={()=>{setImageFile(null); setImagePreview(null);}} className="absolute top-2 right-2 btn-ghost text-[10px] !py-1 !px-2" data-testid="tune-clear-image">✕ CLEAR</button>
+                      </div>
+                    )}
                   </>
                 )}
 
