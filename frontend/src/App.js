@@ -5,6 +5,7 @@ import api, { setToken, getToken, clearToken } from "@/api";
 import { AppProvider } from "@/AppContext";
 import Login from "@/pages/Login";
 import Chat from "@/pages/Chat";
+import Home from "@/pages/Home";
 import Call from "@/pages/Call";
 import Charts from "@/pages/Charts";
 import Library from "@/pages/Library";
@@ -51,7 +52,8 @@ function App() {
           <Route path="/*" element={
             <AppProvider>
               <Routes>
-                <Route path="/" element={<Protected><Chat /></Protected>} />
+                <Route path="/" element={<Protected><Home /></Protected>} />
+                <Route path="/chat" element={<Protected><Chat /></Protected>} />
                 <Route path="/call" element={<Protected><Call /></Protected>} />
                 <Route path="/charts" element={<Protected><Charts /></Protected>} />
                 <Route path="/library" element={<Protected><Library /></Protected>} />

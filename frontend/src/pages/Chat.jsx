@@ -132,26 +132,18 @@ export default function Chat() {
   const refreshSessions = () => api.get("/chat/sessions").then(r => setSessions(r.data || [])).catch(()=>{});
 
   useEffect(() => {
-    const isMobile = typeof window !== "undefined" && window.matchMedia && window.matchMedia("(max-width: 767px)").matches;
-    if (isMobile) return;
-    // Only auto-scroll if the user is already near the bottom — don't yank them
-    // back down while they're scrolling up to read older messages.
+    // Layout flipped: newest message is at TOP of the list, just under the input.
+    // No auto-scroll needed — the new message is already visible at the top.
+    // Just pin the messages container to top on first render so we're showing newest first.
     const el = endRef.current?.parentElement;
     if (!el) return;
-    // Find the actual scrollable ancestor (the messages container)
     let scroller = el;
     while (scroller && scroller !== document.body) {
       const oy = window.getComputedStyle(scroller).overflowY;
       if (oy === "auto" || oy === "scroll") break;
       scroller = scroller.parentElement;
     }
-    if (!scroller) return;
-    const distFromBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
-    if (distFromBottom < 160) {
-      // Scroll ONLY the message container, never the window. scrollIntoView bubbles
-      // up to the window and yanks the whole page — set scrollTop directly instead.
-      scroller.scrollTop = scroller.scrollHeight;
-    }
+    if (scroller) scroller.scrollTop = 0;
   }, [messages, thinking]);
 
   const loadSession = async (sid) => {
@@ -633,8 +625,8 @@ export default function Chat() {
         />
       )}
 
-      {/* Messages — order-3 on mobile (below input), order-2 on desktop (above input) */}
-      <div className="flex-1 overflow-auto order-3 md:order-2" data-testid="messages-area">
+      {/* Messages — order-3 (always below input). Newest at TOP under the input bar. */}
+      <div className="flex-1 overflow-auto order-3" data-testid="messages-area">
         {/* Call artifacts panel — links/notes/vehicles Wrench sent during a call */}
         {app?.callArtifacts && app.callArtifacts.length > 0 && (
           <div className="border-b border-line bg-bg-3 px-3 md:px-6 py-3" data-testid="artifacts-panel">
@@ -711,20 +703,20 @@ export default function Chat() {
             </div>
           </div>
         ) : (
-          <div className="font-mono text-sm pb-4 flex flex-col-reverse md:flex-col">
-            {messages.map((m, i) => <MessageRow key={i} m={m} idx={i} />)}
+          <div className="font-mono text-sm pb-4 flex flex-col">
             {thinking && (
               <div className="px-4 md:px-6 py-3 border-b border-line bg-bg-1 text-rust text-xs" data-testid="thinking-row">
                 [WRENCH] <span className="animate-blink">_</span> thinking
               </div>
             )}
+            {[...messages].reverse().map((m, i) => <MessageRow key={messages.length - 1 - i} m={m} idx={messages.length - 1 - i} />)}
             <div ref={endRef} />
           </div>
         )}
       </div>
 
-      {/* Input bar — order-2 on mobile (top, under header), order-3 on desktop (bottom) */}
-      <div className="order-2 md:order-3 border-y md:border-y-0 md:border-t border-line bg-bg-2 px-3 md:px-6 py-3 md:py-4 md:sticky md:bottom-0 z-20 safe-bottom">
+      {/* Input bar — TOP of page (order-2, right under headers). Doc's preference: type at top, replies appear below. */}
+      <div className="order-2 border-b border-line bg-bg-2 px-3 md:px-6 py-3 md:py-4 sticky top-0 z-20 safe-top">
         {micError && messages.length > 0 && (
           <MicHelpPanel error={micError} expanded={showMicHelp} onToggle={()=>setShowMicHelp(s=>!s)} onRetry={startRecord} compact />
         )}

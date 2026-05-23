@@ -1,12 +1,13 @@
 import React, { useEffect, useState } from "react";
 import { NavLink, useNavigate, useLocation } from "react-router-dom";
-import { MessageSquare, Grid3x3, BookOpen, Truck, Activity, Brain, Settings as Cog, LogOut, Wrench, Menu, X, Phone, PhoneOff, KeyRound, FolderArchive, Users, Mail, MicOff, Mic, Briefcase, Inbox, GitCompare, UserPlus } from "lucide-react";
+import { MessageSquare, Grid3x3, BookOpen, Truck, Activity, Brain, Settings as Cog, LogOut, Wrench, Menu, X, Phone, PhoneOff, KeyRound, FolderArchive, Users, Mail, MicOff, Mic, Briefcase, Inbox, GitCompare, UserPlus, Home as HomeIcon } from "lucide-react";
 import { clearToken } from "@/api";
 import { useApp } from "@/AppContext";
 
 const NAV = [
+  { to: "/", icon: HomeIcon, label: "HOME", id: "nav-home" },
   { to: "/call", icon: Phone, label: "CALL", id: "nav-call" },
-  { to: "/", icon: MessageSquare, label: "CHAT", id: "nav-chat" },
+  { to: "/chat", icon: MessageSquare, label: "CHAT", id: "nav-chat" },
   { to: "/jobs", icon: Briefcase, label: "JOBS", id: "nav-jobs" },
   { to: "/email", icon: Inbox, label: "EMAIL", id: "nav-email" },
   { to: "/leads", icon: UserPlus, label: "LEADS", id: "nav-leads" },
@@ -118,11 +119,9 @@ export default function Shell({ user, setUser, children }) {
           <Menu size={22} />
         </button>
         <div className="flex items-center gap-2 flex-1 min-w-0">
-          <div className="w-7 h-7 bg-rust flex items-center justify-center flex-shrink-0">
-            <Wrench size={16} color="#000" strokeWidth={3} />
-          </div>
+          <img src="/drunderhood-logo.jpg" alt="" className="w-9 h-9 object-contain flex-shrink-0" />
           <div className="min-w-0">
-            <div className="heading text-base leading-none tracking-tight truncate">DATA WRENCH</div>
+            <div className="heading text-base leading-none tracking-tight truncate">DR. UNDERHOOD<sup className="text-[8px] align-top">™</sup></div>
             <div className="text-[9px] text-rust uppercase tracking-[0.18em] mt-0.5">{currentLabel}</div>
           </div>
         </div>
@@ -137,12 +136,10 @@ export default function Shell({ user, setUser, children }) {
         <aside className="hidden md:flex w-[200px] border-r border-line bg-bg-2 flex-col" data-testid="left-rail">
           <div className="px-4 py-5 border-b border-line">
             <div className="flex items-center gap-2">
-              <div className="w-9 h-9 bg-rust flex items-center justify-center" data-testid="brand-mark">
-                <Wrench size={20} color="#000" strokeWidth={3} />
-              </div>
+              <img src="/drunderhood-logo.jpg" alt="" className="w-11 h-11 object-contain" data-testid="brand-mark"/>
               <div>
-                <div className="heading text-xl leading-none tracking-tight">DATA WRENCH</div>
-                <div className="text-[10px] text-ink-2 uppercase tracking-[0.2em] mt-1">AI FOREMAN</div>
+                <div className="heading text-xl leading-none tracking-tight">DR. UNDERHOOD<sup className="text-[9px] align-top">™</sup></div>
+                <div className="text-[10px] text-ink-2 uppercase tracking-[0.2em] mt-1">LIVE ASSIST</div>
               </div>
             </div>
           </div>
@@ -187,12 +184,10 @@ export default function Shell({ user, setUser, children }) {
             <aside className="w-[80%] max-w-[260px] bg-bg-2 border-r border-line flex flex-col">
               <div className="px-4 py-4 border-b border-line flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <div className="w-9 h-9 bg-rust flex items-center justify-center">
-                    <Wrench size={20} color="#000" strokeWidth={3} />
-                  </div>
+                  <img src="/drunderhood-logo.jpg" alt="" className="w-11 h-11 object-contain"/>
                   <div>
-                    <div className="heading text-lg leading-none">DATA WRENCH</div>
-                    <div className="text-[10px] text-ink-2 uppercase tracking-[0.2em] mt-0.5">AI FOREMAN</div>
+                    <div className="heading text-lg leading-none">DR. UNDERHOOD<sup className="text-[8px] align-top">™</sup></div>
+                    <div className="text-[10px] text-ink-2 uppercase tracking-[0.2em] mt-0.5">LIVE ASSIST</div>
                   </div>
                 </div>
                 <button data-testid="close-drawer" onClick={()=>setDrawerOpen(false)} className="text-ink-2 p-2 -mr-2"><X size={20}/></button>
