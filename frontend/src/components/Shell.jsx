@@ -57,6 +57,17 @@ export default function Shell({ user, setUser, children }) {
       {/* iOS notch / Dynamic Island safe-area padding (mobile only) */}
       <div className={`md:hidden ${onCallGlobal?"bg-rust":"bg-bg-2"}`} style={{ height: "env(safe-area-inset-top)" }} />
 
+      {/* PREVIEW-MODE banner — only shows on preview environments (never on prod foreman.*) */}
+      {typeof window !== "undefined" && /preview\.emergentagent\.com|emergent\.host\/preview/.test(window.location.hostname) && (
+        <div
+          className="bg-amber-500 text-black px-4 py-2 text-center text-xs uppercase tracking-widest font-bold sticky top-0 z-50 border-b-2 border-black"
+          data-testid="preview-banner"
+        >
+          ⚠ PREVIEW MODE — THIS IS NOT YOUR LIVE APP. TECHS/DATA HERE ARE SEPARATE.
+          Go to <a href="https://foreman.drunderhood.com" className="underline">foreman.drunderhood.com</a> for production.
+        </div>
+      )}
+
       {/* ON CALL banner — sticky on every page when a realtime call is active */}
       {onCallGlobal && (
         <div className="bg-rust text-black flex items-center justify-between px-3 md:px-6 py-2 sticky z-40 border-b-2 border-black"
