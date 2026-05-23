@@ -23,7 +23,12 @@ from fastapi import APIRouter, HTTPException, Depends, Header, UploadFile, File,
 from pydantic import BaseModel, Field
 from motor.motor_asyncio import AsyncIOMotorClient
 
+import asyncio
+import html as _html
+
 import httpx
+
+from email_mod import notify_shop
 
 log = logging.getLogger("datawrench.brain")
 
@@ -1017,6 +1022,32 @@ def make_brain_router(db, get_user):
             raise HTTPException(400, "Name, contact, and what you need are all required.")
         await db.leads.insert_one(doc)
         doc.pop("_id", None)
+
+        # Fire-and-forget owner notification email (won't block the response).
+        try:
+            def esc(s):
+                return _html.escape(s or "")
+            subject = f"NEW QUOTE LEAD — {esc(doc['name'])}"
+            body_html = (
+                f"<div style='font-family:Arial,sans-serif;max-width:600px;'>"
+                f"<h2 style='color:#B91C1C;border-bottom:3px solid #D4A017;padding-bottom:8px;margin:0 0 16px 0;'>NEW QUOTE LEAD</h2>"
+                f"<table style='border-collapse:collapse;width:100%;font-size:15px;'>"
+                f"<tr><td style='padding:6px 12px 6px 0;color:#666;width:120px;'>NAME</td><td style='padding:6px 0;font-weight:bold;'>{esc(doc['name'])}</td></tr>"
+                f"<tr><td style='padding:6px 12px 6px 0;color:#666;'>CONTACT</td><td style='padding:6px 0;font-weight:bold;'>{esc(doc['contact'])}</td></tr>"
+                f"<tr><td style='padding:6px 12px 6px 0;color:#666;'>VEHICLE</td><td style='padding:6px 0;'>{esc(doc.get('vehicle') or '—')}</td></tr>"
+                f"<tr><td style='padding:6px 12px 6px 0;color:#666;'>SOURCE</td><td style='padding:6px 0;'>{esc(doc.get('source') or 'landing')}</td></tr>"
+                f"</table>"
+                f"<div style='margin-top:18px;padding:14px;background:#f5f5f5;border-left:4px solid #D4A017;'>"
+                f"<div style='font-size:12px;color:#666;letter-spacing:1px;margin-bottom:6px;'>WHAT THEY NEED</div>"
+                f"<div style='font-size:15px;white-space:pre-wrap;'>{esc(doc['what_they_need'])}</div>"
+                f"</div>"
+                f"<div style='margin-top:18px;font-size:12px;color:#999;'>Lead ID: {doc['id']} · {doc['created_at']}</div>"
+                f"</div>"
+            )
+            asyncio.create_task(notify_shop(db, body.shop_id, subject, body_html))
+        except Exception as e:
+            log.warning(f"lead notify dispatch failed: {e}")
+
         return {"ok": True, "lead_id": doc["id"]}
 
     # ----- Owner-side lead inbox (user-JWT) -----

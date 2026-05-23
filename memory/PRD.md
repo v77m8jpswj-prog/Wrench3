@@ -39,6 +39,7 @@ Already covered in this session:
 - [x] GBP setup guide letter (`gbp-setup-guide`)
 - [x] Library URL scraper `/api/scrape/url` with Playwright + Vault credentials (HP Tuners public, AllData, Identifix logins working)
 - [x] Library paste endpoint `/api/library/paste` for raw text ingest (GM SI, behind-2FA sites)
+- [x] **Email notification on quote lead** (Feb 26, 2026) — `notify_shop()` helper in `email_mod.py` fires from `POST /api/public/leads` via `asyncio.create_task` so the customer response isn't blocked. Sends HTML email FROM the shop's connected Outlook mailbox TO itself with name/contact/vehicle/source/what-they-need. Silently no-ops if no mailbox connected (preview env).
 
 ## Open / pending
 - [ ] Microsoft creds need to be added to PRODUCTION env vars after redeploy + 2nd redirect URI on Azure

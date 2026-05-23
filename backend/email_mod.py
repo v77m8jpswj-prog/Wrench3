@@ -119,6 +119,73 @@ def _well_known_folder(name: str) -> str:
     return mapping.get(name.lower(), name)
 
 
+async def notify_shop(db, shop_id: str, subject: str, body_html: str,
+                      to_override: Optional[str] = None) -> bool:
+    """Module-level helper: send a notification email FROM the shop's connected
+    Outlook mailbox TO itself (or to a different address if to_override given).
+    Used for lead-form pings, alerts, etc. Fire-and-forget; never raises.
+    Returns True on success, False on any failure."""
+    try:
+        acct = await db.email_accounts.find_one({"shop_id": shop_id, "provider": "microsoft"})
+        if not acct:
+            log.info(f"notify_shop({shop_id}): no mailbox connected, skipping")
+            return False
+        if not MS_CLIENT_ID or not MS_CLIENT_SECRET:
+            log.warning("notify_shop: MS creds missing")
+            return False
+        # Refresh token if needed
+        exp = acct.get("expires_at")
+        if isinstance(exp, str):
+            try:
+                exp = datetime.fromisoformat(exp.replace("Z", "+00:00"))
+            except Exception:
+                exp = None
+        if not (exp and _now() + timedelta(minutes=5) < exp):
+            rt = acct.get("refresh_token")
+            if not rt:
+                log.warning(f"notify_shop({shop_id}): no refresh token")
+                return False
+            async with httpx.AsyncClient(timeout=30) as c:
+                r = await c.post(f"{MS_AUTHORITY}/oauth2/v2.0/token", data={
+                    "client_id": MS_CLIENT_ID, "client_secret": MS_CLIENT_SECRET,
+                    "grant_type": "refresh_token", "refresh_token": rt, "scope": MS_SCOPES,
+                })
+            if r.status_code != 200:
+                log.warning(f"notify_shop refresh failed: {r.status_code} {r.text[:200]}")
+                return False
+            tk = r.json()
+            new_exp = _now() + timedelta(seconds=int(tk.get("expires_in", 3600)))
+            patch = {"access_token": tk["access_token"], "refresh_token": tk.get("refresh_token", rt),
+                     "expires_at": new_exp.isoformat(), "updated_at": _now().isoformat()}
+            await db.email_accounts.update_one({"_id": acct["_id"]}, {"$set": patch})
+            acct.update(patch)
+
+        to_addr = (to_override or acct.get("account_email") or "").strip()
+        if not to_addr:
+            log.warning(f"notify_shop({shop_id}): no destination address")
+            return False
+        msg = {
+            "subject": subject,
+            "body": {"contentType": "HTML", "content": body_html},
+            "toRecipients": [{"emailAddress": {"address": to_addr}}],
+        }
+        async with httpx.AsyncClient(timeout=30) as c:
+            r = await c.post(
+                f"{GRAPH}/me/sendMail",
+                headers={"Authorization": f"Bearer {acct['access_token']}",
+                         "Content-Type": "application/json"},
+                json={"message": msg, "saveToSentItems": False},
+            )
+        if r.status_code in (200, 201, 202, 204):
+            return True
+        log.warning(f"notify_shop send failed: {r.status_code} {r.text[:200]}")
+        return False
+    except Exception as e:
+        log.exception(f"notify_shop({shop_id}) crashed: {e}")
+        return False
+
+
+
 # ============ Router factory ============
 def make_email_router(db, get_user):
     router = APIRouter()
