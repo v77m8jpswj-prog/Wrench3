@@ -1998,6 +1998,7 @@ async def realtime_session(user=Depends(get_user)):
         "• When Doc asks about something in his library/books/manuals, CALL search_library FIRST before answering from memory.\n"
         "• When Doc asks 'show me a diagram', 'send me a schematic', 'pull up a pinout', 'where is the X located', 'picture of', or any field-tech question that needs a VISUAL, CALL find_diagram with a tight query + vehicle context. The images render on screen automatically — read your answer out loud while Doc looks at them.\n"
         "• When Doc asks about a recall, TSB, forum fix, current part price, latest news, or anything you don't have memorized cold and that needs FRESH web data, CALL web_search. Don't say 'I can't look that up' — you CAN, just call the tool.\n"
+        "• EMAIL/OUTLOOK: When Doc says 'any new emails', 'check my inbox', 'what's in the inbox' → CALL inbox_recent. When Doc says 'find the email from X' or 'search for X' → CALL email_search. When Doc says 'draft a reply to X' / 'write him back' / 'tell him Y' → CALL draft_email_reply with the message_id (look it up first if you don't have it) AND a short instruction. The draft is saved to Outlook Drafts — Doc must explicitly confirm 'send it' before you CALL send_draft. When Doc wants to send a brand-new email (not a reply), CALL send_email after he confirms to / subject / body. NEVER send without confirmation.\n"
         "• NEVER say you can't pull diagrams or look things up. You have find_diagram and web_search. Use them. Techs in the field need answers + visuals.\n"
         "• When Doc asks 'what's my login for [site]' or 'pull up the password for X' or 'log into X for me', CALL lookup_credentials with the site name.\n"
         "• When Doc describes a problem and asks 'has the shop seen this before' / 'have I fixed this before' / 'check my cases' / 'pull up similar repairs', CALL find_similar_cases with the symptom and vehicle. Then read the top match out loud (year/make/model, root cause, what we did).\n"
@@ -2198,6 +2199,70 @@ async def realtime_session(user=Depends(get_user)):
                             "dtc_codes": {"type": "array", "items": {"type": "string"}, "description": "OBD-II codes if known (e.g. ['P0300'])"},
                         },
                         "required": ["symptom"],
+                    },
+                },
+                {
+                    "type": "function",
+                    "name": "inbox_recent",
+                    "description": "Check Doc's Outlook inbox for recent emails. Use when Doc says 'any new emails', 'check my email', 'what's in the inbox'. Returns sender + subject + preview for each.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "limit": {"type": "integer", "description": "How many to fetch (default 10, max 25)"},
+                            "unread_only": {"type": "boolean", "description": "Only show unread emails"},
+                        },
+                    },
+                },
+                {
+                    "type": "function",
+                    "name": "email_search",
+                    "description": "Search Doc's Outlook inbox by sender, subject, or keyword. Use when Doc says 'find the email from John', 'search for invoices', 'any email about the Tahoe'.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string", "description": "Search terms: sender name, subject keyword, body keyword, etc."},
+                        },
+                        "required": ["query"],
+                    },
+                },
+                {
+                    "type": "function",
+                    "name": "draft_email_reply",
+                    "description": "AI-draft a reply to a specific email in Doc's inbox. Use when Doc says 'draft a reply to John about the Tahoe', 'write him back', 'tell him the cold start is fixed'. The draft is saved to Outlook Drafts (NOT sent). Doc reviews and approves before sending.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "message_id": {"type": "string", "description": "The Outlook message_id to reply to. Look it up with email_search/inbox_recent first if you don't have it."},
+                            "instruction": {"type": "string", "description": "What Doc wants the reply to say. Wrench writes the actual prose in Doc's voice."},
+                        },
+                        "required": ["message_id", "instruction"],
+                    },
+                },
+                {
+                    "type": "function",
+                    "name": "send_draft",
+                    "description": "Send a previously-drafted email. Use ONLY after Doc explicitly says 'send it' / 'fire it' / 'send the draft' and Wrench has just drafted it. Never send without explicit confirmation.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "draft_id": {"type": "string", "description": "The Outlook draft_id from draft_email_reply"},
+                        },
+                        "required": ["draft_id"],
+                    },
+                },
+                {
+                    "type": "function",
+                    "name": "send_email",
+                    "description": "Compose AND send a brand-new email from scratch (no reply chain). Use ONLY after Doc confirms recipient + subject + body. For replies to existing emails, use draft_email_reply + send_draft instead.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "to": {"type": "array", "items": {"type": "string"}, "description": "Recipient email addresses"},
+                            "subject": {"type": "string"},
+                            "body": {"type": "string"},
+                            "cc": {"type": "array", "items": {"type": "string"}},
+                        },
+                        "required": ["to", "subject", "body"],
                     },
                 },
             ],

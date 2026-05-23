@@ -281,6 +281,51 @@ export function AppProvider({ children }) {
           // Return to Wrench but redact the password in the model's view so he doesn't say it out loud
           output = { ok: true, site: top.site, url: top.url, username: top.username, password_visible_in_chat_only: true };
         }
+      } else if (name === "inbox_recent") {
+        const limit = Math.min(args.limit || 10, 25);
+        const r = await api.get(`/email/messages?limit=${limit}${args.unread_only ? "&unread_only=true" : ""}`);
+        const items = (r.data?.value || r.data || []).slice(0, limit);
+        if (items.length === 0) {
+          transcriptNote = `✓ INBOX EMPTY`;
+          output = { ok: true, count: 0, messages: [], summary_for_voice: "Inbox is clean. No new emails." };
+        } else {
+          const lines = items.map(m => `${m.is_read?"":"●"} ${m.from || ""} — ${m.subject || "(no subject)"}`).join("\n");
+          addArtifact({ type: "note", title: `Inbox (${items.length})`, body: lines });
+          transcriptNote = `✓ INBOX → ${items.length} message${items.length===1?"":"s"}`;
+          output = { ok: true, count: items.length, messages: items.map(m => ({
+            id: m.id, from: m.from, subject: m.subject, preview: (m.preview || "").slice(0, 200), is_read: m.is_read, received: m.received,
+          })), summary_for_voice: `You have ${items.length} ${items.length===1?"email":"emails"}. ${items[0].from} sent about ${items[0].subject || "no subject"}.` };
+        }
+      } else if (name === "email_search") {
+        const r = await api.get(`/email/search?q=${encodeURIComponent(args.query || "")}&top=15`);
+        const items = (r.data?.value || r.data || []);
+        if (items.length === 0) {
+          transcriptNote = `✗ NO EMAIL MATCH FOR "${args.query}"`;
+          output = { ok: true, count: 0, messages: [], summary_for_voice: `Nothing in the inbox matching "${args.query}".` };
+        } else {
+          const lines = items.slice(0,10).map(m => `${m.from || ""} — ${m.subject || "(no subject)"}`).join("\n");
+          addArtifact({ type: "note", title: `Email search: ${args.query}`, body: lines });
+          transcriptNote = `✓ EMAIL SEARCH → ${items.length} hit${items.length===1?"":"s"}`;
+          output = { ok: true, count: items.length, messages: items.slice(0,10).map(m => ({
+            id: m.id, from: m.from, subject: m.subject, preview: (m.preview || "").slice(0,200), received: m.received,
+          })), summary_for_voice: `Found ${items.length}. Top hit: ${items[0].from} about ${items[0].subject || "no subject"}.` };
+        }
+      } else if (name === "draft_email_reply") {
+        const r = await api.post(`/email/draft-reply/${args.message_id}`, { instruction: args.instruction || "" });
+        const d = r.data || {};
+        addArtifact({ type: "note", title: `Draft reply: ${d.subject || ""}`, body: `TO: ${(d.to_recipients || []).join(", ")}\nSUBJECT: ${d.subject || ""}\n\n${d.body || ""}\n\n(Draft saved to Outlook Drafts. Say "send it" to fire, or open Drafts to edit.)` });
+        transcriptNote = `✓ DRAFT SAVED → ${(d.to_recipients||[]).join(", ").slice(0,40)}`;
+        output = { ok: true, draft_id: d.id, subject: d.subject, to: d.to_recipients, body_preview: (d.body || "").slice(0, 400), summary_for_voice: `Draft saved. Recipient ${(d.to_recipients||[])[0] || "the customer"}. Want me to send it?` };
+      } else if (name === "send_draft") {
+        const r = await api.post(`/email/drafts/${args.draft_id}/send`);
+        transcriptNote = `✓ EMAIL SENT`;
+        output = { ok: true, sent: true, summary_for_voice: "Sent. Anything else?" };
+      } else if (name === "send_email") {
+        const r = await api.post("/email/send", {
+          to: args.to || [], subject: args.subject || "", body: args.body || "", cc: args.cc || [],
+        });
+        transcriptNote = `✓ EMAIL SENT → ${(args.to||[]).join(", ").slice(0,40)}`;
+        output = { ok: true, sent: true, summary_for_voice: `Sent to ${(args.to||[])[0] || "the recipient"}. Anything else?` };
       }
     } catch (e) {
       output = { ok: false, error: e?.response?.data?.detail || e?.message || String(e) };
