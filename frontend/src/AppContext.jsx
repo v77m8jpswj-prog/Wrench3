@@ -93,6 +93,22 @@ export function AppProvider({ children }) {
   const gainRef = useRef(null);
   const timerRef = useRef(null);
   const pendingAssistantRef = useRef("");
+  const responseInFlightRef = useRef(false);  // true while a response.create is mid-stream
+  const pendingTurnsRef = useRef([]);          // queued user turns to fire after current response.done
+
+  // Helper: send a response.create only when no response is in-flight; queue otherwise.
+  const safeRequestResponse = () => {
+    if (!dcRef.current || dcRef.current.readyState !== "open") return;
+    if (responseInFlightRef.current) {
+      // A response is currently streaming. Mark that we owe one more.
+      pendingTurnsRef.current.push("respond");
+      return;
+    }
+    try {
+      responseInFlightRef.current = true;
+      dcRef.current.send(JSON.stringify({ type: "response.create" }));
+    } catch {/* ignore */}
+  };
 
   useEffect(() => {
     if (gainRef.current) gainRef.current.gain.value = callVolume;
@@ -340,7 +356,7 @@ export function AppProvider({ children }) {
         type: "conversation.item.create",
         item: { type: "function_call_output", call_id: callId, output: JSON.stringify(output) },
       }));
-      dcRef.current.send(JSON.stringify({ type: "response.create" }));
+      safeRequestResponse();
     } catch {}
   };
 
@@ -348,6 +364,8 @@ export function AppProvider({ children }) {
   const haltWrench = () => {
     try { if (audioElRef.current) { audioElRef.current.pause(); audioElRef.current.currentTime = 0; } } catch {}
     try { dcRef.current?.send(JSON.stringify({ type: "response.cancel" })); } catch {}
+    responseInFlightRef.current = false;
+    pendingTurnsRef.current = [];
   };
 
   // Auto-extract URLs from Wrench's transcript so links never get spelled out without a clickable link backup
@@ -464,12 +482,33 @@ export function AppProvider({ children }) {
 
   const handleEvent = (evt) => {
     const t = evt.type;
+    // Track response lifecycle so we don't fire two response.create's in parallel
+    if (t === "response.created") {
+      responseInFlightRef.current = true;
+    }
+    if (t === "response.done" || t === "response.completed" || t === "response.cancelled" || t === "response.canceled") {
+      responseInFlightRef.current = false;
+      // If a user turn arrived mid-response, fire it now
+      if (pendingTurnsRef.current.length > 0) {
+        pendingTurnsRef.current = [];
+        setTimeout(() => safeRequestResponse(), 50);
+      }
+    }
     // When Doc starts speaking, immediately stop Wrench's audio playback (barge-in)
     if (t === "input_audio_buffer.speech_started") {
       try {
         if (audioElRef.current) { audioElRef.current.pause(); audioElRef.current.currentTime = 0; }
       } catch {}
       try { dcRef.current?.send(JSON.stringify({ type: "response.cancel" })); } catch {}
+      // Mark response as no longer in flight — the next user turn can fire a fresh response.create
+      responseInFlightRef.current = false;
+    }
+    if (t === "error") {
+      // If we hit "active response in progress", clear the flag so the next turn can fire
+      const msg = evt.error?.message || "";
+      if (msg.toLowerCase().includes("active response")) {
+        responseInFlightRef.current = false;
+      }
     }
     if (t === "conversation.item.input_audio_transcription.completed") {
       const txt = (evt.transcript || "").trim();
@@ -505,7 +544,14 @@ export function AppProvider({ children }) {
     if (t === "response.output_item.done" && evt.item?.type === "function_call") {
       handleFunctionCall(evt.item.call_id, evt.item.name, evt.item.arguments);
     }
-    if (t === "error") setCallError(evt.error?.message || "Realtime error");
+    if (t === "error") {
+      const msg = evt.error?.message || "Realtime error";
+      // Swallow the "active response in progress" error — we already handle the race
+      // condition upstream by gating response.create. Showing it scares Doc.
+      if (!msg.toLowerCase().includes("active response")) {
+        setCallError(msg);
+      }
+    }
   };
 
   const sendCallText = (text) => {
@@ -517,7 +563,7 @@ export function AppProvider({ children }) {
         type: "conversation.item.create",
         item: { type: "message", role: "user", content: [{ type: "input_text", text }] },
       }));
-      dcRef.current.send(JSON.stringify({ type: "response.create" }));
+      safeRequestResponse();
       return true;
     } catch (e) { setCallError("Send failed: " + (e?.message || e)); return false; }
   };
@@ -537,6 +583,8 @@ export function AppProvider({ children }) {
     try { audioCtxRef.current && audioCtxRef.current.close(); } catch {}
     dcRef.current = null; pcRef.current = null; localStreamRef.current = null;
     audioCtxRef.current = null; gainRef.current = null;
+    responseInFlightRef.current = false;
+    pendingTurnsRef.current = [];
     stopTick();
     setCallMuted(false);
   };
