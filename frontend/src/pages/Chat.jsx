@@ -109,7 +109,23 @@ export default function Chat() {
 
   useEffect(() => {
     const isMobile = typeof window !== "undefined" && window.matchMedia && window.matchMedia("(max-width: 767px)").matches;
-    if (!isMobile) endRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (isMobile) return;
+    // Only auto-scroll if the user is already near the bottom — don't yank them
+    // back down while they're scrolling up to read older messages.
+    const el = endRef.current?.parentElement;
+    if (!el) return;
+    // Find the actual scrollable ancestor (the messages container)
+    let scroller = el;
+    while (scroller && scroller !== document.body) {
+      const oy = window.getComputedStyle(scroller).overflowY;
+      if (oy === "auto" || oy === "scroll") break;
+      scroller = scroller.parentElement;
+    }
+    if (!scroller) return;
+    const distFromBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+    if (distFromBottom < 160) {
+      endRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
   }, [messages, thinking]);
 
   const loadSession = async (sid) => {

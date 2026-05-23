@@ -61,9 +61,14 @@ export default function Tune() {
     }
   }, [sessionId]);
 
-  // Auto-scroll to bottom on new message
+  // Auto-scroll only when user is already near the bottom
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+    const el = scrollRef.current;
+    if (!el) return;
+    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (distFromBottom < 160) {
+      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    }
   }, [messages, busy]);
 
   // Page-level paste: text → input, image → pending attachment
