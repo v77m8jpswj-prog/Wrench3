@@ -841,6 +841,13 @@ async def chat(body: ChatReq, user=Depends(get_user)):
             "    full corrected table in the locked format.\n"
             "  - Skip narrative. Skip pleasantries. PATH → cursor coords → table → what changed → next.\n"
             "  - Strip the '[TUNE]' tag from your reasoning — just treat it as 'tune mode is on'.\n"
+            "  - EXTERNAL OUTPUT GUARD: If Doc forwards a chart/snip that was clearly emitted by another\n"
+            "    tool (anything not in your Doc's-locked-format from /tune — typically older /hpt-fix\n"
+            "    output, generic LLM chat output, or a third-party tool), DO NOT silently treat it as\n"
+            "    canonical. In your reply, lead with a single line:\n"
+            "        SOURCE: EXTERNAL — UNVERIFIED\n"
+            "    Then state what you're seeing, ask Doc to confirm before you trust the numbers, and\n"
+            "    DO NOT auto-log it to tune_log as if it's a Wrench-blessed edit.\n"
         )
 
     # --- Auto web-search trigger ---
