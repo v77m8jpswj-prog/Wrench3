@@ -115,6 +115,27 @@ export function AppProvider({ children }) {
     else if (audioElRef.current) audioElRef.current.volume = Math.min(1, callVolume);
   }, [callVolume]);
 
+  // SAFETY: when the tab/window goes hidden (computer sleeps, Doc Cmd-Tabs away),
+  // hard-stop the call so Wrench can't chatter into a room he can't see. Also
+  // catches the "two voices going" symptom from a stale background call.
+  useEffect(() => {
+    const onHidden = () => {
+      if (document.visibilityState === "hidden" && (pcRef.current || dcRef.current)) {
+        try { dcRef.current?.send(JSON.stringify({ type: "response.cancel" })); } catch {}
+        cleanupCall();
+        setCallState("idle");
+      }
+    };
+    const onUnload = () => { if (pcRef.current || dcRef.current) cleanupCall(); };
+    document.addEventListener("visibilitychange", onHidden);
+    window.addEventListener("beforeunload", onUnload);
+    return () => {
+      document.removeEventListener("visibilitychange", onHidden);
+      window.removeEventListener("beforeunload", onUnload);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // ============ Tool / Function calling — execute Wrench's tool calls ============
   // Some Realtime events arrive as response.output_item.done with item.type === "function_call"
   const handleFunctionCall = async (callId, name, argsJson) => {
@@ -300,7 +321,8 @@ export function AppProvider({ children }) {
       } else if (name === "inbox_recent") {
         const limit = Math.min(args.limit || 10, 25);
         const r = await api.get(`/email/messages?limit=${limit}${args.unread_only ? "&unread_only=true" : ""}`);
-        const items = (r.data?.value || r.data || []).slice(0, limit);
+        const raw = r.data;
+        const items = Array.isArray(raw) ? raw.slice(0, limit) : (Array.isArray(raw?.value) ? raw.value.slice(0, limit) : []);
         if (items.length === 0) {
           transcriptNote = `✓ INBOX EMPTY`;
           output = { ok: true, count: 0, messages: [], summary_for_voice: "Inbox is clean. No new emails." };
@@ -314,7 +336,8 @@ export function AppProvider({ children }) {
         }
       } else if (name === "email_search") {
         const r = await api.get(`/email/search?q=${encodeURIComponent(args.query || "")}&top=15`);
-        const items = (r.data?.value || r.data || []);
+        const raw = r.data;
+        const items = Array.isArray(raw) ? raw : (Array.isArray(raw?.value) ? raw.value : []);
         if (items.length === 0) {
           transcriptNote = `✗ NO EMAIL MATCH FOR "${args.query}"`;
           output = { ok: true, count: 0, messages: [], summary_for_voice: `Nothing in the inbox matching "${args.query}".` };
@@ -386,6 +409,12 @@ export function AppProvider({ children }) {
 
   const startCall = async () => {
     if (callState === "connected" || callState === "connecting") return;
+    // DEFENSIVE: if there's a lingering peer connection or data channel from a half-dead
+    // call (e.g. computer woke from sleep, tab returned from background), tear it down
+    // before opening a new one. This kills the "two voices at once" bug.
+    if (pcRef.current || dcRef.current || localStreamRef.current) {
+      cleanupCall();
+    }
     setCallError(""); setCallSeconds(0);
     // Link to active chat session (or create a new one). Calls and chats share history.
     let linkedSession = localStorage.getItem("dw_chat_session");

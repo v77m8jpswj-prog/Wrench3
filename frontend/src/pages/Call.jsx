@@ -58,6 +58,9 @@ export default function Call() {
 
           {callState === "connected" && (
             <>
+              <button data-testid="halt-wrench" onClick={haltWrench} className="w-full max-w-xs py-3 mb-2 border-2 border-amber2 text-amber2 hover:bg-amber2 hover:text-black uppercase tracking-widest text-sm font-bold">
+                SHUT WRENCH UP (HALT)
+              </button>
               <div className="flex items-center gap-3 w-full max-w-xs">
                 <button data-testid="mute-toggle" onClick={toggleCallMute} className={`flex-1 py-4 border-2 ${callMuted?"border-amber2 text-amber2":"border-line text-ink-2"} flex items-center justify-center gap-2`}>
                   {callMuted ? <MicOff size={18}/> : <Mic size={18}/>}
@@ -88,7 +91,7 @@ export default function Call() {
 
           <div className="mt-6 text-[10px] text-ink-3 uppercase tracking-[0.2em] leading-relaxed">
             POWERED BY OPENAI REALTIME · ~250MS · INTERRUPT-ABLE<br/>
-            <span className="text-amber2">CALL STAYS LIVE WHEN YOU SWITCH TABS</span>
+            <span className="text-amber2">CALL AUTO-HANGS UP IF TAB GOES INACTIVE (NO MORE GHOST WRENCH)</span>
           </div>
         </div>
 

@@ -108,6 +108,19 @@ export default function Chat() {
       if (messages.length === 0) {
         api.get(`/chat/sessions/${sessionId}`).then(r => {
           setMessages((r.data.messages || []).map(m => ({ role: m.role, content: m.content })));
+          // Scroll the messages container to the TOP after history load so Doc lands
+          // on the start of the conversation, not the bottom.
+          setTimeout(() => {
+            const scroller = endRef.current?.parentElement;
+            let s = scroller;
+            while (s && s !== document.body) {
+              const oy = window.getComputedStyle(s).overflowY;
+              if (oy === "auto" || oy === "scroll") break;
+              s = s.parentElement;
+            }
+            if (s) s.scrollTop = 0;
+            window.scrollTo(0, 0);
+          }, 50);
         }).catch(()=>{ localStorage.removeItem("dw_chat_session"); setSessionId(null); });
       }
     } else {

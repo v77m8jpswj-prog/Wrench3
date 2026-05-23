@@ -36,7 +36,23 @@ export default function TeamChat() {
     return () => clearInterval(t);
   }, [active]);
 
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
+  // Auto-scroll only the messages container (never the window) and only if Doc is
+  // already near the bottom. Stops the team page from yanking when reading older msgs.
+  useEffect(() => {
+    const el = endRef.current?.parentElement;
+    if (!el) return;
+    let s = el;
+    while (s && s !== document.body) {
+      const oy = window.getComputedStyle(s).overflowY;
+      if (oy === "auto" || oy === "scroll") break;
+      s = s.parentElement;
+    }
+    if (!s) return;
+    const distFromBottom = s.scrollHeight - s.scrollTop - s.clientHeight;
+    if (distFromBottom < 160) s.scrollTop = s.scrollHeight;
+  }, [messages]);
+  // Pin window to top on mount so landing on /team doesn't drop into the input
+  useEffect(() => { window.scrollTo(0, 0); }, []);
 
   const activeThread = threads.find(t => t.key === active);
 
