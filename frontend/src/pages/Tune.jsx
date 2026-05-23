@@ -65,15 +65,19 @@ export default function Tune() {
     }
   }, [sessionId]);
 
-  // Auto-scroll only when user is already near the bottom
+  // Auto-scroll only when user is already near the bottom — and ONLY the message
+  // container, not the window (scrollIntoView would yank the whole page).
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
     const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
     if (distFromBottom < 160) {
-      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+      el.scrollTop = el.scrollHeight;
     }
   }, [messages, busy]);
+
+  // Pin window to top on mount so landing on /tune doesn't auto-scroll the page
+  useEffect(() => { window.scrollTo(0, 0); }, []);
 
   // Page-level paste: text → input, image → pending attachment
   useEffect(() => {

@@ -60,6 +60,13 @@ export default function Chat() {
   // Keep the screen on while Chat is open (so it doesn't sleep mid-tune under a truck)
   useWakeLock(true);
 
+  // Pin the window scroll to the top on mount — defensive fix so landing on /chat
+  // never auto-scrolls the whole page down to the input. (The message box has its
+  // own scroll independent of the window.)
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, []);
+
   // Unlock iOS audio playback — must be called inside a user gesture
   const unlockAudio = () => {
     if (audioUnlockedRef.current) return;
@@ -128,7 +135,9 @@ export default function Chat() {
     if (!scroller) return;
     const distFromBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
     if (distFromBottom < 160) {
-      endRef.current?.scrollIntoView({ behavior: "smooth" });
+      // Scroll ONLY the message container, never the window. scrollIntoView bubbles
+      // up to the window and yanks the whole page — set scrollTop directly instead.
+      scroller.scrollTop = scroller.scrollHeight;
     }
   }, [messages, thinking]);
 
