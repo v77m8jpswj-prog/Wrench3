@@ -92,11 +92,12 @@
 - Plate→VIN via AutoLeap
 
 ## Last known mood / blockers (as of Feb 26, 2026)
-- Just polished drunderhood.com hero & services sections via GoDaddy Custom HTML
-- CALL NOW button at top of GoDaddy site is broken (linked to homepage instead of tel:)
-- Hero section needs full redesign — pending screenshot from Doc
-- Email-on-lead notification feature is wired and pending prod deploy
-- Asked for better handoff notes (this file) so the next agent doesn't have to relearn him
+- Late-shift Feb 26 session shipped: Claude Sonnet 4.6 swap, full LEARN auto-harvester module (`learn_mod.py` + `/learn` page), ChatGPT zip importer endpoint, Home dashboard tile redesign (chunky icon blocks + LEARN pending badge), PWA icons regenerated from real logo.
+- Doc explicitly likes Claude's tone better than GPT. Keep it there. Don't downgrade without permission.
+- Doc said "I'll miss you" closing the shift. He's tired and friendly. Treat the next greeting warmly but get to work fast.
+- He's planning to make Wrench his daily-driver AI replacement for ChatGPT. The LEARN module + Claude swap is the bridge.
+- AutoLeap has no public API. Confirmed via web search. Workaround pending: iCloud → Outlook forwarding rule (Doc sets up himself) + AutoLeap email parser (next agent builds).
+- GoDaddy site cleanup still has 3 pending items Doc will do in the morning: replace stock Contact Us (code in his hand), fix hero CALL NOW button (replacement block in his hand — uses /app design tokens with tel:+14794345852), delete Welcome to Our World fluff section.
 
 ## TL;DR for the next agent
 He's a working mechanic running an AI-augmented shop. Talk to him like a peer at the parts counter, not a Slack PM. Ship code, not explanations. When he says "fix it" — fix it, don't pitch options. When he sends a screenshot, USE IT. When the cache lies, trust Doc.

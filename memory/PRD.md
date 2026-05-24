@@ -46,7 +46,29 @@ Already covered in this session:
 - [x] **Auto-learn harvester (LEARN module)** (Feb 26, 2026) — new `learn_mod.py` + `/learn` page. Claude scans Doc's chat history, extracts candidate facts ("Doc tunes on OS E80 calibrations for GM applications" etc.) with confidence + category. Auto-locks high-confidence repeated facts (≥0.85 + seen ≥2x); queues ambiguous ones for tap-to-approve review. Endpoints: `/learn/candidates`, `/learn/harvest`, `/learn/log`, `/learn/stats`. **ChatGPT export importer** (`POST /learn/import/chatgpt`) parses uploaded zip's `conversations.json`, runs full retroactive sweep. Frontend Home tile + dedicated review queue at `/learn`.
 - [x] **Operator profile handoff doc** (Feb 26, 2026) — `/app/memory/OPERATOR_PROFILE.md` captures Doc's communication style, pet peeves, brand standards, env gotchas. Next agent reads this BEFORE first reply to skip re-learning.
 
-## Open / pending
+## Last known mood / blockers (as of Feb 26, 2026 — late shift)
+- Doc spent the night polishing drunderhood.com via GoDaddy Custom HTML. Hero/services/quote sections are CLEAN. Old stock Contact Us still pending replacement (block already in his hand). Hero CALL NOW button is still broken — he's doing it in the morning.
+- Main `/api/chat` brain swapped from GPT-5.2 → Claude Sonnet 4.6. Doc explicitly prefers Claude's tone. Persona is tighter, less padding.
+- New LEARN module shipped — auto-extracts Doc-isms from chat history. 28 candidates queued in preview from real Doc chats. He'll tap-review them on the dashboard.
+- Home page rebuilt with chunky icon-block tiles, badge on LEARN tile showing pending count.
+- PWA icons regenerated from real Dr. Underhood logo (1024px source). When Doc re-saves the app to his iPhone home screen via Safari, it'll show the proper red shield, not a generic W.
+- AutoLeap has NO public API (confirmed). His AutoLeap emails come to doctorunderhood@icloud.com. Recommended path: iCloud auto-forwarding rule → AutoLeap mails land in his Outlook → Wrench reads them. He's expected to set up the forwarding rule himself.
+- Doc said "after this build I'll basically stay with Wrench" — he wants Wrench to become his daily-driver AI. Confirmed that's possible for shop ops; for app-level changes Emergent still recommended.
+
+## NEXT SHIFT — when Doc has his ChatGPT zip (do these together in ONE session)
+1. **ChatGPT export sweep** — Doc will upload his zip to `/learn` (POST /api/learn/import/chatgpt). Wait for completion (could take 5-20 min depending on size). Verify stats endpoint after.
+2. **Weekly digest email** — build a cron-friendly endpoint `POST /api/learn/digest` that:
+   - Queries last 7 days of chat_messages, closed brain_cases, tune_log entries, approved memory_facts
+   - Asks Claude to write a friendly Sunday-morning recap as Wrench
+   - Calls `notify_shop(db, shop_id, subject, body_html)` from email_mod.py to fire to Doc's Outlook
+   - Stub a daily cron in `seeded_letters.py` style or use APScheduler. Schedule: Sundays 9 AM CT.
+3. **AutoLeap email parser** — once Doc has set up the iCloud → Outlook forward rule:
+   - Add a `_parse_autoleap_email(msg)` helper to email_mod.py that pulls RO#, customer name, vehicle, parts/labor totals from the email body
+   - In the inbox poller (or via a new `/api/email/process-autoleap` endpoint), detect emails from AutoLeap sender and auto-insert into `brain_cases` collection so the case feeds the RAG embeddings
+   - DON'T auto-respond. Just ingest silently. Doc reviews from the Cases page if he wants.
+4. **Wrench Builds prototype** — new `/builds` page where Doc describes a feature in plain English, Claude writes the code as a unified diff in a draft, Doc can preview, then "Ship to Emergent" which writes the diff to `/app/builds/queued/{id}.diff` for the next Emergent agent to pick up. KEEP SCOPE SMALL — no auto-deploy, no auto-merge. Just a structured handoff queue.
+
+## Open / pending (existing, still valid)
 - [ ] Microsoft creds need to be added to PRODUCTION env vars after redeploy + 2nd redirect URI on Azure
 - [ ] Optional: migration script to copy preview library/cases/credentials → prod DB
 - [ ] (P1) Persist vehicle_id onto chat_sessions on every /chat call
