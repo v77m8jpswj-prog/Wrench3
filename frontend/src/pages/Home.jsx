@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useApp } from "@/AppContext";
 import {
-  MessageCircle, Phone, Wrench, BarChart3, Users, Inbox, Truck, BookOpen, Brain,
+  MessageCircle, Phone, Wrench, BarChart3, Users, Inbox, Truck, BookOpen, Brain, DollarSign,
 } from "lucide-react";
 import api from "@/api";
 
@@ -25,9 +25,11 @@ export default function Home() {
   const app = useApp();
   const activeVeh = app?.vehicles?.find?.(v => v.id === app?.activeVehicleId);
   const [learnPending, setLearnPending] = useState(null);
+  const [usage, setUsage] = useState(null);
 
   useEffect(() => {
     api.get("/learn/stats").then(r => setLearnPending(r.data?.pending || 0)).catch(() => {});
+    api.get("/usage/summary").then(r => setUsage(r.data)).catch(() => {});
   }, []);
 
   const tileBadge = (t) => {
@@ -48,6 +50,13 @@ export default function Home() {
           Welcome back, Doc.
           {activeVeh && <> · Active vehicle: <span className="text-amber2">{activeVeh.year} {activeVeh.make} {activeVeh.model}</span></>}
         </div>
+        {usage && (
+          <Link to="/usage" data-testid="home-cost-pill"
+            className="mt-3 inline-flex items-center gap-2 text-[11px] uppercase tracking-widest border border-amber2/40 text-amber2 px-3 py-1 hover:bg-amber2/10">
+            <DollarSign size={12}/>
+            ${usage.estimated_total_usd?.toFixed(2)} this month · {usage.month?.chats || 0} chats · {usage.month?.voice_sessions || 0} calls
+          </Link>
+        )}
       </div>
 
       {/* Quick-action grid */}

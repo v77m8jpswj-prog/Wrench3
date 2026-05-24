@@ -2454,10 +2454,124 @@ async def realtime_session(user=Depends(get_user)):
         if r.status_code != 200:
             log.error(f"Realtime client_secrets failed: {r.status_code} {r.text[:500]}")
             raise HTTPException(r.status_code, f"OpenAI: {r.text}")
+        # Log usage event (estimate-only; we don't know actual duration)
+        try:
+            await db.usage_events.insert_one({
+                "id": str(uuid.uuid4()),
+                "user_id": user["id"],
+                "shop_id": user.get("shop_id") or os.environ.get("DEFAULT_SHOP_ID", "drunderhood-fortsmith"),
+                "kind": "voice_session",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+        except Exception as _e:
+            log.warning(f"usage log voice_session failed: {_e}")
         return r.json()
     except httpx.HTTPError as e:
         log.exception("Realtime session HTTP error")
         raise HTTPException(503, f"Realtime upstream error: {e}")
+
+
+# ============ Usage / cost dashboard ============
+# Rough cost estimates (USD). These are blended in+out averages for current
+# models we route through. Adjust here when provider pricing changes.
+COST = {
+    "chat_msg":      0.015,   # Claude Sonnet 4.6 ~$3/M in, $15/M out — ~2k in + 600 out per turn
+    "voice_minute":  0.18,    # OpenAI Realtime blended (we estimate 5 min/session)
+    "voice_session_minutes_est": 5,  # avg session length assumed
+    "vision_msg":    0.025,   # vision call w/ image
+    "web_search":    0.030,   # OpenAI web search
+    "email_send":    0.000,   # Microsoft Graph free
+    "embedding":     0.0001,  # per RO embedding burst
+    "harvest_run":   0.020,   # one Claude pass per learn harvest batch
+}
+
+def _month_floor():
+    n = datetime.now(timezone.utc)
+    return n.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
+
+def _today_floor():
+    n = datetime.now(timezone.utc)
+    return n.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+
+@api.get("/usage/summary")
+async def usage_summary(user=Depends(get_user)):
+    """Return chat/voice/search/etc counts for today + month + estimated $."""
+    uid = user["id"]
+    month_start = _month_floor()
+    day_start = _today_floor()
+
+    # USER chat messages this month / today
+    chat_month = await db.chat_messages.count_documents({
+        "user_id": uid, "role": "user", "created_at": {"$gte": month_start}
+    })
+    chat_today = await db.chat_messages.count_documents({
+        "user_id": uid, "role": "user", "created_at": {"$gte": day_start}
+    })
+
+    # Voice sessions
+    voice_month = await db.usage_events.count_documents({
+        "user_id": uid, "kind": "voice_session", "created_at": {"$gte": month_start}
+    })
+    voice_today = await db.usage_events.count_documents({
+        "user_id": uid, "kind": "voice_session", "created_at": {"$gte": day_start}
+    })
+
+    # Web searches (scoped to user's shop)
+    sid = user.get("shop_id") or os.environ.get("DEFAULT_SHOP_ID", "drunderhood-fortsmith")
+    search_month = await db.search_cache.count_documents({
+        "scope_id": sid, "created_at": {"$gte": month_start}
+    })
+
+    # Cache hits saved this month (cost-savings)
+    pipeline = [
+        {"$match": {"scope_id": sid}},
+        {"$group": {"_id": None, "hits": {"$sum": "$hits"}}},
+    ]
+    agg = await db.search_cache.aggregate(pipeline).to_list(1)
+    cache_hits = (agg[0]["hits"] if agg else 0) or 0
+
+    # Learn harvests this month
+    harvest_month = await db.candidate_facts.count_documents({
+        "user_id": uid, "updated_at": {"$gte": month_start}
+    })
+
+    # Cost estimates
+    voice_minutes_est = voice_month * COST["voice_session_minutes_est"]
+    cost_chat = chat_month * COST["chat_msg"]
+    cost_voice = voice_minutes_est * COST["voice_minute"]
+    cost_search = search_month * COST["web_search"]
+    cost_harvest = max(0, harvest_month // 5) * COST["harvest_run"]  # rough — 1 batch per ~5 facts
+    cost_total = cost_chat + cost_voice + cost_search + cost_harvest
+
+    cost_saved = cache_hits * COST["web_search"]
+
+    return {
+        "period_start": month_start,
+        "today": {
+            "chats": chat_today,
+            "voice_sessions": voice_today,
+        },
+        "month": {
+            "chats": chat_month,
+            "voice_sessions": voice_month,
+            "voice_minutes_est": voice_minutes_est,
+            "web_searches": search_month,
+            "harvests": harvest_month,
+            "cache_hits": cache_hits,
+        },
+        "cost_breakdown_usd": {
+            "chat":   round(cost_chat, 2),
+            "voice":  round(cost_voice, 2),
+            "search": round(cost_search, 2),
+            "harvest": round(cost_harvest, 2),
+        },
+        "estimated_total_usd": round(cost_total, 2),
+        "estimated_saved_usd": round(cost_saved, 2),
+        "assumptions": {
+            "voice_minutes_per_session": COST["voice_session_minutes_est"],
+            "note": "Estimates only. Voice session length is averaged — actual OpenAI billing is per-second. Check Profile → Universal Key for the real number.",
+        },
+    }
 
 
 # ============ Tech management (shop owner adds team members) ============

@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Play, Save, UserPlus, Trash2, Shield, Wrench, Plus } from "lucide-react";
+import { Link } from "react-router-dom";
+import { Play, Save, UserPlus, Trash2, Shield, Wrench, Plus, DollarSign } from "lucide-react";
 import api, { API, getToken } from "@/api";
 
 const VOICES = ["onyx","ash","echo","fable","alloy","nova","sage","coral","shimmer"];
@@ -57,6 +58,19 @@ export default function Settings() {
           </div>
         )}
       </div>
+
+      {/* Quick link to usage dashboard */}
+      <Link to="/usage" data-testid="settings-usage-link"
+        className="panel p-4 mb-4 flex items-center gap-3 hover:border-amber2 transition-colors block">
+        <div className="shrink-0 w-12 h-12 border-2 bg-amber2/15 border-amber2/40 text-amber2 flex items-center justify-center">
+          <DollarSign size={22}/>
+        </div>
+        <div className="flex-1">
+          <div className="text-amber2 font-bold uppercase tracking-widest text-sm">USAGE &amp; COSTS</div>
+          <div className="text-ink-3 text-[11px] uppercase tracking-widest mt-0.5">See what Wrench has cost you this month</div>
+        </div>
+        <div className="text-amber2 text-2xl font-black opacity-30">→</div>
+      </Link>
 
       <div className="panel p-4 mb-4">
         <label className="label-shop">VOICE</label>

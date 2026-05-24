@@ -67,6 +67,7 @@ Already covered in this session:
    - In the inbox poller (or via a new `/api/email/process-autoleap` endpoint), detect emails from AutoLeap sender and auto-insert into `brain_cases` collection so the case feeds the RAG embeddings
    - DON'T auto-respond. Just ingest silently. Doc reviews from the Cases page if he wants.
 4. **Wrench Builds prototype** — new `/builds` page where Doc describes a feature in plain English, Claude writes the code as a unified diff in a draft, Doc can preview, then "Ship to Emergent" which writes the diff to `/app/builds/queued/{id}.diff` for the next Emergent agent to pick up. KEEP SCOPE SMALL — no auto-deploy, no auto-merge. Just a structured handoff queue.
+5. **USAGE DASHBOARD — SHIPPED Feb 27 morning shift** ✅ — `/api/usage/summary` endpoint + `/usage` page. Aggregates chat_messages (user role) + new `usage_events` collection (kind=voice_session) + search_cache + candidate_facts harvests. Cost estimates in `COST` dict at line ~2462 of server.py. Update those when provider pricing shifts. Voice sessions logged via insert into usage_events from the /realtime/session endpoint. Home dashboard has cost pill, Settings has USAGE & COSTS link tile. Doc verified the dashboard reads ($1.54/month at time of build).
 
 ## Open / pending (existing, still valid)
 - [ ] Microsoft creds need to be added to PRODUCTION env vars after redeploy + 2nd redirect URI on Azure

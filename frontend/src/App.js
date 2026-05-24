@@ -22,6 +22,7 @@ import DiffTune from "@/pages/DiffTune";
 import Tune from "@/pages/Tune";
 import Leads from "@/pages/Leads";
 import Learn from "@/pages/Learn";
+import Usage from "@/pages/Usage";
 import ShopLanding from "@/pages/ShopLanding";
 import Settings from "@/pages/Settings";
 import Shell from "@/components/Shell";
@@ -72,6 +73,7 @@ function App() {
                 <Route path="/tune" element={<Protected><Tune /></Protected>} />
                 <Route path="/leads" element={<Protected><Leads /></Protected>} />
                 <Route path="/learn" element={<Protected><Learn /></Protected>} />
+                <Route path="/usage" element={<Protected><Usage /></Protected>} />
                 <Route path="/settings" element={<Protected><Settings /></Protected>} />
                 <Route path="*" element={<Navigate to="/" />} />
               </Routes>
