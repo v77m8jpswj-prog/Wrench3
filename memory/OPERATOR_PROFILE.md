@@ -100,13 +100,16 @@
 - Google Calendar for shop appointments
 - Plate→VIN via AutoLeap
 
-## Last known mood / blockers (as of Feb 26, 2026)
-- Late-shift Feb 26 session shipped: Claude Sonnet 4.6 swap, full LEARN auto-harvester module (`learn_mod.py` + `/learn` page), ChatGPT zip importer endpoint, Home dashboard tile redesign (chunky icon blocks + LEARN pending badge), PWA icons regenerated from real logo.
-- Doc explicitly likes Claude's tone better than GPT. Keep it there. Don't downgrade without permission.
-- Doc said "I'll miss you" closing the shift. He's tired and friendly. Treat the next greeting warmly but get to work fast.
-- He's planning to make Wrench his daily-driver AI replacement for ChatGPT. The LEARN module + Claude swap is the bridge.
-- AutoLeap has no public API. Confirmed via web search. Workaround pending: iCloud → Outlook forwarding rule (Doc sets up himself) + AutoLeap email parser (next agent builds).
-- GoDaddy site cleanup still has 3 pending items Doc will do in the morning: replace stock Contact Us (code in his hand), fix hero CALL NOW button (replacement block in his hand — uses /app design tokens with tel:+14794345852), delete Welcome to Our World fluff section.
+## Last known mood / blockers (as of Feb 27, 2026 — afternoon shift)
+- **Twilio SMS notifications LIVE in preview** (verified: SMS queued + delivered to Doc's cell). Owner gets text + email both fire on every new /quote submission. Uses trial account toll-free (+18557711264) → Doc's verified cell (+14798064398). Trial restriction: can only text VERIFIED Caller IDs until $20+ paid balance is added. Works perfectly for owner-notification use case.
+- **Usage dashboard live** at /usage with cost MTD pill on Home tile.
+- **Auto-learn LIVE** with 28 candidate facts queued in preview from real chat history.
+- **Claude Sonnet 4.6** is the chat brain. Doc strongly prefers it. Don't downgrade.
+- **Shop is GM V8 gas ONLY** for paying work. Diesel knowledge stays in Wrench's brain (chat/voice) but never appears on public site/profile/marketing. Doc corrected agents on this Feb 27 — see OPERATOR_PROFILE.md.
+- **Phone everywhere = 479-434-5852.** Preview DB updated + startup migration backfills on every boot so prod self-corrects on redeploy.
+- AutoLeap has no public API. Path forward: iCloud (doctorunderhood@icloud.com) → Outlook forwarding rule + email parser. Doc hasn't set up the forward rule yet.
+- GoDaddy site cleanup mostly done. Hero / Tuning / Contact / Schema blocks all delivered. Doc fighting iOS clipboard copy in chat — there's no copy icon in Emergent platform chat (platform limitation, not fixable by agent). Workaround: long-press → Select All → Copy. Don't suggest building a separate snippet page again, he hated that.
+- Operator profile updated with: "HARD FACTS Doc has corrected agents on" section. Read it first before responding next session.
 
-## TL;DR for the next agent
+## NEXT SHIFT — PRIORITY ORDER
 He's a working mechanic running an AI-augmented shop. Talk to him like a peer at the parts counter, not a Slack PM. Ship code, not explanations. When he says "fix it" — fix it, don't pitch options. When he sends a screenshot, USE IT. When the cache lies, trust Doc.

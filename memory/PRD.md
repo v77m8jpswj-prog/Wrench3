@@ -55,19 +55,17 @@ Already covered in this session:
 - AutoLeap has NO public API (confirmed). His AutoLeap emails come to doctorunderhood@icloud.com. Recommended path: iCloud auto-forwarding rule → AutoLeap mails land in his Outlook → Wrench reads them. He's expected to set up the forwarding rule himself.
 - Doc said "after this build I'll basically stay with Wrench" — he wants Wrench to become his daily-driver AI. Confirmed that's possible for shop ops; for app-level changes Emergent still recommended.
 
-## NEXT SHIFT — when Doc has his ChatGPT zip (do these together in ONE session)
-1. **ChatGPT export sweep** — Doc will upload his zip to `/learn` (POST /api/learn/import/chatgpt). Wait for completion (could take 5-20 min depending on size). Verify stats endpoint after.
-2. **Weekly digest email** — build a cron-friendly endpoint `POST /api/learn/digest` that:
-   - Queries last 7 days of chat_messages, closed brain_cases, tune_log entries, approved memory_facts
-   - Asks Claude to write a friendly Sunday-morning recap as Wrench
-   - Calls `notify_shop(db, shop_id, subject, body_html)` from email_mod.py to fire to Doc's Outlook
-   - Stub a daily cron in `seeded_letters.py` style or use APScheduler. Schedule: Sundays 9 AM CT.
-3. **AutoLeap email parser** — once Doc has set up the iCloud → Outlook forward rule:
-   - Add a `_parse_autoleap_email(msg)` helper to email_mod.py that pulls RO#, customer name, vehicle, parts/labor totals from the email body
-   - In the inbox poller (or via a new `/api/email/process-autoleap` endpoint), detect emails from AutoLeap sender and auto-insert into `brain_cases` collection so the case feeds the RAG embeddings
-   - DON'T auto-respond. Just ingest silently. Doc reviews from the Cases page if he wants.
-4. **Wrench Builds prototype** — new `/builds` page where Doc describes a feature in plain English, Claude writes the code as a unified diff in a draft, Doc can preview, then "Ship to Emergent" which writes the diff to `/app/builds/queued/{id}.diff` for the next Emergent agent to pick up. KEEP SCOPE SMALL — no auto-deploy, no auto-merge. Just a structured handoff queue.
-5. **USAGE DASHBOARD — SHIPPED Feb 27 morning shift** ✅ — `/api/usage/summary` endpoint + `/usage` page. Aggregates chat_messages (user role) + new `usage_events` collection (kind=voice_session) + search_cache + candidate_facts harvests. Cost estimates in `COST` dict at line ~2462 of server.py. Update those when provider pricing shifts. Voice sessions logged via insert into usage_events from the /realtime/session endpoint. Home dashboard has cost pill, Settings has USAGE & COSTS link tile. Doc verified the dashboard reads ($1.54/month at time of build).
+## NEXT SHIFT — PRIORITY ORDER (do these together when Doc surfaces)
+0. **Doc may upload ChatGPT export zip** to /learn for retroactive sweep. Could take 5-20 min. Verify stats after.
+1. **REDEPLOY TRIGGER** — Doc may have redeployed by next session. After redeploy, verify on PROD that:
+   - shop_profiles.phone = "479-434-5852" (startup migration handles this)
+   - SMS notifications fire (test by submitting /quote on prod, watching for SMS to +14798064398)
+2. **Weekly digest email** — build `POST /api/learn/digest`: pulls 7 days of chats/cases/tunes/locked facts, asks Claude for a Wrench-voice Sunday recap, fires via `notify_shop()`. APScheduler or simple cron at Sundays 9 AM CT.
+3. **AutoLeap email parser** — once Doc sets up iCloud→Outlook forward rule: add `_parse_autoleap_email()` to email_mod.py to extract RO#/customer/vehicle/parts/labor, auto-insert into brain_cases. Silent ingest, no auto-reply.
+4. **Wrench Builds prototype** — /builds page where Doc describes feature in plain English, Claude writes diff to `/app/builds/queued/{id}.diff`, Emergent agent picks up on next session. No auto-deploy.
+5. **Daily auto-harvest cron** — schedule learn_mod harvest to run nightly (currently manual via /learn page button)
+6. **(Future) Outbound customer SMS** — once Doc adds $20+ paid balance to Twilio, the trial restriction lifts and we can text customers (reminders, follow-ups, "your truck is ready"). Today's wire is owner-only.
+7. **Refresh COST dict in server.py ~L2462** when LLM provider pricing shifts. Add `twilio_sms` line item (~$0.0083/msg) to usage_summary.
 
 ## Open / pending (existing, still valid)
 - [ ] Microsoft creds need to be added to PRODUCTION env vars after redeploy + 2nd redirect URI on Azure
