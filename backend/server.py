@@ -2702,6 +2702,20 @@ async def startup_migrate():
         )
     log.info(f"Startup migration complete. Shop: {shop_id}")
 
+    # Ensure shop_profile has Doc's real phone + address on every boot (idempotent).
+    # Fixes prod DB drift if old wrong number got seeded historically.
+    try:
+        await db.shop_profiles.update_one(
+            {"shop_id": shop_id},
+            {"$set": {
+                "phone": "479-434-5852",
+                "address": "5300 Towson Ave, Fort Smith, AR",
+            }},
+            upsert=False,
+        )
+    except Exception as e:
+        log.warning(f"shop_profile phone backfill: {e}")
+
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
