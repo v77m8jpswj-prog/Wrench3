@@ -29,6 +29,7 @@ import html as _html
 import httpx
 
 from email_mod import notify_shop
+from twilio_mod import notify_owner as twilio_notify_owner
 
 log = logging.getLogger("datawrench.brain")
 
@@ -1045,6 +1046,16 @@ def make_brain_router(db, get_user):
                 f"</div>"
             )
             asyncio.create_task(notify_shop(db, body.shop_id, subject, body_html))
+
+            # Also text Doc's cell — SMS is the urgent channel, email is the paper trail
+            sms_body = (
+                f"NEW LEAD — {doc['name']}\n"
+                f"Contact: {doc['contact']}\n"
+                + (f"Vehicle: {doc.get('vehicle')}\n" if doc.get('vehicle') else "")
+                + f"\n{doc['what_they_need'][:400]}\n\n"
+                f"foreman.drunderhood.com/leads"
+            )
+            asyncio.create_task(twilio_notify_owner(sms_body))
         except Exception as e:
             log.warning(f"lead notify dispatch failed: {e}")
 

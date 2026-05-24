@@ -127,3 +127,4 @@ PyMuPDF==1.27.2.3
 playwright==1.60.0
 beautifulsoup4==4.14.3
 lxml==6.1.1
+twilio==9.10.9
