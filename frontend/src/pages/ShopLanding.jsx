@@ -185,6 +185,9 @@ function QuoteForm({ shopId }) {
           <button type="submit" disabled={busy} data-testid="lead-submit" className="btn-rust w-full py-3 text-base flex items-center justify-center gap-2 disabled:opacity-50">
             <Send size={14}/>{busy ? "SENDING..." : "SEND IT"}
           </button>
+          <p data-testid="sms-consent" className="text-[11px] text-ink-3 leading-relaxed pt-2 border-t border-line mt-3">
+            By submitting this form, you agree to receive SMS text messages from Dr. Underhood Performance &amp; Tuning regarding your quote, vehicle service status, appointment reminders, and follow-up communications. Message frequency varies. Message and data rates may apply. Reply STOP to opt out at any time. Reply HELP for help. Your information is never shared or sold to third parties.
+          </p>
         </form>
       </div>
     </div>
