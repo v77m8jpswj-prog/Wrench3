@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { DollarSign, MessageCircle, Phone, Search, Brain, TrendingDown, RefreshCw } from "lucide-react";
 import api from "@/api";
 
-export default function Usage() {
+export default function UsageDashboard() {
   const [data, setData] = useState(null);
   const [err, setErr] = useState("");
   const [refreshing, setRefreshing] = useState(false);

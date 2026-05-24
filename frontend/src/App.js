@@ -22,7 +22,7 @@ import DiffTune from "@/pages/DiffTune";
 import Tune from "@/pages/Tune";
 import Leads from "@/pages/Leads";
 import Learn from "@/pages/Learn";
-import Usage from "@/pages/Usage";
+import Usage from "@/pages/Usage";  // default export: UsageDashboard
 import Snippets from "@/pages/Snippets";
 import ShopLanding from "@/pages/ShopLanding";
 import Settings from "@/pages/Settings";
