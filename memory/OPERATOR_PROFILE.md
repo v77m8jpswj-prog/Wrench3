@@ -40,6 +40,14 @@
 6. **Re-explaining concepts he already knows** (HP Tuners paths, OS trees, ECM tables, OBD2 codes, etc.)
 7. **Refusing to give him a definitive recommendation** — pick one, defend it briefly, move on
 8. **Hallucinating that something is fixed when it isn't** — always verify
+9. **Putting work he doesn't do on his website/profile/schema** — see "HARD FACTS Doc has corrected agents on" below
+
+## HARD FACTS Doc has corrected agents on (DO NOT GET WRONG)
+- **DOES NOT do diesel tuning of any kind.** No Powerstroke, no Duramax, no Cummins. Don't put diesel on his site, schema, brain profile, marketing copy, EVER. Was corrected on Feb 27, 2026.
+- **GM V8 gas platforms only** for tuning: 5.3L, 6.0L, 6.2L LS/Gen-V engines.
+- **HP Tuners is his platform.** Not EFI Live, not Edge, not COBB. Don't mention competitors as his tools.
+- **Specialty stack**: AFM/DOD delete cam tunes, cam swap tunes (Cam Motion / Comp / BTR cams), knock-verified spark tables, VE table tuning, datalog diagnostics.
+- **Repair side**: full-service for the V8 truck/SUV customer base — diagnostics, brake/suspension/electrical, engine work, maintenance. NOT a generic European/import shop.
 
 ## Environment gotchas (these have burned multiple agents)
 - **Preview vs Production confusion** — Doc clicks preview links and gets pissed when his vehicles/techs/cases are missing. ALWAYS clarify which env when he reports a bug ("preview or prod?")
