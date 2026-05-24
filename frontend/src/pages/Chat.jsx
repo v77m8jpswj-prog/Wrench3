@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Mic, Send, Volume2, VolumeX, ChevronRight, Square, History, Settings2, X, Paperclip, FolderPlus, Truck, Plus, Check, AlertCircle } from "lucide-react";
+import { Mic, Send, Volume2, VolumeX, ChevronRight, Square, History, Settings2, X, Paperclip, FolderPlus, Truck, Plus, Check, AlertCircle, Copy } from "lucide-react";
 import api, { API, getToken } from "@/api";
 import { useApp } from "@/AppContext";
 import { useWakeLock } from "@/hooks/useWakeLock";
@@ -1015,30 +1015,41 @@ function renderRichContent(text) {
 function CopyableBlock({ text, lang }) {
   const [copied, setCopied] = React.useState(false);
   const isTable = lang === "tsv" || /\t/.test(text);
-  const label = isTable ? "COPY TABLE (HP TUNERS READY)" : `COPY ${(lang||"BLOCK").toUpperCase()}`;
   const copy = async (e) => {
     e.preventDefault(); e.stopPropagation();
     try {
-      await navigator.clipboard.writeText(text);
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const ta = document.createElement("textarea");
+        ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+        document.body.appendChild(ta); ta.focus(); ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+      }
       setCopied(true);
-      setTimeout(()=>setCopied(false), 1500);
+      setTimeout(()=>setCopied(false), 1800);
     } catch {/* fall back to selection */}
   };
   return (
-    <div className="my-3 border-2 border-amber2/40 bg-bg-1" data-testid="copy-block">
-      <div className="flex items-center justify-between px-2 py-1 bg-amber2/10 border-b border-amber2/30">
-        <div className="text-[10px] uppercase tracking-widest text-amber2 font-bold">
-          {isTable ? "TABLE · TAB-SEPARATED · USE PASTE SPECIAL IN HP TUNERS" : (lang || "CODE")}
+    <div className="my-3 relative border-2 border-amber2/40 bg-bg-1" data-testid="copy-block">
+      {/* Tiny copy icon in the top-right — Doc's preference */}
+      <button
+        onClick={copy}
+        onTouchEnd={copy}
+        data-testid="copy-icon-btn"
+        title={copied ? "Copied" : "Copy"}
+        aria-label="Copy code to clipboard"
+        className={`absolute top-1.5 right-1.5 z-10 w-9 h-9 flex items-center justify-center border ${copied ? "bg-ok/20 border-ok text-ok" : "bg-bg-2/95 border-amber2/50 text-amber2 hover:bg-amber2 hover:text-bg-1 active:bg-amber2 active:text-bg-1"} transition-colors`}
+      >
+        {copied ? <Check size={16}/> : <Copy size={15}/>}
+      </button>
+      {isTable && (
+        <div className="px-2 py-1 pr-12 bg-amber2/10 border-b border-amber2/30 text-[10px] uppercase tracking-widest text-amber2 font-bold">
+          TABLE · TAB-SEPARATED · USE PASTE SPECIAL IN HP TUNERS
         </div>
-        <button
-          onClick={copy}
-          data-testid="copy-table-btn"
-          className={`text-[10px] uppercase tracking-widest font-bold px-3 py-1.5 ${copied ? "bg-ok text-black" : "bg-rust text-white hover:bg-rust/80"}`}
-        >
-          {copied ? "✓ COPIED" : label}
-        </button>
-      </div>
-      <pre className="px-2 py-2 text-[11px] md:text-xs font-mono text-ink whitespace-pre overflow-x-auto leading-snug">{text}</pre>
+      )}
+      <pre className="px-2 py-2 pr-12 text-[11px] md:text-xs font-mono text-ink whitespace-pre overflow-x-auto leading-snug">{text}</pre>
     </div>
   );
 }
