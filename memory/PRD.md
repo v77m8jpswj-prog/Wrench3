@@ -42,6 +42,9 @@ Already covered in this session:
 - [x] Library URL scraper `/api/scrape/url` with Playwright + Vault credentials (HP Tuners public, AllData, Identifix logins working)
 - [x] Library paste endpoint `/api/library/paste` for raw text ingest (GM SI, behind-2FA sites)
 - [x] **Email notification on quote lead** (Feb 26, 2026) — `notify_shop()` helper in `email_mod.py` fires from `POST /api/public/leads` via `asyncio.create_task` so the customer response isn't blocked. Sends HTML email FROM the shop's connected Outlook mailbox TO itself with name/contact/vehicle/source/what-they-need. Silently no-ops if no mailbox connected (preview env).
+- [x] **Main chat brain swapped to Claude Sonnet 4.6** (Feb 26, 2026) — `/api/chat` now uses `anthropic:claude-sonnet-4-6` via emergentintegrations + Emergent LLM Key. Title-gen, web-search, vision, and chart-JSON endpoints stay on GPT-5.2 for now. Doc strongly prefers Claude's directness; matches Wrench persona better.
+- [x] **Auto-learn harvester (LEARN module)** (Feb 26, 2026) — new `learn_mod.py` + `/learn` page. Claude scans Doc's chat history, extracts candidate facts ("Doc tunes on OS E80 calibrations for GM applications" etc.) with confidence + category. Auto-locks high-confidence repeated facts (≥0.85 + seen ≥2x); queues ambiguous ones for tap-to-approve review. Endpoints: `/learn/candidates`, `/learn/harvest`, `/learn/log`, `/learn/stats`. **ChatGPT export importer** (`POST /learn/import/chatgpt`) parses uploaded zip's `conversations.json`, runs full retroactive sweep. Frontend Home tile + dedicated review queue at `/learn`.
+- [x] **Operator profile handoff doc** (Feb 26, 2026) — `/app/memory/OPERATOR_PROFILE.md` captures Doc's communication style, pet peeves, brand standards, env gotchas. Next agent reads this BEFORE first reply to skip re-learning.
 
 ## Open / pending
 - [ ] Microsoft creds need to be added to PRODUCTION env vars after redeploy + 2nd redirect URI on Azure

@@ -1,7 +1,7 @@
 import React from "react";
 import { Link } from "react-router-dom";
 import { useApp } from "@/AppContext";
-import { MessageCircle, Phone, Wrench, BarChart3, Users, Inbox, Truck, BookOpen } from "lucide-react";
+import { MessageCircle, Phone, Wrench, BarChart3, Users, Inbox, Truck, BookOpen, Brain } from "lucide-react";
 
 // Clean home page — first thing Doc sees after login.
 // Logo prominent, big tiles routing to the daily-use sections. No marketing fluff.
@@ -15,6 +15,7 @@ const TILES = [
   { to: "/team",    label: "TEAM",       sub: "Shop chat",              icon: Users,         tone: "amber2" },
   { to: "/vehicles",label: "VEHICLES",   sub: "Your garage",            icon: Truck,         tone: "rust" },
   { to: "/library", label: "LIBRARY",    sub: "PDFs, scrapes, brain",   icon: BookOpen,      tone: "amber2" },
+  { to: "/learn",   label: "LEARN",      sub: "Doc in a box",           icon: Brain,         tone: "rust" },
 ];
 
 export default function Home() {

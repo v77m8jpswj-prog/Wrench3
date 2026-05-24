@@ -1050,7 +1050,7 @@ async def chat(body: ChatReq, user=Depends(get_user)):
     turns_cursor = db.chat_messages.find({"session_id": session_id, "user_id": user["id"]}, {"_id": 0}).sort("created_at", 1)
     prior = await turns_cursor.to_list(40)
 
-    chat_obj = LlmChat(api_key=EMERGENT_KEY, session_id=session_id, system_message=sys_prompt + search_block).with_model("openai", "gpt-5.2")
+    chat_obj = LlmChat(api_key=EMERGENT_KEY, session_id=session_id, system_message=sys_prompt + search_block).with_model("anthropic", "claude-sonnet-4-6")
 
     if prior:
         recap = "\n\nRECENT CONVERSATION:\n" + "\n".join(
@@ -2525,6 +2525,7 @@ from team_chat import make_team_chat_router  # noqa: E402
 from email_mod import make_email_router, make_email_brain_router  # noqa: E402
 from scraper import make_scraper_router  # noqa: E402
 from tune_mod import build_router as build_tune_router  # noqa: E402
+from learn_mod import make_learn_router  # noqa: E402
 brain_router = make_brain_router(db, get_user)
 api.include_router(brain_router)
 team_chat_router = make_team_chat_router(db, get_user, embed_text=_brain_embed, case_text_blob=_brain_case_blob)
@@ -2537,6 +2538,8 @@ scraper_router = make_scraper_router(db, get_user, embed_text=_brain_embed)
 api.include_router(scraper_router)
 tune_router = build_tune_router(db, get_user)
 api.include_router(tune_router)
+learn_router = make_learn_router(db, get_user)
+api.include_router(learn_router)
 
 
 # ============ Register router ============
