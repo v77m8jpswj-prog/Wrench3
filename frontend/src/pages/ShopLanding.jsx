@@ -167,7 +167,7 @@ function QuoteForm({ shopId }) {
           </div>
           <div>
             <label className="label-shop">PHONE OR EMAIL</label>
-            <input data-testid="lead-contact" value={contact} onChange={e=>setContact(e.target.value)} className="input-shop w-full" placeholder="555-0100 or you@example.com"/>
+            <input data-testid="lead-contact" value={contact} onChange={e=>setContact(e.target.value)} className="input-shop w-full" placeholder="Your phone or email"/>
           </div>
           <div>
             <label className="label-shop">VEHICLE (OPTIONAL)</label>
