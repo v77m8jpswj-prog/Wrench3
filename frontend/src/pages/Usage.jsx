@@ -3,6 +3,7 @@ import { DollarSign, MessageCircle, Phone, Search, Brain, TrendingDown, RefreshC
 import api from "@/api";
 
 export default function UsageDashboard() {
+  // build-marker: usage-v2 (fix for black-screen bundler bug)
   const [data, setData] = useState(null);
   const [err, setErr] = useState("");
   const [refreshing, setRefreshing] = useState(false);
