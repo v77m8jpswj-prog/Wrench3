@@ -1,4 +1,6 @@
-# Data Wrench — PRD (as of Feb 21, 2026)
+# Data Wrench — PRD (as of Feb 26, 2026)
+
+> **NEW AGENTS: READ `/app/memory/OPERATOR_PROFILE.md` FIRST** before responding to Doc. It captures his communication style, pet peeves, brand standards, and recurring environment gotchas. Cuts re-learning to zero.
 
 ## Identity
 - Product: Data Wrench (formerly AI Foreman)
