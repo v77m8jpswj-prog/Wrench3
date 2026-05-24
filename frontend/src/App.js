@@ -23,6 +23,7 @@ import Tune from "@/pages/Tune";
 import Leads from "@/pages/Leads";
 import Learn from "@/pages/Learn";
 import Usage from "@/pages/Usage";
+import Snippets from "@/pages/Snippets";
 import ShopLanding from "@/pages/ShopLanding";
 import Settings from "@/pages/Settings";
 import Shell from "@/components/Shell";
@@ -52,6 +53,8 @@ function App() {
           <Route path="/login" element={<Login />} />
           <Route path="/shop/:shopId" element={<ShopLanding />} />
           <Route path="/quote" element={<Navigate to="/shop/drunderhood-fortsmith" replace />} />
+          <Route path="/snippets" element={<Snippets />} />
+          <Route path="/snippets/:id" element={<Snippets />} />
           <Route path="/*" element={
             <AppProvider>
               <Routes>
