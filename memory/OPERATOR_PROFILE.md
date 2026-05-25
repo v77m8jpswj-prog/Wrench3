@@ -100,16 +100,19 @@
 - Google Calendar for shop appointments
 - Plate→VIN via AutoLeap
 
-## Last known mood / blockers (as of Feb 27, 2026 — afternoon shift)
-- **Twilio SMS notifications LIVE in preview** (verified: SMS queued + delivered to Doc's cell). Owner gets text + email both fire on every new /quote submission. Uses trial account toll-free (+18557711264) → Doc's verified cell (+14798064398). Trial restriction: can only text VERIFIED Caller IDs until $20+ paid balance is added. Works perfectly for owner-notification use case.
+## Last known mood / blockers (as of Feb 27/28, 2026 — late evening shift)
+- **PROD DEPLOY BROKEN — escalated to Emergent support** Feb 27 ~7 PM. Production foreman.drunderhood.com serving stale broken bundle `main.79139cc9.js` (black-screen-of-death from Usage component name collision). Multiple redeploys did NOT pick up the preview fix. Support email sent FROM Doc's connected Outlook to support@emergent.sh via `/api/email/send` — full timeline + cURL evidence included. Awaiting reply. PREVIEW environment is fully working.
+- **Twilio SMS notifications LIVE in preview** + email both fire on /quote submission. Toll-free verification form was being filled out when prod broke — Doc paused submission. After prod is fixed, he needs to: (a) confirm /quote shows SMS consent paragraph, (b) submit Twilio toll-free form, (c) wait 1-3 business days for approval.
+- **JASPER Co-op shipped to /snippets/jasper** Feb 27 night. Doc is Authorized JASPER Installer + Dealer (account email haze90@aol.com). Tier 1 banner block built ($250/yr reimbursement). Block uses approved logo + "We Install" + "3 Years/100,000 Miles Parts & Labor / Nationwide Warranty!" + link to jasperengines.com per Jasper logo usage guide PDFs Doc uploaded. Brain DB updated with `partners.jasper_installer: true` + `jasper_dealer: true` + locked fact in memory_facts so Wrench recommends JASPER reman when customers ask about engine/trans replacement.
+- **NEXT STEP FOR JASPER UPGRADE** Tier 1 → Tier 2 ($250 → $500/yr): when Doc next has laptop time, log into jasperengines.com → Co-op Advertising → Customer Webpage Generator → fill in shop info → take screenshot of whatever HTML/URL it outputs → send to next agent. Agent rebuilds the /snippets/jasper block with the Generator's content (more JASPER product detail + video embed pulls Tier 2 reimbursement).
 - **Usage dashboard live** at /usage with cost MTD pill on Home tile.
 - **Auto-learn LIVE** with 28 candidate facts queued in preview from real chat history.
 - **Claude Sonnet 4.6** is the chat brain. Doc strongly prefers it. Don't downgrade.
-- **Shop is GM V8 gas ONLY** for paying work. Diesel knowledge stays in Wrench's brain (chat/voice) but never appears on public site/profile/marketing. Doc corrected agents on this Feb 27 — see OPERATOR_PROFILE.md.
+- **Shop is GM V8 gas ONLY** for paying work. Diesel knowledge stays in Wrench's brain (chat/voice) but never appears on public site/profile/marketing. Doc corrected agents on this Feb 27 — see "HARD FACTS Doc has corrected agents on" above.
 - **Phone everywhere = 479-434-5852.** Preview DB updated + startup migration backfills on every boot so prod self-corrects on redeploy.
 - AutoLeap has no public API. Path forward: iCloud (doctorunderhood@icloud.com) → Outlook forwarding rule + email parser. Doc hasn't set up the forward rule yet.
-- GoDaddy site cleanup mostly done. Hero / Tuning / Contact / Schema blocks all delivered. Doc fighting iOS clipboard copy in chat — there's no copy icon in Emergent platform chat (platform limitation, not fixable by agent). Workaround: long-press → Select All → Copy. Don't suggest building a separate snippet page again, he hated that.
-- Operator profile updated with: "HARD FACTS Doc has corrected agents on" section. Read it first before responding next session.
+- GoDaddy site cleanup mostly done. Hero / Tuning / Contact / Schema / JASPER blocks all delivered via /snippets/{id} one-tap copy pages. Doc fighting iOS clipboard copy in chat — there's no copy icon in Emergent platform chat (platform limitation, NOT fixable by agent). Use the /snippets pages instead.
+- Operator profile updated. New agent: read OPERATOR_PROFILE.md FIRST, especially the "HARD FACTS" section.
 
 ## NEXT SHIFT — PRIORITY ORDER
 He's a working mechanic running an AI-augmented shop. Talk to him like a peer at the parts counter, not a Slack PM. Ship code, not explanations. When he says "fix it" — fix it, don't pitch options. When he sends a screenshot, USE IT. When the cache lies, trust Doc.

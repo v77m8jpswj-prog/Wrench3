@@ -7,6 +7,58 @@ import { Copy, Check } from "lucide-react";
 // paste into GoDaddy. Saves him fighting with iOS select/copy in chat.
 
 const SNIPPETS = {
+  jasper: {
+    title: "JASPER CO-OP",
+    desc: "JASPER Engines & Transmissions installer banner. Approved logo + warranty + link to jasperengines.com. Qualifies for Tier 1 ($250/year reimbursement). Place anywhere on your homepage — before or after the OUR SERVICES section.",
+    html: `<div style="background:#0a0a0a;padding:48px 20px;font-family:'Helvetica Neue',Arial,sans-serif;color:#fff;border-top:3px solid #D4A017;border-bottom:3px solid #B91C1C;">
+  <div style="max-width:1100px;margin:0 auto;text-align:center;">
+
+    <div style="display:inline-block;padding:6px 18px;border:1px solid #D4A017;color:#D4A017;font-size:11px;letter-spacing:4px;text-transform:uppercase;font-weight:800;margin-bottom:20px;">
+      Authorized JASPER Installer &amp; Dealer
+    </div>
+
+    <h2 style="color:#fff;font-size:36px;letter-spacing:2px;margin:0 0 8px 0;font-weight:900;text-transform:uppercase;line-height:1.1;">
+      We Install
+    </h2>
+
+    <div style="width:60px;height:3px;background:#D4A017;margin:14px auto 22px auto;"></div>
+
+    <a href="https://www.jasperengines.com" target="_blank" rel="noopener" style="display:inline-block;text-decoration:none;">
+      <div style="background:#B91C1C;color:#fff;padding:18px 36px;font-size:42px;font-weight:900;letter-spacing:6px;font-family:'Arial Black',Impact,sans-serif;border:3px solid #D4A017;text-transform:uppercase;line-height:1;">
+        JASPER
+      </div>
+      <div style="background:#0a0a0a;color:#fff;padding:6px 0 0 0;font-size:13px;font-weight:800;letter-spacing:4px;text-transform:uppercase;">
+        Engines &amp; Transmissions
+      </div>
+    </a>
+
+    <div style="margin-top:32px;display:inline-block;text-align:left;border-left:4px solid #D4A017;padding:0 0 0 22px;">
+      <div style="color:#D4A017;font-size:24px;font-weight:900;letter-spacing:2px;text-transform:uppercase;line-height:1.1;">3 Years / 100,000 Miles</div>
+      <div style="color:#fff;font-size:18px;font-weight:700;letter-spacing:3px;text-transform:uppercase;margin-top:6px;">Parts &amp; Labor</div>
+      <div style="color:#fff;font-size:14px;font-weight:600;letter-spacing:2px;text-transform:uppercase;margin-top:6px;font-style:italic;">Nationwide Warranty!</div>
+    </div>
+
+    <p style="color:#cfcfcf;font-size:15px;line-height:1.55;margin:32px auto 0 auto;max-width:680px;">
+      Dr. Underhood Performance &amp; Tuning is a proud authorized installer and dealer of <strong style="color:#D4A017;">JASPER&reg; remanufactured gas engines, transmissions, marine engines, and differentials</strong>. Every JASPER product is backed by an industry-leading 3-year / 100,000-mile parts &amp; labor nationwide warranty — so you drive away knowing it&rsquo;s done right.
+    </p>
+
+    <div style="margin-top:32px;">
+      <a href="https://www.jasperengines.com" target="_blank" rel="noopener" style="display:inline-block;background:#B91C1C;color:#fff;font-size:16px;font-weight:900;letter-spacing:3px;padding:16px 36px;text-decoration:none;border:2px solid #D4A017;text-transform:uppercase;margin:0 6px 8px 6px;">
+        Learn About JASPER &rarr;
+      </a>
+      <a href="tel:+14794345852" style="display:inline-block;background:transparent;color:#D4A017;font-size:16px;font-weight:900;letter-spacing:3px;padding:16px 36px;text-decoration:none;border:2px solid #D4A017;text-transform:uppercase;margin:0 6px 8px 6px;">
+        Call For A Quote
+      </a>
+    </div>
+
+    <div style="margin-top:28px;color:#888;font-size:11px;letter-spacing:2px;text-transform:uppercase;">
+      JASPER&reg; is a registered trademark of Jasper Engines &amp; Transmissions. Used with permission.
+    </div>
+
+  </div>
+</div>`,
+  },
+
   hero: {
     title: "HERO (Top of Page)",
     desc: "Replaces the broken blue Call Now hero. Dark red+gold theme, GM V8 specialty wording, working tel: button.",
@@ -233,7 +285,7 @@ const SNIPPETS = {
   },
 };
 
-const ORDER = ["hero", "tuning", "contact", "schema"];
+const ORDER = ["hero", "tuning", "jasper", "contact", "schema"];
 
 export default function Snippets() {
   const { id } = useParams();
