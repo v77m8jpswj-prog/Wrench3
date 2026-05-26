@@ -74,7 +74,13 @@ export default function Chat() {
     try {
       const el = audioElRef.current;
       if (!el) return;
+      // Prime with a tiny silent MP3 data URI so iOS will accept the play() call
+      // even before we have real audio loaded.
+      if (!el.src) {
+        el.src = "data:audio/mpeg;base64,/+MYxAAAAANIAAAAAExBTUUzLjEwMAAAAAAAAAAAABQgJAUHQQAB9AAAA0gJX/gIAAAA";
+      }
       el.muted = true;
+      el.volume = 1;
       const p = el.play();
       if (p && p.then) {
         p.then(() => { el.pause(); el.currentTime = 0; el.muted = false; audioUnlockedRef.current = true; })
@@ -84,6 +90,26 @@ export default function Chat() {
       }
     } catch {}
   };
+
+  // Pending TTS — if play() got blocked by autoplay policy, the next user click
+  // anywhere will resume it. This way Doc never has to hunt for a "HEAR LAST" button.
+  const pendingTtsRef = useRef(false);
+  useEffect(() => {
+    const resume = () => {
+      if (!pendingTtsRef.current) return;
+      const el = audioElRef.current;
+      if (!el || !el.src) return;
+      try {
+        el.play().then(() => { pendingTtsRef.current = false; setSpeaking(true); setStatus("SPEAKING", "#FFC107"); }).catch(()=>{});
+      } catch {}
+    };
+    document.addEventListener("click", resume, true);
+    document.addEventListener("touchend", resume, true);
+    return () => {
+      document.removeEventListener("click", resume, true);
+      document.removeEventListener("touchend", resume, true);
+    };
+  }, []);
 
   // Detect Web Speech API (Safari/Chrome both support webkit prefix on iOS)
   const SR = (typeof window !== "undefined") && (window.SpeechRecognition || window.webkitSpeechRecognition);
@@ -312,7 +338,10 @@ export default function Chat() {
       try {
         await el.play();
       } catch (e) {
-        setSpeaking(false); setStatus("TAP TO HEAR", "#FFC107");
+        // iOS autoplay block. Mark pending so the very next tap anywhere resumes it.
+        pendingTtsRef.current = true;
+        setSpeaking(false);
+        setStatus("TAP ANYWHERE TO HEAR", "#FFC107");
       }
     } catch {
       setSpeaking(false); setStatus("IDLE", "#52525B");
@@ -581,7 +610,7 @@ export default function Chat() {
           <button data-testid="mode-toggle" onClick={()=>setMode(mode==="direct"?"dream":"direct")} className="btn-ghost text-xs">
             MODE: <span className={mode==="direct"?"text-rust":"text-amber2"}>{mode === "direct" ? "DIRECT" : "DREAM"}</span>
           </button>
-          <button data-testid="voice-toggle" onClick={()=>setVoiceOn(v=>!v)} className="btn-ghost text-xs flex items-center gap-2">
+          <button data-testid="voice-toggle" onClick={()=>{ unlockAudio(); setVoiceOn(v=>!v); }} className="btn-ghost text-xs flex items-center gap-2">
             {voiceOn ? <Volume2 size={14}/> : <VolumeX size={14}/>}
             {voiceOn ? "VOICE ON" : "VOICE OFF"}
           </button>
@@ -593,7 +622,7 @@ export default function Chat() {
 
       {/* Mobile chat header strip — order-1 on mobile */}
       <div className="md:hidden order-1 px-3 py-2 border-b border-line bg-bg-2 flex items-center justify-between gap-2">
-        <button onClick={()=>setVoiceOn(v=>!v)} data-testid="m-voice-toggle" className={`flex items-center gap-1 text-[11px] uppercase tracking-widest border px-2 py-1 ${voiceOn?"border-rust text-rust":"border-line text-ink-2"}`}>
+        <button onClick={()=>{ unlockAudio(); setVoiceOn(v=>!v); }} data-testid="m-voice-toggle" className={`flex items-center gap-1 text-[11px] uppercase tracking-widest border px-2 py-1 ${voiceOn?"border-rust text-rust":"border-line text-ink-2"}`}>
           {voiceOn ? <Volume2 size={12}/> : <VolumeX size={12}/>} {voiceOn ? "VOICE" : "MUTE"}
         </button>
         <button onClick={()=>setMode(mode==="direct"?"dream":"direct")} data-testid="m-mode" className="text-[11px] uppercase tracking-widest border border-line px-2 py-1 text-ink-2">
