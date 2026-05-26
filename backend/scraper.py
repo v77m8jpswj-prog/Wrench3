@@ -349,8 +349,13 @@ def make_scraper_router(db, get_user, embed_text):
         """Pull one URL, ingest into library, update watchlist row. Never raises."""
         from datetime import datetime, timezone
         import uuid
+        from ingest_safety import scrub_pii, tier_for_url, content_fingerprint
         url = entry["url"]
         try:
+            # Refuse to auto-crawl paid TOS-restricted sources.
+            tier_info = tier_for_url(url)
+            if tier_info.get("restricted"):
+                raise Exception(f"TOS-restricted source ({tier_info['label']}) — use manual /library/paste with Doc's consent")
             recipe = _domain_recipe(url)
             needs_login = bool(recipe and recipe.get("login_url"))
             if needs_login:
@@ -373,6 +378,24 @@ def make_scraper_router(db, get_user, embed_text):
             text = content.get("text") or ""
             if len(text) < 100:
                 raise Exception("scraped text too short — page may be JS-only or blocked")
+
+            # PII scrub before storing
+            text, pii_counts = scrub_pii(text)
+
+            # Dedup check — compute fingerprint, skip if we've ingested same content
+            fp = content_fingerprint(text)
+            if fp:
+                dup = await db.library_items.find_one({"user_id": user["id"], "content_fp": fp})
+                if dup:
+                    now = datetime.now(timezone.utc).isoformat()
+                    await db.crawl_watchlist.update_one(
+                        {"id": entry["id"]},
+                        {"$set": {"last_crawled_at": now, "last_status": "ok (dedup)",
+                                  "last_chunks": dup.get("chunk_count", 0)}},
+                    )
+                    return {"id": entry["id"], "url": url, "ok": True,
+                            "chunks": 0, "deduped": True, "tier": tier_info["tier"]}
+
             title = (entry.get("title") or content.get("title") or urlparse(url).path)[:240]
             now = datetime.now(timezone.utc).isoformat()
             item_id = str(uuid.uuid4())
@@ -383,17 +406,29 @@ def make_scraper_router(db, get_user, embed_text):
                 "size": len(text), "source_url": url, "created_at": now,
                 "chunk_count": len(chunks), "status": "ready",
                 "tag": entry.get("tag"), "watch_id": entry["id"],
+                "source_tier": tier_info["tier"],
+                "source_confidence": tier_info["confidence"],
+                "source_label": tier_info["label"],
+                "content_fp": fp,
+                "pii_scrub_counts": pii_counts,
             })
             rows = [{"id": str(uuid.uuid4()), "user_id": user["id"], "item_id": item_id,
-                     "source": title, "text": c, "created_at": now} for c in chunks]
+                     "source": title, "source_url": url, "source_label": tier_info["label"],
+                     "source_tier": tier_info["tier"],
+                     "source_confidence": tier_info["confidence"],
+                     "text": c, "created_at": now} for c in chunks]
             if rows:
                 await db.library_chunks.insert_many(rows)
             await db.crawl_watchlist.update_one(
                 {"id": entry["id"]},
                 {"$set": {"last_crawled_at": now, "last_status": "ok",
-                          "last_chunks": len(chunks)}},
+                          "last_chunks": len(chunks),
+                          "source_tier": tier_info["tier"],
+                          "source_label": tier_info["label"]}},
             )
-            return {"id": entry["id"], "url": url, "ok": True, "chunks": len(chunks)}
+            return {"id": entry["id"], "url": url, "ok": True, "chunks": len(chunks),
+                    "tier": tier_info["tier"], "confidence": tier_info["confidence"],
+                    "pii": pii_counts}
         except Exception as e:
             msg = str(e)[:200]
             log.warning(f"crawl_one failed {url}: {msg}")

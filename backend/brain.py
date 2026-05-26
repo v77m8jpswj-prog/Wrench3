@@ -653,6 +653,63 @@ def make_brain_router(db, get_user):
         ]
         return {"shop_id": shop_id, "vin": vehicle_vin, "count": len(events), "events": events}
 
+    # ----- Crawl source summary (partner can see what's in the brain + tier mix) -----
+    @router.get("/brain/crawl-sources")
+    async def brain_crawl_sources(
+        shop_id: str = Query(...),
+        _t: str = Depends(get_brain_token),
+    ):
+        """Returns the watchlist + library source-tier breakdown for a shop.
+
+        Lets the partner agent inspect what knowledge sources are feeding our
+        brain so it can render attribution ("per HP Tuners forum", "per NHTSA")
+        in user-facing responses, and weight low-tier forum content lower than
+        OEM data in its own RAG.
+
+        Auth: bearer token.
+        """
+        shop_user_ids = [u["id"] async for u in db.users.find({"shop_id": shop_id}, {"_id": 0, "id": 1})]
+        if not shop_user_ids:
+            return {"shop_id": shop_id, "sources": [], "by_tier": {}}
+        # Aggregate library_items by source_tier
+        pipeline = [
+            {"$match": {"user_id": {"$in": shop_user_ids}, "kind": "url"}},
+            {"$group": {
+                "_id": {"tier": "$source_tier", "label": "$source_label"},
+                "count": {"$sum": 1},
+                "chunks": {"$sum": "$chunk_count"},
+                "last_seen": {"$max": "$created_at"},
+            }},
+            {"$sort": {"count": -1}},
+        ]
+        rows = await db.library_items.aggregate(pipeline).to_list(200)
+        by_tier: Dict[int, int] = {}
+        sources = []
+        for r in rows:
+            tier = (r.get("_id") or {}).get("tier") or 4
+            label = (r.get("_id") or {}).get("label") or "Unknown"
+            by_tier[tier] = by_tier.get(tier, 0) + r.get("count", 0)
+            sources.append({
+                "tier": tier,
+                "label": label,
+                "documents": r.get("count", 0),
+                "chunks": r.get("chunks", 0),
+                "last_seen": r.get("last_seen"),
+            })
+        return {
+            "shop_id": shop_id,
+            "by_tier": by_tier,
+            "tier_rubric": {
+                "1": "Doc's own ROs / NHTSA / iATN — highest signal",
+                "2": "Open pro/enthusiast forums + named YouTube + trade pubs",
+                "3": "Paid TOS-restricted (manual paste only, never auto-crawled)",
+                "4": "Unknown / fallback",
+            },
+            "sources": sources[:100],
+            "pii_scrubbed": True,
+            "dedup_method": "sha256 fingerprint over number-normalized text sample",
+        }
+
     # ----- Internal Cases endpoints (user JWT) -----
     @router.get("/cases")
     async def list_cases(user=Depends(get_user)):
