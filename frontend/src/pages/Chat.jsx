@@ -57,6 +57,8 @@ export default function Chat() {
   const speechRecRef = useRef(null);
   const audioElRef = useRef(null);
   const audioUnlockedRef = useRef(false);
+  // If native SpeechRecognition fails with "network" once, remember it and skip straight to MediaRecorder for the rest of this session.
+  const nativeSpeechBrokenRef = useRef(false);
 
   // Keep the screen on while Chat is open (so it doesn't sleep mid-tune under a truck)
   useWakeLock(true);
@@ -377,7 +379,7 @@ export default function Chat() {
 
     // Primary path: native Web Speech API (Safari/Chrome on iOS, Chrome on desktop/Android)
     // This is dramatically more reliable on iOS than MediaRecorder+Whisper
-    if (hasNativeSpeech) {
+    if (hasNativeSpeech && !nativeSpeechBrokenRef.current) {
       return startNativeSpeech();
     }
     // Fallback: MediaRecorder + server-side Whisper
@@ -427,6 +429,21 @@ export default function Chat() {
           setMicError("Can't capture audio. Plug in headphones or check your mic.");
         } else if (err === "aborted") {
           // user cancelled — no error
+        } else if (err === "network") {
+          // Chrome's speech recognition routes audio to Google servers — sometimes
+          // unreachable on locked-down networks / non-Google chromium builds /
+          // privacy extensions. Mark broken for this session and silently fall
+          // back to our own MediaRecorder + Whisper.
+          nativeSpeechBrokenRef.current = true;
+          try { rec.stop(); } catch {}
+          speechRecRef.current = null;
+          setMicError("");
+          if (callModeRef.current) {
+            // Stay in call mode, just switch transport
+            setTimeout(() => { if (callModeRef.current) startMediaRecorder(); }, 100);
+          } else {
+            startMediaRecorder();
+          }
         } else {
           setMicError(`Voice error: ${err}`);
         }
