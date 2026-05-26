@@ -23,6 +23,7 @@ import Tune from "@/pages/Tune";
 import Leads from "@/pages/Leads";
 import Learn from "@/pages/Learn";
 import Usage from "@/pages/Usage";  // default export: UsageDashboard
+import Watchlist from "@/pages/Watchlist";
 import Snippets from "@/pages/Snippets";
 import ShopLanding from "@/pages/ShopLanding";
 import Settings from "@/pages/Settings";
@@ -77,6 +78,7 @@ function App() {
                 <Route path="/leads" element={<Protected><Leads /></Protected>} />
                 <Route path="/learn" element={<Protected><Learn /></Protected>} />
                 <Route path="/usage" element={<Protected><Usage /></Protected>} />
+                <Route path="/watchlist" element={<Protected><Watchlist /></Protected>} />
                 <Route path="/settings" element={<Protected><Settings /></Protected>} />
                 <Route path="*" element={<Navigate to="/" />} />
               </Routes>

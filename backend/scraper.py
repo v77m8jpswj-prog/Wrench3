@@ -294,4 +294,133 @@ def make_scraper_router(db, get_user, embed_text):
             })
         return items
 
+    # ============ Watchlist (auto re-crawl) ============
+    # Doc adds URLs he wants Wrench to keep in the brain. Hit "Crawl Now"
+    # to re-pull them on demand. Stored in `crawl_watchlist`. Each entry can
+    # optionally have a tag (e.g. "HPT Forum", "TSB", "Parts") so Doc can
+    # filter the library by source.
+
+    class WatchAdd(BaseModel):
+        url: str
+        title: Optional[str] = None
+        tag: Optional[str] = None
+        frequency: Optional[str] = "manual"  # manual / daily / weekly / monthly
+
+    @router.get("/scrape/watchlist")
+    async def watchlist_list(user=Depends(get_user)):
+        cur = db.crawl_watchlist.find({"user_id": user["id"]}, {"_id": 0}).sort("created_at", -1)
+        return await cur.to_list(200)
+
+    @router.post("/scrape/watchlist")
+    async def watchlist_add(body: WatchAdd, user=Depends(get_user)):
+        from datetime import datetime, timezone
+        import uuid
+        url = body.url.strip()
+        if not url.startswith("http"):
+            raise HTTPException(400, "URL must start with http:// or https://")
+        # De-dup by exact URL per user
+        exist = await db.crawl_watchlist.find_one({"user_id": user["id"], "url": url})
+        if exist:
+            raise HTTPException(409, "Already on watchlist.")
+        doc = {
+            "id": str(uuid.uuid4()),
+            "user_id": user["id"],
+            "url": url,
+            "title": (body.title or "").strip() or None,
+            "tag": (body.tag or "").strip() or None,
+            "frequency": body.frequency or "manual",
+            "last_crawled_at": None,
+            "last_status": None,
+            "last_chunks": 0,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await db.crawl_watchlist.insert_one(doc)
+        doc.pop("_id", None)
+        return doc
+
+    @router.delete("/scrape/watchlist/{wid}")
+    async def watchlist_remove(wid: str, user=Depends(get_user)):
+        r = await db.crawl_watchlist.delete_one({"id": wid, "user_id": user["id"]})
+        if r.deleted_count == 0:
+            raise HTTPException(404, "Watchlist entry not found.")
+        return {"ok": True}
+
+    async def _crawl_one(entry: Dict[str, Any], user: Dict[str, Any]) -> Dict[str, Any]:
+        """Pull one URL, ingest into library, update watchlist row. Never raises."""
+        from datetime import datetime, timezone
+        import uuid
+        url = entry["url"]
+        try:
+            recipe = _domain_recipe(url)
+            needs_login = bool(recipe and recipe.get("login_url"))
+            if needs_login:
+                # Auto-match vault cred
+                host = (urlparse(url).hostname or "").lower().replace("www.", "")
+                cur = db.credentials.find({"user_id": user["id"]}, {"_id": 0})
+                creds = await cur.to_list(200)
+                cred = None
+                for c in creds:
+                    site = (c.get("site") or "").lower().replace(" ", "")
+                    vurl = (c.get("url") or "").lower().replace("www.", "").replace(" ", "")
+                    if host and (host in vurl or host in site):
+                        cred = c
+                        break
+                if not cred or not cred.get("username") or not cred.get("password"):
+                    raise Exception("no matching vault credential for login-required site")
+                content = await _fetch_with_login(url, recipe, cred["username"], cred["password"])
+            else:
+                content = await _fetch_public(url)
+            text = content.get("text") or ""
+            if len(text) < 100:
+                raise Exception("scraped text too short — page may be JS-only or blocked")
+            title = (entry.get("title") or content.get("title") or urlparse(url).path)[:240]
+            now = datetime.now(timezone.utc).isoformat()
+            item_id = str(uuid.uuid4())
+            chunk_size = 1200
+            chunks = [text[i:i+chunk_size] for i in range(0, len(text), chunk_size)]
+            await db.library_items.insert_one({
+                "id": item_id, "user_id": user["id"], "name": title, "kind": "url",
+                "size": len(text), "source_url": url, "created_at": now,
+                "chunk_count": len(chunks), "status": "ready",
+                "tag": entry.get("tag"), "watch_id": entry["id"],
+            })
+            rows = [{"id": str(uuid.uuid4()), "user_id": user["id"], "item_id": item_id,
+                     "source": title, "text": c, "created_at": now} for c in chunks]
+            if rows:
+                await db.library_chunks.insert_many(rows)
+            await db.crawl_watchlist.update_one(
+                {"id": entry["id"]},
+                {"$set": {"last_crawled_at": now, "last_status": "ok",
+                          "last_chunks": len(chunks)}},
+            )
+            return {"id": entry["id"], "url": url, "ok": True, "chunks": len(chunks)}
+        except Exception as e:
+            msg = str(e)[:200]
+            log.warning(f"crawl_one failed {url}: {msg}")
+            from datetime import datetime, timezone
+            await db.crawl_watchlist.update_one(
+                {"id": entry["id"]},
+                {"$set": {"last_crawled_at": datetime.now(timezone.utc).isoformat(),
+                          "last_status": f"err: {msg}"}},
+            )
+            return {"id": entry["id"], "url": url, "ok": False, "error": msg}
+
+    @router.post("/scrape/watchlist/{wid}/crawl")
+    async def watchlist_crawl_one(wid: str, user=Depends(get_user)):
+        entry = await db.crawl_watchlist.find_one({"id": wid, "user_id": user["id"]}, {"_id": 0})
+        if not entry:
+            raise HTTPException(404, "Watchlist entry not found.")
+        return await _crawl_one(entry, user)
+
+    @router.post("/scrape/watchlist/crawl-all")
+    async def watchlist_crawl_all(user=Depends(get_user)):
+        cur = db.crawl_watchlist.find({"user_id": user["id"]}, {"_id": 0})
+        entries = await cur.to_list(200)
+        results = []
+        for e in entries:
+            r = await _crawl_one(e, user)
+            results.append(r)
+        ok = sum(1 for r in results if r.get("ok"))
+        return {"total": len(results), "ok": ok, "failed": len(results)-ok, "results": results}
+
     return router

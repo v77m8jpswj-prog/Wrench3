@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useApp } from "@/AppContext";
 import {
-  MessageCircle, Phone, Wrench, BarChart3, Users, Inbox, Truck, BookOpen, Brain, DollarSign,
+  MessageCircle, Phone, Wrench, BarChart3, Users, Inbox, Truck, BookOpen, Brain, DollarSign, Globe,
 } from "lucide-react";
 import api from "@/api";
 
@@ -18,6 +18,7 @@ const TILES = [
   { to: "/team",     label: "TEAM",      sub: "Shop chat",            icon: Users,         accent: "amber2", ring: "amber2" },
   { to: "/vehicles", label: "VEHICLES",  sub: "Your garage",          icon: Truck,         accent: "rust",   ring: "rust" },
   { to: "/library",  label: "LIBRARY",   sub: "PDFs · scrapes",       icon: BookOpen,      accent: "amber2", ring: "amber2" },
+  { to: "/watchlist",label: "WATCHLIST", sub: "Feed the brain",       icon: Globe,         accent: "rust",   ring: "rust" },
   { to: "/learn",    label: "LEARN",     sub: "Doc in a box",         icon: Brain,         accent: "rust",   ring: "rust", badgeKey: "pending" },
 ];
 
