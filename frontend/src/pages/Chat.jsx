@@ -614,6 +614,9 @@ export default function Chat() {
             {voiceOn ? <Volume2 size={14}/> : <VolumeX size={14}/>}
             {voiceOn ? "VOICE ON" : "VOICE OFF"}
           </button>
+          <button data-testid="voice-test" onClick={()=>{ unlockAudio(); speak("Wrench here. Audio check. One two."); }} className="btn-ghost text-xs flex items-center gap-2 border border-amber2 text-amber2" title="Force a voice test through your speakers">
+            TEST VOICE
+          </button>
           <button data-testid="sessions-toggle" onClick={()=>setShowSessions(s=>!s)} className="btn-ghost text-xs flex items-center gap-2"><History size={14}/>HISTORY</button>
           <button data-testid="save-as-case" onClick={saveAsCase} className="btn-ghost text-xs flex items-center gap-2" title="Drop this chat into the BRAIN as a case Wrench can recall later"><FolderPlus size={14}/>SAVE AS CASE</button>
           <button data-testid="new-session" onClick={newSession} className="btn-ghost text-xs">+ NEW</button>
@@ -624,6 +627,9 @@ export default function Chat() {
       <div className="md:hidden order-1 px-3 py-2 border-b border-line bg-bg-2 flex items-center justify-between gap-2">
         <button onClick={()=>{ unlockAudio(); setVoiceOn(v=>!v); }} data-testid="m-voice-toggle" className={`flex items-center gap-1 text-[11px] uppercase tracking-widest border px-2 py-1 ${voiceOn?"border-rust text-rust":"border-line text-ink-2"}`}>
           {voiceOn ? <Volume2 size={12}/> : <VolumeX size={12}/>} {voiceOn ? "VOICE" : "MUTE"}
+        </button>
+        <button onClick={()=>{ unlockAudio(); speak("Wrench here. Audio check. One two."); }} data-testid="m-voice-test" className="text-[11px] uppercase tracking-widest border border-amber2 text-amber2 px-2 py-1">
+          TEST
         </button>
         <button onClick={()=>setMode(mode==="direct"?"dream":"direct")} data-testid="m-mode" className="text-[11px] uppercase tracking-widest border border-line px-2 py-1 text-ink-2">
           <span className={mode==="direct"?"text-rust":"text-amber2"}>{mode.toUpperCase()}</span>
