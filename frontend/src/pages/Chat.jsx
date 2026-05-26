@@ -321,6 +321,10 @@ export default function Chat() {
       const el = audioElRef.current;
       if (!el) { setSpeaking(false); setStatus("IDLE", "#52525B"); return; }
       try { el.pause(); el.currentTime = 0; } catch {}
+      // CRITICAL: the unlock primer leaves muted=true if its async chain raced ahead.
+      // Force unmute + full volume before EVERY playback.
+      el.muted = false;
+      el.volume = 1.0;
       el.src = url;
       el.onended = () => {
         setSpeaking(false);
