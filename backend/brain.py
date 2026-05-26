@@ -577,6 +577,7 @@ def make_brain_router(db, get_user):
     # ----- Recent outcomes (partner polls this to learn from closed jobs) -----
     @router.get("/brain/recent-outcomes")
     async def brain_recent_outcomes(
+        response: Response,
         shop_id: str = Query(...),
         since: Optional[str] = Query(None, description="ISO-8601 timestamp. Returns only events created after this. Omit for last 50 events."),
         outcome: Optional[str] = Query(None, description="Filter by FIXED | PARTIAL | NOT_FIXED"),
@@ -587,7 +588,12 @@ def make_brain_router(db, get_user):
         this every minute or so and uses it to: (a) downweight similarity matches
         whose outcome turned out NOT_FIXED, (b) surface fresh repair patterns to
         their dashboard, (c) celebrate FIXED outcomes back to the original
-        symptom reporter."""
+        symptom reporter.
+
+        Response header `X-Brain-Corpus-Version` is a short SHA derived from the
+        latest brain_case + brain_outcome_event + library_item timestamps for this
+        shop. Partners cache prompt fragments keyed by this version — when it
+        changes, they invalidate. Cheap consistency primitive."""
         q = {"shop_id": shop_id}
         if since:
             q["created_at"] = {"$gt": since}
@@ -595,11 +601,35 @@ def make_brain_router(db, get_user):
             q["outcome"] = outcome.upper()
         cur = db.brain_outcome_events.find(q, {"_id": 0}).sort("created_at", -1).limit(limit)
         events = await cur.to_list(limit)
+
+        # Corpus version — hash latest update timestamps across the things that
+        # would change Doc's prior-repair signal.
+        import hashlib
+        parts = []
+        for coll, query in (
+            (db.brain_outcome_events, {"shop_id": shop_id}),
+            (db.brain_cases, {"shop_id": shop_id}),
+        ):
+            r = await coll.find_one(query, {"_id": 0, "created_at": 1}, sort=[("created_at", -1)])
+            parts.append((r or {}).get("created_at") or "")
+        shop_user_ids = [u["id"] async for u in db.users.find({"shop_id": shop_id}, {"_id": 0, "id": 1})]
+        if shop_user_ids:
+            r = await db.library_items.find_one(
+                {"user_id": {"$in": shop_user_ids}, "kind": "url"},
+                {"_id": 0, "created_at": 1},
+                sort=[("created_at", -1)],
+            )
+            parts.append((r or {}).get("created_at") or "")
+        corpus_v = hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:16]
+        response.headers["X-Brain-Corpus-Version"] = corpus_v
+        response.headers["Access-Control-Expose-Headers"] = "X-Brain-Corpus-Version"
+
         return {
             "shop_id": shop_id,
             "since": since,
             "count": len(events),
             "events": events,
+            "corpus_version": corpus_v,
         }
 
     # ----- Tune history (partner pulls Doc's prior tuning edits per VIN) -----
