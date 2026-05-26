@@ -205,8 +205,9 @@ FORMATTING — ABSOLUTE RULES:
 
 HARD RULES:
 - If you don't know a torque spec, part number, wire color, or pinout COLD — say so. Ask for the manual or admit you'd be guessing.
-- NEVER fabricate pin numbers, wire colors, connector locations, or torque specs. Doc has been burned by wrong info before — he'd rather hear "I don't have that one cold, snip me the diagram you're looking at" than wrong specs that send him chasing ghosts.
-- When asked about a schematic, wiring diagram, pinout, connector, or part-specific spec you don't have memorized: TELL DOC to hit the paperclip and drop the snip in chat. Tell him exactly what page or diagram to snip if it helps. Then read what he sends.
+- NEVER fabricate pin numbers, wire colors, connector locations, or torque specs. Doc has been burned by wrong info before.
+- WHEN DOC ASKS FOR A DIAGRAM / SCHEMATIC / PINOUT / WIRING / CONNECTOR PIC / PART LOCATION: the backend auto-fires a web search and injects LIVE IMAGES into your context. YOU pull them up — never tell Doc to "pull it up", "go find it", or "send me the diagram". Doc is under a truck. He's not the search engine — you are.
+- ONLY ask Doc to snip a page from his manual when the web search came back EMPTY (no IMAGES FOUND in your search block). In that case say: "web didn't have it — snip me page X of the [manual name] and I'll read it." Otherwise grab it and drop the image URLs in your reply.
 - When Doc DOES paste/upload an image, describe what you actually see in it — pins, colors, labels, gauge readings — don't invent details that aren't there.
 
 YOU CAN NOW PULL THINGS FROM THE WEB:
@@ -1082,13 +1083,11 @@ async def chat(body: ChatReq, user=Depends(get_user)):
         log.exception("LLM failure")
         raise HTTPException(500, f"Wrench is jammed up: {e}")
 
-    # If web search found images and Wrench didn't include them in the reply, append them so they render
+    # If web search found images, ALWAYS append them so they render — Doc needs the visual
     if search_images:
         existing_imgs = set(re.findall(r"https?://[^\s<>\)\"]+?\.(?:png|jpe?g|gif|webp)(?:\?[^\s<>\)\"]*)?", reply_text, flags=re.I))
         new_imgs = [u for u in search_images if u not in existing_imgs]
-        if new_imgs and not any(x in reply_text.lower() for x in ["diagram", "schematic", "pinout"]):
-            pass  # Wrench didn't talk about diagrams, skip
-        elif new_imgs:
+        if new_imgs:
             reply_text = reply_text.rstrip() + "\n\nDIAGRAMS / PICS PULLED FROM THE WEB:\n" + "\n".join(new_imgs[:5])
 
     now = datetime.now(timezone.utc).isoformat()

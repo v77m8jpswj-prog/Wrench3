@@ -4,6 +4,7 @@ import { Mic, Send, Volume2, VolumeX, ChevronRight, Square, History, Settings2, 
 import api, { API, getToken } from "@/api";
 import { useApp } from "@/AppContext";
 import { useWakeLock } from "@/hooks/useWakeLock";
+import ImageLightbox, { openLightbox } from "@/components/ImageLightbox";
 
 const setStatus = (label, color) => window.dispatchEvent(new CustomEvent("wrench-status", { detail: { label, color } }));
 
@@ -559,6 +560,7 @@ export default function Chat() {
           </div>
         </div>
       )}
+      <ImageLightbox />
       {/* Hidden audio element for TTS playback — must be in DOM for iOS to allow play() */}
       <audio ref={audioElRef} playsInline preload="auto" data-testid="tts-audio" />
       {/* Desktop-only header — order-1 on desktop */}
@@ -938,8 +940,14 @@ function MessageRow({ m, idx }) {
       </div>
       {m.imageUrl && (
         <div className="mt-2">
-          <img src={m.imageUrl} alt={m.imageName || "snip"} className="max-h-72 border border-line bg-black/40" data-testid={`msg-img-${idx}`} />
-          {m.imageName && <div className="text-[10px] text-ink-3 uppercase tracking-widest mt-1">SNIP: {m.imageName}</div>}
+          <img
+            src={m.imageUrl}
+            alt={m.imageName || "snip"}
+            onClick={() => openLightbox(m.imageUrl, m.imageName || "snip")}
+            className="max-h-72 border border-line bg-black/40 cursor-zoom-in hover:border-rust transition-colors"
+            data-testid={`msg-img-${idx}`}
+          />
+          {m.imageName && <div className="text-[10px] text-ink-3 uppercase tracking-widest mt-1">SNIP: {m.imageName} — TAP TO ZOOM</div>}
         </div>
       )}
       <div className="mt-1 text-ink text-[15px] md:text-[15px] leading-[1.65]" style={{fontFamily:"'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif"}}>
@@ -1082,9 +1090,16 @@ function renderWithLinks(text) {
     const href = url.startsWith("http") ? url : `https://${url}`;
     if (IMG_EXT_RE.test(url)) {
       parts.push(
-        <a key={m.index} href={href} target="_blank" rel="noopener noreferrer" className="block my-2" data-testid="msg-img-inline">
-          <img src={href} alt="diagram from web" loading="lazy" className="max-h-72 border border-line bg-black/40" />
-        </a>
+        <button
+          key={m.index}
+          type="button"
+          onClick={() => window.dispatchEvent(new CustomEvent("wrench-lightbox", { detail: { url: href, alt: "diagram from web" } }))}
+          className="block my-2 p-0 bg-transparent border-0 cursor-zoom-in text-left"
+          data-testid="msg-img-inline"
+        >
+          <img src={href} alt="diagram from web" loading="lazy" className="max-h-72 border border-line bg-black/40 hover:border-rust transition-colors" />
+          <div className="text-[10px] text-ink-3 uppercase tracking-widest mt-1">TAP TO ZOOM</div>
+        </button>
       );
     } else {
       parts.push(
