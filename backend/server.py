@@ -809,6 +809,23 @@ async def letters_get(slug: str, user=Depends(get_user)):
     return doc
 
 
+@api.get("/letter-json/{slug}")
+async def letter_public_get(slug: str):
+    """Public letter fetch as JSON — no auth. Used by partner agents (OG) to
+    pull letters Doc/Wrench has published. To keep this from being abused,
+    we only serve letters whose recipient field is non-empty OR slug starts
+    with 'brain-' / 'partner-' / 'public-'."""
+    doc = await db.letters.find_one({"slug": slug}, {"_id": 0})
+    if doc:
+        recipient = (doc.get("recipient") or "").strip()
+        if recipient or slug.startswith(("brain-", "partner-", "public-")):
+            return doc
+    seed = LETTERS.get(slug)
+    if seed:
+        return {"slug": slug, "title": seed.get("title", slug), "body": seed.get("body", ""), "recipient": "", "system_seed": True}
+    raise HTTPException(404, "Letter not found")
+
+
 @api.post("/letters")
 async def letters_create(body: LetterReq, user=Depends(get_user)):
     slug = re.sub(r"[^a-z0-9-]+", "-", (body.slug or "").lower()).strip("-")
