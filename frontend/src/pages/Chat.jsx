@@ -387,6 +387,12 @@ export default function Chat() {
   };
 
   const startNativeSpeech = () => {
+    // If native SpeechRecognition has already failed in this session (e.g. network
+    // unreachable to Google's STT, blocked by extension, locked-down Chromium),
+    // skip straight to MediaRecorder + Whisper.
+    if (nativeSpeechBrokenRef.current || !hasNativeSpeech) {
+      return startMediaRecorder();
+    }
     try {
       const rec = new SR();
       rec.lang = "en-US";
