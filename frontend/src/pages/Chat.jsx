@@ -524,6 +524,68 @@ export default function Chat() {
       recRef.current = mr;
       setRecording(true);
       setStatus("LISTENING", "#FF5722");
+
+      // === Voice Activity Detection (VAD) ===
+      // MediaRecorder by itself never auto-stops. Without VAD, Doc taps the mic,
+      // talks, then nothing ever sends. Watch the input volume and:
+      //   - require ~400ms of audible speech first
+      //   - then once volume drops below the floor for 1500ms, stop & send
+      //   - hard cap at 12 seconds in case the room is loud / silent threshold misses
+      try {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (AC) {
+          const ctx = new AC();
+          const src = ctx.createMediaStreamSource(stream);
+          const analyser = ctx.createAnalyser();
+          analyser.fftSize = 1024;
+          src.connect(analyser);
+          const buf = new Uint8Array(analyser.fftSize);
+
+          const startedAt = Date.now();
+          let lastVoiceAt = 0;
+          const SPEAK_FLOOR = 14;      // 0-255 RMS, anything above is "speech"
+          const SILENCE_MS = 1500;      // stop after this much trailing silence
+          const MIN_SPEAK_MS = 400;     // require this much speech first
+          const HARD_CAP_MS = 12000;    // hard cap
+
+          const stopOnce = () => {
+            try { mr.state !== "inactive" && mr.stop(); } catch {}
+            try { ctx.close(); } catch {}
+          };
+
+          const tick = () => {
+            if (mr.state !== "recording") return;
+            analyser.getByteTimeDomainData(buf);
+            // RMS centered around 128
+            let sumSq = 0;
+            for (let i = 0; i < buf.length; i++) {
+              const v = buf[i] - 128;
+              sumSq += v * v;
+            }
+            const rms = Math.sqrt(sumSq / buf.length);
+            const now = Date.now();
+            if (rms > SPEAK_FLOOR) {
+              lastVoiceAt = now;
+            }
+            const elapsed = now - startedAt;
+            const sinceVoice = lastVoiceAt ? now - lastVoiceAt : elapsed;
+            if (elapsed > HARD_CAP_MS) { stopOnce(); return; }
+            // Only consider silence-stop after we've heard SOME speech
+            if (lastVoiceAt && (now - startedAt) > MIN_SPEAK_MS && sinceVoice > SILENCE_MS) {
+              stopOnce();
+              return;
+            }
+            requestAnimationFrame(tick);
+          };
+          requestAnimationFrame(tick);
+        } else {
+          // No WebAudio — just hard-cap stop after 8s
+          setTimeout(() => { try { mr.state !== "inactive" && mr.stop(); } catch {} }, 8000);
+        }
+      } catch (e) {
+        // VAD setup failed for some reason — fall back to a hard 8s cap
+        setTimeout(() => { try { mr.state !== "inactive" && mr.stop(); } catch {} }, 8000);
+      }
     } catch (e) {
       const msg = (e && e.name) || "";
       const detail = e?.message || msg || "unknown";
