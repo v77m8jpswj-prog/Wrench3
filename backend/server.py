@@ -967,6 +967,43 @@ async def chat(body: ChatReq, user=Depends(get_user)):
     if body.vehicle_id:
         vehicle = await db.vehicles.find_one({"id": body.vehicle_id, "user_id": user["id"]}, {"_id": 0})
 
+    # If no vehicle was passed in, try to infer one from Doc's message:
+    # match against VIN (full or last 8), or against year+make/model words in his garage.
+    if not vehicle:
+        try:
+            garage = await db.vehicles.find({"user_id": user["id"]}, {"_id": 0}).to_list(200)
+            msg_up = body.message.upper()
+            best = None
+            # 1) Full VIN or last-8 hit wins
+            for v in garage:
+                vin = (v.get("vin") or "").upper()
+                if vin and (vin in msg_up or (len(vin) >= 8 and vin[-8:] in msg_up)):
+                    best = v
+                    break
+            # 2) Make + (model word OR year) hit
+            if not best:
+                for v in garage:
+                    mk = (v.get("make") or "").upper()
+                    mdl = (v.get("model") or "").upper().split()[0] if v.get("model") else ""
+                    yr = (v.get("year") or "").strip()
+                    if mk and mk in msg_up and (
+                        (mdl and mdl in msg_up) or (yr and yr in msg_up)
+                    ):
+                        best = v
+                        break
+            # 3) Distinctive model word alone (Sentra, Camaro, Sierra, Tahoe, Charger, Journey, Silverado)
+            if not best:
+                for v in garage:
+                    mdl_first = (v.get("model") or "").upper().split()[0] if v.get("model") else ""
+                    if mdl_first and len(mdl_first) >= 5 and mdl_first in msg_up:
+                        best = v
+                        break
+            if best:
+                vehicle = best
+                log.info(f"chat auto-picked vehicle from message: {best.get('year')} {best.get('make')} {best.get('model')}")
+        except Exception as _e:
+            log.warning(f"vehicle auto-pick failed: {_e}")
+
     # memory facts
     mem_cursor = db.memory_facts.find({"user_id": user["id"]}, {"_id": 0}).sort("created_at", -1)
     mem_docs = await mem_cursor.to_list(50)
