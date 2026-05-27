@@ -95,6 +95,7 @@ export function AppProvider({ children }) {
   const pendingAssistantRef = useRef("");
   const responseInFlightRef = useRef(false);  // true while a response.create is mid-stream
   const pendingTurnsRef = useRef([]);          // queued user turns to fire after current response.done
+  const userHangupRef = useRef(false);         // true while a user-initiated hangup is in progress so close events don't surface as errors
 
   // Helper: send a response.create only when no response is in-flight; queue otherwise.
   const safeRequestResponse = () => {
@@ -409,6 +410,8 @@ export function AppProvider({ children }) {
 
   const startCall = async () => {
     if (callState === "connected" || callState === "connecting") return;
+    // Reset hangup flag for the new session
+    userHangupRef.current = false;
     // DEFENSIVE: if there's a lingering peer connection or data channel from a half-dead
     // call (e.g. computer woke from sleep, tab returned from background), tear it down
     // before opening a new one. This kills the "two voices at once" bug.
@@ -487,24 +490,23 @@ export function AppProvider({ children }) {
       };
       dc.onclose = () => {
         setCallState("idle"); stopTick(); setStatus("IDLE", "#52525B");
-        // If the call dropped while the user thought we were still on, surface it
-        // so they aren't talking into a dead mic. AppContext only sets state here;
-        // any UI listening on callState will see the transition.
       };
       dc.onerror = (e) => {
         try { console.warn("realtime dc error", e); } catch {}
-        setCallError("Call channel dropped — tap mic to restart");
+        if (!userHangupRef.current) {
+          setCallError("Call channel dropped — tap mic to restart");
+        }
         setCallState("idle"); stopTick(); setStatus("IDLE", "#52525B");
       };
-      // If the peer connection itself disconnects (network blip, server hangup),
-      // tear down cleanly so the user sees CALL ENDED instead of a frozen LISTENING state.
+      // If the peer connection itself disconnects, tear down cleanly. Only surface
+      // an error banner if the disconnect was NOT user-initiated.
       pc.onconnectionstatechange = () => {
         const st = pc.connectionState;
         if (st === "disconnected" || st === "failed" || st === "closed") {
-          if (callState !== "idle") {
-            setCallError(st === "failed" ? "Call dropped — network or server. Tap mic to reconnect." : "Call ended");
-            setCallState("idle"); stopTick(); setStatus("IDLE", "#52525B");
+          if (!userHangupRef.current && st === "failed") {
+            setCallError("Call dropped — network or server. Tap mic to reconnect.");
           }
+          setCallState("idle"); stopTick(); setStatus("IDLE", "#52525B");
         }
       };
 
@@ -640,8 +642,11 @@ export function AppProvider({ children }) {
   };
 
   const endCall = () => {
+    userHangupRef.current = true;
     cleanupCall();
     setCallState("idle"); setStatus("IDLE", "#52525B");
+    // Reset the user-hangup flag after teardown so the NEXT call's events fire normally
+    setTimeout(() => { userHangupRef.current = false; }, 800);
   };
 
   return (
