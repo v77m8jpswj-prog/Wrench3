@@ -2360,9 +2360,9 @@ async def realtime_session(user=Depends(get_user)):
                 "input": {
                     "turn_detection": {
                         "type": "server_vad",
-                        "threshold": 0.78,
-                        "prefix_padding_ms": 400,
-                        "silence_duration_ms": 1800,
+                        "threshold": 0.6,
+                        "prefix_padding_ms": 300,
+                        "silence_duration_ms": 1500,
                         "create_response": True,
                         "interrupt_response": False,
                     },

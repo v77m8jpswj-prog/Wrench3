@@ -554,17 +554,26 @@ export function AppProvider({ children }) {
       try {
         if (audioElRef.current) { audioElRef.current.pause(); audioElRef.current.currentTime = 0; }
       } catch {}
-      try { dcRef.current?.send(JSON.stringify({ type: "response.cancel" })); } catch {}
-      // Mark response as no longer in flight — the next user turn can fire a fresh response.create
-      responseInFlightRef.current = false;
+      // ONLY send response.cancel if there's actually a response in flight to cancel.
+      // Sending it when nothing is running makes OpenAI Realtime emit an "active response not found"
+      // error which can lock the session into a bad state for the next turn.
+      if (responseInFlightRef.current) {
+        try { dcRef.current?.send(JSON.stringify({ type: "response.cancel" })); } catch {}
+        responseInFlightRef.current = false;
+      }
       // Reset interim transcript for the new utterance so prior partials don't bleed in
       setCallInterim("");
     }
     if (t === "error") {
       // If we hit "active response in progress", clear the flag so the next turn can fire
       const msg = evt.error?.message || "";
+      try { console.warn("[wrench-realtime] error event:", evt.error); } catch {}
       if (msg.toLowerCase().includes("active response")) {
         responseInFlightRef.current = false;
+      }
+      // Surface other unexpected errors so we know what's killing the call
+      if (!msg.toLowerCase().includes("active response") && msg) {
+        setCallError(`Call error: ${msg.slice(0, 120)}`);
       }
     }
     if (t === "conversation.item.input_audio_transcription.delta") {
