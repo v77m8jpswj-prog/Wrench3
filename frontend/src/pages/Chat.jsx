@@ -868,11 +868,18 @@ export default function Chat() {
             ref={inputRef}
             data-testid="chat-input"
             value={(app?.callState === "connected" && app?.callInterim) ? app.callInterim : input}
-            onChange={e=>setInput(e.target.value)}
+            onChange={e=>{
+              // During an active call, don't let interim transcript overwrite Doc's manual typing.
+              // Only allow editing when NOT showing interim, OR when Doc starts typing (interim auto-clears).
+              if (app?.callState === "connected" && app?.callInterim) {
+                // Doc started typing over the live transcript — drop the interim and switch to manual input
+                if (app.setCallInterim) app.setCallInterim("");
+              }
+              setInput(e.target.value);
+            }}
             onKeyDown={e=>{ if (e.key==="Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey){ e.preventDefault(); send(); } }}
             rows={1}
-            placeholder={app?.callState === "connected" ? "LISTENING... (talk — I'll print it here)" : recording ? "LISTENING..." : "TYPE HERE → HIT SEND"}
-            readOnly={app?.callState === "connected" && !!app?.callInterim}
+            placeholder={app?.callState === "connected" ? "LISTENING... (talk — I'll print it here, or just type)" : recording ? "LISTENING..." : "TYPE HERE → HIT SEND"}
             className="input-shop flex-1 resize-none text-sm py-3"
             style={{minHeight:"56px"}}
             autoFocus

@@ -413,6 +413,8 @@ export function AppProvider({ children }) {
     if (callState === "connected" || callState === "connecting") return;
     // Reset hangup flag for the new session
     userHangupRef.current = false;
+    // Reset interim transcript so the chat input box isn't stuck readOnly from a prior call
+    setCallInterim("");
     // DEFENSIVE: if there's a lingering peer connection or data channel from a half-dead
     // call (e.g. computer woke from sleep, tab returned from background), tear it down
     // before opening a new one. This kills the "two voices at once" bug.
@@ -555,6 +557,8 @@ export function AppProvider({ children }) {
       try { dcRef.current?.send(JSON.stringify({ type: "response.cancel" })); } catch {}
       // Mark response as no longer in flight — the next user turn can fire a fresh response.create
       responseInFlightRef.current = false;
+      // Reset interim transcript for the new utterance so prior partials don't bleed in
+      setCallInterim("");
     }
     if (t === "error") {
       // If we hit "active response in progress", clear the flag so the next turn can fire
@@ -646,6 +650,8 @@ export function AppProvider({ children }) {
     pendingTurnsRef.current = [];
     stopTick();
     setCallMuted(false);
+    // CRITICAL: reset interim transcript so the textarea doesn't stay locked in readOnly mode
+    setCallInterim("");
   };
 
   const endCall = () => {
@@ -660,7 +666,7 @@ export function AppProvider({ children }) {
     <AppCtx.Provider value={{
       vehicles, refreshVehicles,
       activeVehicleId, setActiveVehicleId, activeVehicle,
-      callState, callError, callTranscript, callInterim, callMuted, callSeconds, callVolume,
+      callState, callError, callTranscript, callInterim, setCallInterim, callMuted, callSeconds, callVolume,
       setCallVolume, startCall, endCall, sendCallText, toggleCallMute, haltWrench,
       callArtifacts, addArtifact, markArtifactsSeen, clearArtifact, clearAllArtifacts,
     }}>
