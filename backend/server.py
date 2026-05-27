@@ -1303,10 +1303,18 @@ async def _openai_web_search(query: str, vehicle_context: str = "", diagram_mode
     if vehicle_context:
         full_query = f"For a {vehicle_context}: {query}"
     if diagram_mode:
+        veh_clause = ""
+        if vehicle_context:
+            veh_clause = (
+                f" ONLY return results that explicitly match the vehicle: {vehicle_context}. "
+                f"If you cannot find a diagram for this exact make and year range, say 'No verified match for {vehicle_context}' "
+                f"and DO NOT include images from other makes (a GM diagram for a Dodge question is WRONG and will burn a PCM). "
+            )
         full_query = (
-            f"Find wiring diagrams, schematics, pinout images, or part-location diagrams for: {full_query}. "
+            f"Find wiring diagrams, schematics, pinout images, or part-location diagrams for: {full_query}.{veh_clause}"
             "Return any IMAGE URLs you find (must end in .jpg/.jpeg/.png/.gif/.webp) on their own lines so they render as images. "
-            "Then list the source page URLs."
+            "Then list the source page URLs. Prefer OEM-style diagrams and known service sources (autozone.com, alldatadiy.com, mitchell1.com, identifix.com, factory service manuals, vehicle-specific forums). "
+            "AVOID generic stock/trailer-wiring images, marketing photos, or universal harness ads."
         )
     async with httpx.AsyncClient(timeout=45) as client:
         r = await client.post(
@@ -1330,7 +1338,49 @@ async def _openai_web_search(query: str, vehicle_context: str = "", diagram_mode
     image_urls = list({
         m for m in re.findall(r"https?://[^\s<>\)\"]+?\.(?:png|jpe?g|gif|webp)(?:\?[^\s<>\)\"]*)?", text, flags=re.I)
     })
-    result = {"answer": text, "citations": citations, "image_urls": image_urls, "query": full_query}
+    # SAFETY GATE: when a vehicle context is provided and diagram_mode is on,
+    # check whether the answer text actually references the vehicle's make / family.
+    # If not, the search returned wrong-vehicle results — clear images and flag.
+    make_mismatch = False
+    if diagram_mode and vehicle_context:
+        # Group OEMs by FAMILY (sharing platforms/connectors). Match within family is OK.
+        OEM_FAMILIES = [
+            {"dodge", "chrysler", "jeep", "ram", "mopar"},
+            {"chevy", "chevrolet", "gmc", "buick", "cadillac", "pontiac", "saturn", "oldsmobile", "hummer"},
+            {"ford", "lincoln", "mercury"},
+            {"toyota", "lexus", "scion"},
+            {"honda", "acura"},
+            {"nissan", "infiniti"},
+            {"hyundai", "kia", "genesis"},
+            {"volkswagen", "vw", "audi", "porsche", "bentley"},
+            {"bmw", "mini"},
+            {"mercedes", "mercedes-benz", "smart"},
+            {"subaru"},
+            {"mazda"},
+        ]
+        veh_low = vehicle_context.lower()
+        veh_family = next((fam for fam in OEM_FAMILIES if any(m in veh_low for m in fam)), None)
+        if veh_family:
+            txt_low = text.lower()
+            mentions_family = any(m in txt_low for m in veh_family)
+            other_families_mentioned = []
+            for fam in OEM_FAMILIES:
+                if fam == veh_family:
+                    continue
+                hits = [m for m in fam if m in txt_low]
+                if hits:
+                    other_families_mentioned.extend(hits)
+            if not mentions_family or other_families_mentioned:
+                make_mismatch = True
+                log.info(f"diagram make-mismatch: veh_family={veh_family} got_others={other_families_mentioned[:3]} mentions_family={mentions_family}")
+                image_urls = []
+                text = (
+                    f"NO VERIFIED MATCH FOUND for {vehicle_context}. "
+                    f"Web search returned generic / wrong-make results"
+                    + (f" (mentions {', '.join(other_families_mentioned[:3])})" if other_families_mentioned else "")
+                    + ". Pull from AllData / Identifix login instead, or ask Doc to snip the connector diagram he has open."
+                )
+    result = {"answer": text, "citations": citations, "image_urls": image_urls, "query": full_query, "make_mismatch": make_mismatch}
     # Write to cache (best-effort)
     try:
         await db.search_cache.update_one(
@@ -2218,9 +2268,28 @@ async def realtime_session(user=Depends(get_user)):
     mem_cursor = db.memory_facts.find({"user_id": user["id"]}, {"_id": 0}).sort("created_at", -1)
     mem_docs = await mem_cursor.to_list(30)
     memory_facts = [m["fact"] for m in mem_docs]
-    sys_prompt = build_system_prompt(user, "direct", False, None, memory_facts, [])
+    # Pull the user's currently-active vehicle so Wrench knows which truck Doc is on
+    active_vehicle = None
+    settings = user.get("settings") or {}
+    active_vid = settings.get("active_vehicle_id")
+    if active_vid:
+        active_vehicle = await db.vehicles.find_one({"id": active_vid, "user_id": user["id"]}, {"_id": 0})
+    if not active_vehicle:
+        # Fall back to most-recently-touched vehicle
+        active_vehicle = await db.vehicles.find_one({"user_id": user["id"]}, {"_id": 0}, sort=[("updated_at", -1), ("created_at", -1)])
+    sys_prompt = build_system_prompt(user, "direct", False, active_vehicle, memory_facts, [])
     sys_prompt += "\n\nYOU ARE NOW IN VOICE CALL MODE. Keep replies tight — 1 to 3 sentences usually. If Doc asks for the long version, give it but pause naturally. Speak like a real mechanic on a phone call."
     sys_prompt += "\n\nLANGUAGE — DOC IS A WORKING MECHANIC IN HIS OWN SHOP. He cusses. You can cuss back when it fits naturally. NEVER censor Doc's words when you reflect them back. NEVER sanitize or soften his language — repeat what he said verbatim if you need to quote him. You are not a customer-service bot. You are his shop partner. The ONLY hard limit is racist/sexist slurs."
+    if active_vehicle:
+        vstr = f"{active_vehicle.get('year','')} {active_vehicle.get('make','')} {active_vehicle.get('model','')} {active_vehicle.get('engine','')}".strip()
+        sys_prompt += (
+            f"\n\nACTIVE VEHICLE — DOC IS WORKING ON THIS RIGHT NOW: {vstr}.\n"
+            f"VIN: {active_vehicle.get('vin','')}. Notes: {active_vehicle.get('notes','')[:200]}.\n"
+            "DIAGRAM TOOL CALLS — CRITICAL — DO THIS EVERY TIME:\n"
+            f"• EVERY find_diagram call MUST include vehicle_context='{vstr}'. NEVER call find_diagram without vehicle_context — wrong make = wrong connector = burned PCM. Doc knows the difference between a GM C2 and a Chrysler C2 from the photo. Don't waste his time with mismatched diagrams.\n"
+            "• If find_diagram comes back and the answer text or image URLs DON'T clearly reference the active vehicle make (e.g. you asked for Dodge and the result mentions GM/Chevy/Ford), DO NOT show those images to Doc. Tell him: 'Web came back with the wrong make. Pull from your AllData login — give me the system label and I'll go get it.'\n"
+            "• When in doubt about pin colors / locations: ONLY trust diagrams that visually match the vehicle. Otherwise tell Doc to pull the actual OEM diagram from AllData / Identifix using lookup_credentials.\n"
+        )
     sys_prompt += (
         "\n\nYOU HAVE TOOLS — USE THEM PROACTIVELY:\n"
         "• When Doc reads a VIN out loud, CALL save_vehicle_from_vin immediately, then say 'Got it' out loud.\n"
