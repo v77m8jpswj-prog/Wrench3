@@ -485,7 +485,28 @@ export function AppProvider({ children }) {
           }));
         } catch {}
       };
-      dc.onclose = () => { setCallState("idle"); stopTick(); setStatus("IDLE", "#52525B"); };
+      dc.onclose = () => {
+        setCallState("idle"); stopTick(); setStatus("IDLE", "#52525B");
+        // If the call dropped while the user thought we were still on, surface it
+        // so they aren't talking into a dead mic. AppContext only sets state here;
+        // any UI listening on callState will see the transition.
+      };
+      dc.onerror = (e) => {
+        try { console.warn("realtime dc error", e); } catch {}
+        setCallError("Call channel dropped — tap mic to restart");
+        setCallState("idle"); stopTick(); setStatus("IDLE", "#52525B");
+      };
+      // If the peer connection itself disconnects (network blip, server hangup),
+      // tear down cleanly so the user sees CALL ENDED instead of a frozen LISTENING state.
+      pc.onconnectionstatechange = () => {
+        const st = pc.connectionState;
+        if (st === "disconnected" || st === "failed" || st === "closed") {
+          if (callState !== "idle") {
+            setCallError(st === "failed" ? "Call dropped — network or server. Tap mic to reconnect." : "Call ended");
+            setCallState("idle"); stopTick(); setStatus("IDLE", "#52525B");
+          }
+        }
+      };
 
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
