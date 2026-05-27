@@ -833,7 +833,7 @@ export default function Chat() {
         {messages.length === 0 ? (
           <div className="min-h-full flex flex-col items-center justify-center px-4 py-6 text-center">
             <VoiceButton callMode={callMode} recording={recording} thinking={thinking} speaking={speaking} onClick={toggleCall} />
-            {micError && (
+            {micError && app?.callState !== "connected" && (
               <MicHelpPanel error={micError} expanded={showMicHelp} onToggle={()=>setShowMicHelp(s=>!s)} onRetry={startRecord} />
             )}
             <div className="mt-10 max-w-xl">
@@ -871,7 +871,7 @@ export default function Chat() {
 
       {/* Input bar — TOP of page (order-2, right under headers). Doc's preference: type at top, replies appear below. */}
       <div className="order-2 border-b border-line bg-bg-2 px-3 md:px-6 py-3 md:py-4 sticky top-0 z-20 safe-top">
-        {micError && messages.length > 0 && (
+        {micError && messages.length > 0 && app?.callState !== "connected" && (
           <MicHelpPanel error={micError} expanded={showMicHelp} onToggle={()=>setShowMicHelp(s=>!s)} onRetry={startRecord} compact />
         )}
         <div className="flex items-end gap-2 md:gap-3">

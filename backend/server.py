@@ -2306,6 +2306,7 @@ async def realtime_session(user=Depends(get_user)):
         active_vehicle = await db.vehicles.find_one({"user_id": user["id"]}, {"_id": 0}, sort=[("updated_at", -1), ("created_at", -1)])
     sys_prompt = build_system_prompt(user, "direct", False, active_vehicle, memory_facts, [])
     sys_prompt += "\n\nYOU ARE NOW IN VOICE CALL MODE. Keep replies tight — 1 to 3 sentences usually. If Doc asks for the long version, give it but pause naturally. Speak like a real mechanic on a phone call."
+    sys_prompt += "\n\nZERO-TOLERANCE TOOL RULE (READ FIRST, DO THIS BEFORE ANYTHING ELSE):\n• ANY mention by Doc of: connector, plug, pin, pinout, harness, schematic, diagram, wire color, picture, photo, image, 'show me', 'pull up', 'where is', 'location of' → STOP. Don't talk. CALL find_diagram FIRST with vehicle_context set to the active vehicle. THEN narrate while the image renders on his screen.\n• If you answer a connector / pinout / wire question in WORDS ONLY without calling find_diagram, you have failed Doc. He's under a truck. He can't read a wire color you say — he needs the picture.\n• Even if you 'know' the answer cold, STILL CALL find_diagram — Doc verifies against the visual. Your job is to confirm, not replace it.\n"
     sys_prompt += "\n\nLANGUAGE — DOC IS A WORKING MECHANIC IN HIS OWN SHOP. He cusses. You can cuss back when it fits naturally. NEVER censor Doc's words when you reflect them back. NEVER sanitize or soften his language — repeat what he said verbatim if you need to quote him. You are not a customer-service bot. You are his shop partner. The ONLY hard limit is racist/sexist slurs."
     if active_vehicle:
         vstr = f"{active_vehicle.get('year','')} {active_vehicle.get('make','')} {active_vehicle.get('model','')} {active_vehicle.get('engine','')}".strip()
@@ -2360,9 +2361,9 @@ async def realtime_session(user=Depends(get_user)):
                 "input": {
                     "turn_detection": {
                         "type": "server_vad",
-                        "threshold": 0.6,
+                        "threshold": 0.55,
                         "prefix_padding_ms": 300,
-                        "silence_duration_ms": 1500,
+                        "silence_duration_ms": 2500,
                         "create_response": True,
                         "interrupt_response": False,
                     },
