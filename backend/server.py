@@ -2256,11 +2256,11 @@ async def realtime_session(user=Depends(get_user)):
                 "input": {
                     "turn_detection": {
                         "type": "server_vad",
-                        "threshold": 0.5,
-                        "prefix_padding_ms": 250,
-                        "silence_duration_ms": 450,
+                        "threshold": 0.65,
+                        "prefix_padding_ms": 350,
+                        "silence_duration_ms": 1200,
                         "create_response": True,
-                        "interrupt_response": True,
+                        "interrupt_response": False,
                     },
                 },
                 "output": {"voice": "ash"},
