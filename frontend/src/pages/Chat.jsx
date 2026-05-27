@@ -39,6 +39,24 @@ export default function Chat() {
     } catch {}
   };
   const [recording, setRecording] = useState(false);
+  // Hard watchdog — if recording stays true >20s without firing onstop, force kill.
+  // This is the safety net for "LISTENING..." stuck in the box.
+  useEffect(() => {
+    if (!recording) return;
+    const watchdog = setTimeout(() => {
+      try {
+        if (recRef.current && recRef.current.state !== "inactive") recRef.current.stop();
+      } catch {}
+      try {
+        if (speechRecRef.current) { speechRecRef.current.stop(); speechRecRef.current = null; }
+      } catch {}
+      setRecording(false);
+      setStatus("IDLE", "#52525B");
+      setMicError("Mic hung up — tap again.");
+    }, 20000);
+    return () => clearTimeout(watchdog);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recording]);
   const [thinking, setThinking] = useState(false);
   const [speaking, setSpeaking] = useState(false);
   const [callMode, setCallMode] = useState(false);
@@ -115,7 +133,13 @@ export default function Chat() {
 
   // Detect Web Speech API (Safari/Chrome both support webkit prefix on iOS)
   const SR = (typeof window !== "undefined") && (window.SpeechRecognition || window.webkitSpeechRecognition);
-  const hasNativeSpeech = !!SR;
+  // iOS Safari has a SpeechRecognition object but it's unreliable — works the first
+  // time then locks up on the second call. Force MediaRecorder + Whisper path on iOS.
+  const isIOS = (typeof navigator !== "undefined")
+    && /iPad|iPhone|iPod/.test(navigator.platform || "")
+    || (navigator.userAgent && /iPad|iPhone|iPod/.test(navigator.userAgent))
+    || (navigator.userAgent && /Mac/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+  const hasNativeSpeech = !!SR && !isIOS;
 
   useEffect(() => {
     app?.refreshVehicles?.();
