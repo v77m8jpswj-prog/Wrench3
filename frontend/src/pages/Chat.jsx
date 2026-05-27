@@ -1287,9 +1287,130 @@ function stripMarkdown(s) {
 // Render text with URLs auto-linked as clickable <a> tags + image URLs as inline images
 const URL_RE = /\b(https?:\/\/[^\s<>"')]+)|(\bwww\.[^\s<>"')]+)/gi;
 const IMG_EXT_RE = /\.(?:png|jpe?g|gif|webp|bmp|svg)(?:\?[^\s<>")]*)?$/i;
+// Detect copyable VALUE on a line after a "Label: value" pattern.
+// Returns [labelPart, valuePart] or null if no value-looking content found.
+const COPYABLE_LABEL_RE = /^(\s*[-•▸›*]?\s*[A-Z0-9][A-Za-z0-9 _\/.&()'#-]{1,60}:)\s*(.+?)\s*$/;
+
+// A line is worth a copy button only if the value looks like real content
+// (not just "yes" / "no" / a sentence). Keep emails, urls, phones, addresses,
+// numbers, codes, multi-token strings >= 6 chars.
+function lineIsCopyable(value) {
+  const v = (value || "").trim();
+  if (v.length < 3) return false;
+  if (/^(yes|no|n\/a|na|none|tbd|todo)$/i.test(v)) return false;
+  if (v.length > 240) return false; // long paragraph, skip
+  return true;
+}
+
+function CopyableLine({ label, value, raw }) {
+  const [copied, setCopied] = React.useState(false);
+  const text = raw ?? value;
+  const copy = async (e) => {
+    e?.preventDefault?.(); e?.stopPropagation?.();
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const ta = document.createElement("textarea");
+        ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+        document.body.appendChild(ta); ta.focus(); ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+      }
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {}
+  };
+  return (
+    <span className="inline-flex items-baseline gap-2 group">
+      {label && <span className="text-ink-2">{label} </span>}
+      <span className="text-ink">{value}</span>
+      <button
+        type="button"
+        onClick={copy}
+        title={copied ? "Copied" : "Copy"}
+        aria-label={copied ? "Copied" : "Copy this"}
+        data-testid="copy-line-btn"
+        className={`text-[10px] uppercase tracking-widest px-1.5 py-0.5 border ${copied ? "border-amber2 text-amber2" : "border-line text-ink-3 hover:border-rust hover:text-rust"}`}
+      >
+        {copied ? "✓ COPIED" : "COPY"}
+      </button>
+    </span>
+  );
+}
+
 function renderWithLinks(text) {
   if (!text) return null;
   text = stripMarkdown(text);
+
+  // Pre-pass: split into lines and detect Label:value lines for copy buttons.
+  // Lines without a copyable value fall through to the original URL/image renderer.
+  const lines = text.split("\n");
+  const lineNodes = [];
+  lines.forEach((ln, lineIdx) => {
+    const labelMatch = ln.match(COPYABLE_LABEL_RE);
+    if (labelMatch && lineIsCopyable(labelMatch[2])) {
+      const label = labelMatch[1].trim();
+      const value = labelMatch[2].trim();
+      // If value is a URL/image, fall through to standard renderer so the link is clickable AND we still add a copy button
+      const isJustUrl = URL_RE.test(value) && value.split(/\s+/).length === 1;
+      if (isJustUrl) {
+        lineNodes.push(
+          <div key={`ln${lineIdx}`} className="leading-relaxed flex items-baseline gap-2 flex-wrap">
+            <span className="text-ink-2">{label}</span>
+            <span>{renderUrlsAndImages(value, `ln${lineIdx}`)}</span>
+            <CopyButtonInline value={value} />
+          </div>
+        );
+      } else {
+        lineNodes.push(
+          <div key={`ln${lineIdx}`} className="leading-relaxed">
+            <CopyableLine label={label} value={value} raw={value} />
+          </div>
+        );
+      }
+    } else {
+      // Standard line — render links/images inline
+      lineNodes.push(
+        <React.Fragment key={`ln${lineIdx}`}>
+          {renderUrlsAndImages(ln, `ln${lineIdx}`)}
+          {lineIdx < lines.length - 1 ? "\n" : null}
+        </React.Fragment>
+      );
+    }
+  });
+  return lineNodes;
+}
+
+// Small inline copy button used next to URL lines that already render as a link
+function CopyButtonInline({ value }) {
+  const [copied, setCopied] = React.useState(false);
+  const copy = async (e) => {
+    e?.preventDefault?.(); e?.stopPropagation?.();
+    try {
+      if (navigator.clipboard && window.isSecureContext) await navigator.clipboard.writeText(value);
+      else {
+        const ta = document.createElement("textarea");
+        ta.value = value; ta.style.position = "fixed"; ta.style.opacity = "0";
+        document.body.appendChild(ta); ta.focus(); ta.select();
+        document.execCommand("copy"); document.body.removeChild(ta);
+      }
+      setCopied(true); setTimeout(()=>setCopied(false), 1500);
+    } catch {}
+  };
+  return (
+    <button type="button" onClick={copy} title={copied?"Copied":"Copy"}
+      className={`text-[10px] uppercase tracking-widest px-1.5 py-0.5 border ${copied?"border-amber2 text-amber2":"border-line text-ink-3 hover:border-rust hover:text-rust"}`}>
+      {copied ? "✓" : "COPY"}
+    </button>
+  );
+}
+
+// Original URL/image rendering — pulled out into helper so the line-level
+// renderer can call it for non-copyable lines.
+function renderUrlsAndImages(text, keyPrefix = "p") {
+  if (text == null) return null;
+  // Note: stripMarkdown is already applied by renderWithLinks; don't re-run it
   const parts = [];
   let last = 0;
   let m;
@@ -1301,7 +1422,7 @@ function renderWithLinks(text) {
     if (IMG_EXT_RE.test(url)) {
       parts.push(
         <button
-          key={m.index}
+          key={`${keyPrefix}-${m.index}`}
           type="button"
           onClick={() => window.dispatchEvent(new CustomEvent("wrench-lightbox", { detail: { url: href, alt: "diagram from web" } }))}
           className="block my-2 p-0 bg-transparent border-0 cursor-zoom-in text-left"
@@ -1313,7 +1434,7 @@ function renderWithLinks(text) {
       );
     } else {
       parts.push(
-        <a key={m.index} href={href} target="_blank" rel="noopener noreferrer" className="text-amber2 underline break-all hover:text-rust" data-testid="msg-link">
+        <a key={`${keyPrefix}-${m.index}`} href={href} target="_blank" rel="noopener noreferrer" className="text-amber2 underline break-all hover:text-rust" data-testid="msg-link">
           {url}
         </a>
       );
