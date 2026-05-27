@@ -2810,6 +2810,7 @@ from scraper import make_scraper_router  # noqa: E402
 from tune_mod import build_router as build_tune_router  # noqa: E402
 from learn_mod import make_learn_router  # noqa: E402
 from agent_mail import make_agentmail_router  # noqa: E402
+from sms_routes import make_router as make_sms_router  # noqa: E402
 brain_router = make_brain_router(db, get_user)
 api.include_router(brain_router)
 team_chat_router = make_team_chat_router(db, get_user, embed_text=_brain_embed, case_text_blob=_brain_case_blob)
@@ -2826,6 +2827,8 @@ learn_router = make_learn_router(db, get_user)
 api.include_router(learn_router)
 agentmail_router = make_agentmail_router(db, get_user)
 api.include_router(agentmail_router)
+sms_router = make_sms_router(db, get_user)
+api.include_router(sms_router)
 
 
 # ============ Register router ============

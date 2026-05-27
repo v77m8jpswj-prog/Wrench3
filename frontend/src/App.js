@@ -30,6 +30,7 @@ import Watchlist from "@/pages/Watchlist";
 import Snippets from "@/pages/Snippets";
 import ShopLanding from "@/pages/ShopLanding";
 import Settings from "@/pages/Settings";
+import SmsInbox from "@/pages/SmsInbox";
 import Shell from "@/components/Shell";
 
 function Protected({ children }) {
@@ -82,6 +83,7 @@ function App() {
                 <Route path="/learn" element={<Protected><Learn /></Protected>} />
                 <Route path="/usage" element={<Protected><Suspense fallback={<div className="p-6 text-rust">Loading...</div>}><LlmUsageScreen /></Suspense></Protected>} />
                 <Route path="/watchlist" element={<Protected><Watchlist /></Protected>} />
+                <Route path="/sms" element={<Protected><SmsInbox /></Protected>} />
                 <Route path="/settings" element={<Protected><Settings /></Protected>} />
                 <Route path="*" element={<Navigate to="/" />} />
               </Routes>

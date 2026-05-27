@@ -10,6 +10,7 @@ const NAV = [
   { to: "/chat", icon: MessageSquare, label: "CHAT", id: "nav-chat" },
   { to: "/jobs", icon: Briefcase, label: "JOBS", id: "nav-jobs" },
   { to: "/email", icon: Inbox, label: "EMAIL", id: "nav-email" },
+  { to: "/sms", icon: MessageSquare, label: "SMS", id: "nav-sms" },
   { to: "/leads", icon: UserPlus, label: "LEADS", id: "nav-leads" },
   { to: "/team", icon: Users, label: "TEAM", id: "nav-team" },
   { to: "/cases", icon: FolderArchive, label: "CASES", id: "nav-cases" },
