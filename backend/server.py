@@ -969,6 +969,7 @@ async def chat(body: ChatReq, user=Depends(get_user)):
 
     # If no vehicle was passed in, try to infer one from Doc's message:
     # match against VIN (full or last 8), or against year+make/model words in his garage.
+    inferred_from_message = False
     if not vehicle:
         try:
             garage = await db.vehicles.find({"user_id": user["id"]}, {"_id": 0}).to_list(200)
@@ -1000,9 +1001,35 @@ async def chat(body: ChatReq, user=Depends(get_user)):
                         break
             if best:
                 vehicle = best
+                inferred_from_message = True
                 log.info(f"chat auto-picked vehicle from message: {best.get('year')} {best.get('make')} {best.get('model')}")
         except Exception as _e:
             log.warning(f"vehicle auto-pick failed: {_e}")
+
+    # STICKY: if the message inferred a vehicle, set it as user's active_vehicle_id
+    # so subsequent turns in this thread (and the realtime call) keep using it
+    # without Doc repeating the truck. If the user already had a different active
+    # vehicle set, this overrides it — last-mentioned wins.
+    if inferred_from_message and vehicle:
+        try:
+            await db.users.update_one(
+                {"id": user["id"]},
+                {"$set": {"settings.active_vehicle_id": vehicle["id"], "settings.active_vehicle_set_at": datetime.now(timezone.utc).isoformat()}},
+            )
+        except Exception as _e:
+            log.warning(f"active vehicle sticky-set failed: {_e}")
+
+    # STICKY FALLBACK: if no vehicle yet but user has an active_vehicle_id, use it.
+    # This is the "stay on point" behavior — Doc says "2013 sentra" once, then on
+    # the next message just says "what about timing chain" and Wrench knows it's
+    # still the Sentra.
+    if not vehicle:
+        settings = user.get("settings") or {}
+        active_vid = settings.get("active_vehicle_id")
+        if active_vid:
+            vehicle = await db.vehicles.find_one({"id": active_vid, "user_id": user["id"]}, {"_id": 0})
+            if vehicle:
+                log.info(f"chat using sticky active vehicle: {vehicle.get('year')} {vehicle.get('make')} {vehicle.get('model')}")
 
     # memory facts
     mem_cursor = db.memory_facts.find({"user_id": user["id"]}, {"_id": 0}).sort("created_at", -1)
