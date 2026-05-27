@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useMemo } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Mic, Send, Volume2, VolumeX, ChevronRight, Square, History, Settings2, X, Paperclip, FolderPlus, Truck, Plus, Check, AlertCircle, Copy } from "lucide-react";
 import api, { API, getToken } from "@/api";
@@ -13,6 +13,8 @@ export default function Chat() {
   const nav = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [messages, setMessages] = useState([]);
+  // Memoize the reversed list so we're not rebuilding the array on every keystroke
+  const reversedMessages = useMemo(() => [...messages].reverse(), [messages]);
   const [input, setInput] = useState("");
   const [sessionId, setSessionId] = useState(() => localStorage.getItem("dw_chat_session") || null);
   const [mode, setMode] = useState("direct");
@@ -859,7 +861,7 @@ export default function Chat() {
                 [WRENCH] <span className="animate-blink">_</span> thinking
               </div>
             )}
-            {[...messages].reverse().map((m, i) => <MessageRow key={messages.length - 1 - i} m={m} idx={messages.length - 1 - i} />)}
+            {reversedMessages.map((m, i) => <MessageRow key={messages.length - 1 - i} m={m} idx={messages.length - 1 - i} />)}
             <div ref={endRef} />
           </div>
         )}
@@ -888,25 +890,15 @@ export default function Chat() {
             <Paperclip size={22}/>
           </button>
           <input ref={attachRef} type="file" hidden accept="image/*,.pdf,.txt,.md,.csv,.log,.hpt,.hpl,.bin,.tune" onChange={e=>{ const f = e.target.files?.[0]; if (f) onAttach(f); e.target.value=""; }} data-testid="attach-input"/>
-          <textarea
-            ref={inputRef}
-            data-testid="chat-input"
-            value={(app?.callState === "connected" && app?.callInterim) ? app.callInterim : input}
-            onChange={e=>{
-              // During an active call, don't let interim transcript overwrite Doc's manual typing.
-              // Only allow editing when NOT showing interim, OR when Doc starts typing (interim auto-clears).
-              if (app?.callState === "connected" && app?.callInterim) {
-                // Doc started typing over the live transcript — drop the interim and switch to manual input
-                if (app.setCallInterim) app.setCallInterim("");
-              }
-              setInput(e.target.value);
-            }}
-            onKeyDown={e=>{ if (e.key==="Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey){ e.preventDefault(); send(); } }}
-            rows={1}
-            placeholder={app?.callState === "connected" ? "LISTENING... (talk — I'll print it here, or just type)" : recording ? "LISTENING..." : "TYPE HERE → HIT SEND"}
-            className="input-shop flex-1 resize-none text-sm py-3"
-            style={{minHeight:"56px"}}
-            autoFocus
+          <ChatInputBox
+            inputRef={inputRef}
+            value={input}
+            onChange={setInput}
+            onSend={send}
+            recording={recording}
+            callState={app?.callState}
+            callInterim={app?.callInterim}
+            setCallInterim={app?.setCallInterim}
           />
           <button data-testid="send-btn" onClick={()=>send()} aria-label="Send" className="btn-rust h-14 px-3 md:px-5 flex items-center gap-1.5">
             <Send size={16}/><span className="hidden sm:inline">SEND</span>
@@ -1084,7 +1076,40 @@ function WaveBars() {
   );
 }
 
-function MessageRow({ m, idx }) {
+// Isolated chat input — keeps its own internal handler reference so AppContext ticks
+// (e.g. callSeconds during a call) don't re-render the textarea on every keystroke.
+const ChatInputBox = React.memo(function ChatInputBox({ inputRef, value, onChange, onSend, recording, callState, callInterim, setCallInterim }) {
+  const inCall = callState === "connected";
+  const showingInterim = inCall && !!callInterim;
+  const displayValue = showingInterim ? callInterim : value;
+  const placeholder = inCall
+    ? "LISTENING... (talk — I'll print it here, or just type)"
+    : recording ? "LISTENING..." : "TYPE HERE → HIT SEND";
+  return (
+    <textarea
+      ref={inputRef}
+      data-testid="chat-input"
+      value={displayValue}
+      onChange={(e) => {
+        if (showingInterim && setCallInterim) setCallInterim("");
+        onChange(e.target.value);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+          e.preventDefault();
+          onSend();
+        }
+      }}
+      rows={1}
+      placeholder={placeholder}
+      className="input-shop flex-1 resize-none text-sm py-3"
+      style={{ minHeight: "56px" }}
+      autoFocus
+    />
+  );
+});
+
+const MessageRow = React.memo(function MessageRow({ m, idx }) {
   const isUser = m.role === "user";
   return (
     <div className={`px-4 md:px-6 py-3 border-b border-line whitespace-pre-wrap break-words ${idx%2===0?"bg-bg-1":"bg-bg-2"}`} data-testid={`msg-${idx}`}>
@@ -1114,7 +1139,16 @@ function MessageRow({ m, idx }) {
       )}
     </div>
   );
-}
+}, (prev, next) => {
+  // Re-render ONLY when the message content/citations/idx change.
+  // Keystrokes in the input box won't trigger this anymore.
+  return prev.idx === next.idx
+    && prev.m === next.m
+    && prev.m.content === next.m.content
+    && prev.m.citations === next.m.citations
+    && prev.m.imageUrl === next.m.imageUrl
+    && prev.m.heat === next.m.heat;
+});
 
 // Detect a markdown ```...``` fenced block OR a multi-line tab-separated block.
 // For each, render a one-tap COPY TABLE button + the raw monospaced text.

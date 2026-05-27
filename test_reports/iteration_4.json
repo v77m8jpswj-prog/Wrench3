@@ -1,0 +1,49 @@
+{
+  "summary": "Frontend-only regression on /chat after ChatInputBox/MessageRow React.memo refactor and React.lazy Usage import. Tested on BOTH desktop (1920x800) AND iPhone-sized mobile (390x844). Fast-typing core regression worry (P0) is RESOLVED — 88 chars @ 10ms delay and 61 chars @ 12ms delay both round-trip byte-perfect in the textarea, no dropped characters, focus stays on chat-input during keystrokes. Login works, /chat renders, /usage lazy-loaded cleanly (rendered '$7.97' + 40 chats + 4 voice calls), VOICE ON/OFF toggle works, TEST VOICE button click is silent on console, 3 back-to-back sends produce 3 user messages and Wrench replies, no console errors, no page errors, ZERO 'Usage is not defined' / 'UsagePage is not defined' / any ReferenceError anywhere. ONE confirmed focus regression: clicking SEND button moves focus to the SEND button itself instead of keeping cursor in the textarea — PRD spec #6 not met for mouse-send (works correctly for keyboard Enter send).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "Chat.jsx — send(text, attachmentNote) function (line 240-263)",
+        "issue": "After clicking the SEND button (data-testid=\"send-btn\"), document.activeElement becomes the SEND button itself, NOT the chat-input textarea. Verified by typing immediately after click with keyboard.type() — characters land nowhere (chat-input value stays ''). PRD requirement #6 (\"Chat input retains focus after sending — cursor still in box\") is therefore NOT met for the mouse-click path. Sending via Enter inside the textarea DOES retain focus correctly (verified active el = chat-input after press('Enter')). Fix: call inputRef.current?.focus() at end of send() (or right after setInput('')).",
+        "selector": "[data-testid=\"send-btn\"] → [data-testid=\"chat-input\"]",
+        "priority": "MEDIUM"
+      },
+      {
+        "component": "ChatInputBox mic button",
+        "issue": "The mic toggle button next to the textarea has NO data-testid (e.g. data-testid=\"mic-btn\"). The mobile drawer-open icon also has no distinguishing testid which made the mic difficult to target programmatically. Recommend adding data-testid=\"mic-btn\" (and \"attach-btn\") so iPhone-Safari lockup scenarios can be regression-tested reliably going forward.",
+        "selector": "button (mic icon in ChatInputBox)",
+        "priority": "LOW"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/test_reports/iteration_4.json"
+  ],
+  "action_items": [
+    "(MEDIUM, PRD spec #6) In Chat.jsx send() function, refocus textarea after sending: add `setTimeout(() => inputRef.current?.focus(), 0);` after `setInput('')` (or call onSend then refocus inside ChatInputBox). Currently the SEND button keeps focus on click, breaking the 'cursor still in box' flow.",
+    "(LOW, testability) Add data-testid=\"mic-btn\" and data-testid=\"attach-btn\" to the ChatInputBox icon buttons so the mic-doesn't-lock-input scenario is testable end-to-end."
+  ],
+  "critical_code_review_comments": [
+    "ChatInputBox React.memo refactor IS effective — fast-typing 88 characters at 10ms inter-key delay on mobile viewport produced byte-perfect output, focus stayed on chat-input, zero dropped chars. The original P0 regression worry is gone.",
+    "React.lazy(() => import('@/pages/Usage')) in App.js works — /usage renders the dollar/usage dashboard with no 'Usage is not defined' or 'UsagePage is not defined' ReferenceError in console. Lazy chunk loads under 3s with Suspense fallback.",
+    "send() in Chat.jsx does not refocus the textarea. PRD spec #6 explicitly requires cursor-stays-in-box behaviour. The fix is one line: inputRef.current?.focus() after setInput(''). Without it, mouse-send users have to click back into the box for each follow-up message.",
+    "Mic and attach icon buttons inside ChatInputBox lack data-testid attributes; the SEND button has data-testid=\"send-btn\" which is good. For consistency and future regression coverage, add data-testid to the mic and attach buttons."
+  ],
+  "updated_files": [],
+  "success_rate": {
+    "backend": "n/a (frontend-only test)",
+    "frontend": "92% — 9/10 PRD checks pass. The only miss is PRD #6 (focus retention) on the mouse-send path; keyboard-send path works fine."
+  },
+  "test_credentials": "doc@drunderhood.com / wrench — login works on both desktop and mobile viewports.",
+  "seed_data_creation": "Sent ~6 throwaway chat messages ('hi wrench', 'msg 1', 'msg 2', 'msg 3', 'quick test msg', 'focus test') to the doc/wrench session for typing/send verification. Safe to leave in DB.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "P0 regression (dropped characters under fast typing) is RESOLVED — re-verify only if Chat.jsx is touched again. The one remaining bug is focus-retention after SEND button click; once main agent adds inputRef.current?.focus() in send(), re-run a single Playwright check: click send-btn, immediately page.keyboard.type('x'), then assert chat-input.input_value() === 'x'. /usage works via lazy import; no need to regress that unless App.js routing changes. Test both 1920x800 desktop AND 390x844 mobile because the user runs iPhone Safari.",
+  "rca_of_the_issue": "Fast-typing regression: ROOT CAUSE was that the message list and chat input were re-rendering on every keystroke and every AppContext per-second tick during a call. Fix shipped: (a) React.memo wrap MessageRow, (b) useMemo on reversedMessages, (c) extract ChatInputBox into its own React.memo'd component with stable props. Verification: type(88 chars, delay=10ms) on mobile 390x844 → input_value() length=88, match=True. PASS.   Focus-retention miss: ROOT CAUSE is send() in Chat.jsx (line 240-263) clears input via setInput('') but never refocuses inputRef. The SEND button is a <button>, so clicking it transfers document.activeElement off the textarea. Enter-key send works because keyboard.press('Enter') fires inside the already-focused textarea and doesn't move focus. MITIGATION: add inputRef.current?.focus() after setInput('') in send(), wrapped in setTimeout(...,0) to wait for React to commit the cleared value."
+}
