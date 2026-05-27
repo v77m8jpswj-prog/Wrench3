@@ -1078,10 +1078,7 @@ function MessageRow({ m, idx }) {
         {renderRichContent(m.content)}
       </div>
       {m.citations && m.citations.length > 0 && (
-        <div className="mt-2 text-[10px] md:text-[11px] text-ink-3 border-l-2 border-line pl-3">
-          <div className="uppercase tracking-widest text-amber2 mb-1">SOURCES</div>
-          {m.citations.map((c,i)=>(<div key={i} className="mb-1">› {c.source}: <span className="text-ink-2">{c.snippet}</span></div>))}
-        </div>
+        <CitationsBlock citations={m.citations} />
       )}
     </div>
   );
@@ -1090,6 +1087,27 @@ function MessageRow({ m, idx }) {
 // Detect a markdown ```...``` fenced block OR a multi-line tab-separated block.
 // For each, render a one-tap COPY TABLE button + the raw monospaced text.
 // Outside those blocks, fall back to renderWithLinks for clickable URLs / images.
+function CitationsBlock({ citations }) {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <div className="mt-2 text-[10px] md:text-[11px]">
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        data-testid="toggle-sources"
+        className="uppercase tracking-widest text-ink-3 hover:text-amber2 border border-line px-2 py-0.5"
+      >
+        {open ? "− HIDE SOURCES" : `+ SOURCES (${citations.length})`}
+      </button>
+      {open && (
+        <div className="mt-2 text-ink-3 border-l-2 border-line pl-3">
+          {citations.map((c,i)=>(<div key={i} className="mb-1">› {c.source}: <span className="text-ink-2">{c.snippet}</span></div>))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function renderRichContent(text) {
   if (!text) return null;
   const blocks = [];
