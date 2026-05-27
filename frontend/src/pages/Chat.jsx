@@ -867,11 +867,12 @@ export default function Chat() {
           <textarea
             ref={inputRef}
             data-testid="chat-input"
-            value={input}
+            value={(app?.callState === "connected" && app?.callInterim) ? app.callInterim : input}
             onChange={e=>setInput(e.target.value)}
             onKeyDown={e=>{ if (e.key==="Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey){ e.preventDefault(); send(); } }}
             rows={1}
-            placeholder={recording ? "LISTENING..." : "TYPE HERE → HIT SEND"}
+            placeholder={app?.callState === "connected" ? "LISTENING... (talk — I'll print it here)" : recording ? "LISTENING..." : "TYPE HERE → HIT SEND"}
+            readOnly={app?.callState === "connected" && !!app?.callInterim}
             className="input-shop flex-1 resize-none text-sm py-3"
             style={{minHeight:"56px"}}
             autoFocus

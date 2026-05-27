@@ -52,6 +52,7 @@ export function AppProvider({ children }) {
   const [callState, setCallState] = useState("idle"); // idle | connecting | connected | error
   const [callError, setCallError] = useState("");
   const [callTranscript, setCallTranscript] = useState([]);
+  const [callInterim, setCallInterim] = useState(""); // live STT of user's mid-utterance speech
   const [callMuted, setCallMuted] = useState(false);
   const [callSeconds, setCallSeconds] = useState(0);
   const [callVolume, setCallVolume] = useState(1.5);
@@ -562,8 +563,14 @@ export function AppProvider({ children }) {
         responseInFlightRef.current = false;
       }
     }
+    if (t === "conversation.item.input_audio_transcription.delta") {
+      // Live partial transcript as Doc is speaking. Surfaces in the chat input box
+      // so he sees what the mic is hearing in real time instead of a stale "LISTENING...".
+      setCallInterim(prev => prev + (evt.delta || ""));
+    }
     if (t === "conversation.item.input_audio_transcription.completed") {
       const txt = (evt.transcript || "").trim();
+      setCallInterim("");
       if (txt) {
         setCallTranscript(arr => [...arr, { who: "tech", text: txt }]);
         appendToChatSession("user", txt);
@@ -653,7 +660,7 @@ export function AppProvider({ children }) {
     <AppCtx.Provider value={{
       vehicles, refreshVehicles,
       activeVehicleId, setActiveVehicleId, activeVehicle,
-      callState, callError, callTranscript, callMuted, callSeconds, callVolume,
+      callState, callError, callTranscript, callInterim, callMuted, callSeconds, callVolume,
       setCallVolume, startCall, endCall, sendCallText, toggleCallMute, haltWrench,
       callArtifacts, addArtifact, markArtifactsSeen, clearArtifact, clearAllArtifacts,
     }}>
