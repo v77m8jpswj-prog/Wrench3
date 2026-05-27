@@ -244,6 +244,8 @@ export default function Chat() {
     const finalText = t + (note ? (t ? "\n\n" : "") + note : "");
     if (!finalText) return;
     setInput("");
+    // Refocus textarea after send so cursor stays in the input box for the next message
+    setTimeout(() => inputRef.current?.focus(), 0);
     setMessages(m => [...m, { role: "user", content: finalText }]);
     setThinking(true); setStatus("THINKING", "#FF5722");
     try {
