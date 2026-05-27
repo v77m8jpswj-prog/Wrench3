@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, lazy, Suspense } from "react";
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, Link, useLocation } from "react-router-dom";
 import "@/App.css";
 import api, { setToken, getToken, clearToken } from "@/api";
@@ -22,7 +22,10 @@ import DiffTune from "@/pages/DiffTune";
 import Tune from "@/pages/Tune";
 import Leads from "@/pages/Leads";
 import Learn from "@/pages/Learn";
-import LlmUsageScreen from "@/pages/Usage";
+// /usage page is loaded via React.lazy to dodge a minifier collision we hit
+// twice with bare imports (`Usage`, `UsagePage`). Lazy-loading is dynamic so
+// the bundler can't strip its import declaration.
+const LlmUsageScreen = lazy(() => import("@/pages/Usage"));
 import Watchlist from "@/pages/Watchlist";
 import Snippets from "@/pages/Snippets";
 import ShopLanding from "@/pages/ShopLanding";
@@ -77,7 +80,7 @@ function App() {
                 <Route path="/tune" element={<Protected><Tune /></Protected>} />
                 <Route path="/leads" element={<Protected><Leads /></Protected>} />
                 <Route path="/learn" element={<Protected><Learn /></Protected>} />
-                <Route path="/usage" element={<Protected><LlmUsageScreen /></Protected>} />
+                <Route path="/usage" element={<Protected><Suspense fallback={<div className="p-6 text-rust">Loading...</div>}><LlmUsageScreen /></Suspense></Protected>} />
                 <Route path="/watchlist" element={<Protected><Watchlist /></Protected>} />
                 <Route path="/settings" element={<Protected><Settings /></Protected>} />
                 <Route path="*" element={<Navigate to="/" />} />
