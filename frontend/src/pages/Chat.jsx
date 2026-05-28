@@ -244,24 +244,127 @@ export default function Chat() {
     const finalText = t + (note ? (t ? "\n\n" : "") + note : "");
     if (!finalText) return;
     setInput("");
-    // Refocus textarea after send so cursor stays in the input box for the next message
     setTimeout(() => inputRef.current?.focus(), 0);
     setMessages(m => [...m, { role: "user", content: finalText }]);
     setThinking(true); setStatus("THINKING", "#FF5722");
+
+    // STREAMING path — ChatGPT-style token-by-token reply
     try {
-      const r = await api.post("/chat", { message: finalText, session_id: sessionId, mode, vehicle_id: vehicleId || null });
-      setSessionId(r.data.session_id);
-      const reply = r.data.reply || "";
-      setMessages(m => [...m, { role: "assistant", content: reply, citations: r.data.citations, heat: r.data.heat_detected }]);
+      // Insert an empty assistant placeholder we'll fill as tokens arrive
+      setMessages(m => [...m, { role: "assistant", content: "", _streaming: true }]);
+
+      const ctrl = new AbortController();
+      const res = await fetch(`${API}/chat/stream`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${getToken()}` },
+        body: JSON.stringify({ message: finalText, session_id: sessionId, mode, vehicle_id: vehicleId || null }),
+        signal: ctrl.signal,
+      });
+      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      let citations = null;
+      let heat = false;
+      let imageTail = [];
+      let fullText = "";
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        // Parse complete SSE events ("event: X\ndata: Y\n\n")
+        let idx;
+        while ((idx = buf.indexOf("\n\n")) !== -1) {
+          const block = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          const evMatch = block.match(/^event:\s*(\S+)/m);
+          const dataMatch = block.match(/^data:\s*(.+)$/m);
+          if (!evMatch || !dataMatch) continue;
+          const ev = evMatch[1];
+          let data;
+          try { data = JSON.parse(dataMatch[1]); } catch { data = dataMatch[1]; }
+          if (ev === "meta") {
+            if (data.session_id) setSessionId(data.session_id);
+            citations = data.citations;
+            heat = !!data.heat_detected;
+          } else if (ev === "token") {
+            fullText += data;
+            setMessages(m => {
+              const copy = [...m];
+              const last = copy[copy.length - 1];
+              if (last && last._streaming) {
+                copy[copy.length - 1] = { ...last, content: fullText };
+              }
+              return copy;
+            });
+            setStatus("WRITING", "#FFC107");
+          } else if (ev === "image") {
+            imageTail.push(data);
+          } else if (ev === "error") {
+            fullText += `\n\n[ERROR] ${data.error || "stream error"}`;
+            setMessages(m => {
+              const copy = [...m];
+              const last = copy[copy.length - 1];
+              if (last && last._streaming) copy[copy.length - 1] = { ...last, content: fullText };
+              return copy;
+            });
+          } else if (ev === "done") {
+            // Append any images that came after the model finished
+            if (imageTail.length) {
+              const imgs = imageTail.join("\n");
+              fullText += (fullText && !fullText.endsWith("\n") ? "\n\n" : "") + imgs;
+            }
+            setMessages(m => {
+              const copy = [...m];
+              const last = copy[copy.length - 1];
+              if (last && last._streaming) {
+                copy[copy.length - 1] = { role: "assistant", content: fullText, citations, heat };
+              }
+              return copy;
+            });
+          }
+        }
+      }
       refreshSessions();
-      if ((voiceOn || callModeRef.current) && !realtimeCallActive) await speak(reply);
+      if ((voiceOn || callModeRef.current) && !realtimeCallActive && fullText) await speak(fullText);
       else if (callModeRef.current && !realtimeCallActive) {
         setTimeout(() => callModeRef.current && startNativeSpeech(), 400);
       }
     } catch (e) {
-      setMessages(m => [...m, { role: "assistant", content: `[ ERROR ] ${e?.response?.data?.detail || e.message}` }]);
-      if (callModeRef.current) setTimeout(() => callModeRef.current && startNativeSpeech(), 800);
-    } finally { setThinking(false); if (!callModeRef.current) setStatus("IDLE", "#52525B"); }
+      // Fallback to non-streaming if stream chokes
+      try {
+        const r = await api.post("/chat", { message: finalText, session_id: sessionId, mode, vehicle_id: vehicleId || null });
+        setSessionId(r.data.session_id);
+        const reply = r.data.reply || "";
+        setMessages(m => {
+          const copy = [...m];
+          const last = copy[copy.length - 1];
+          if (last && last._streaming) {
+            copy[copy.length - 1] = { role: "assistant", content: reply, citations: r.data.citations, heat: r.data.heat_detected };
+          } else {
+            copy.push({ role: "assistant", content: reply, citations: r.data.citations, heat: r.data.heat_detected });
+          }
+          return copy;
+        });
+        refreshSessions();
+        if ((voiceOn || callModeRef.current) && !realtimeCallActive) await speak(reply);
+      } catch (e2) {
+        setMessages(m => {
+          const copy = [...m];
+          const last = copy[copy.length - 1];
+          const err = `[ ERROR ] ${e2?.response?.data?.detail || e2.message || e.message}`;
+          if (last && last._streaming) copy[copy.length - 1] = { role: "assistant", content: err };
+          else copy.push({ role: "assistant", content: err });
+          return copy;
+        });
+        if (callModeRef.current) setTimeout(() => callModeRef.current && startNativeSpeech(), 800);
+      }
+    } finally {
+      setThinking(false);
+      if (!callModeRef.current) setStatus("IDLE", "#52525B");
+    }
   };
 
   const attachRef = useRef(null);

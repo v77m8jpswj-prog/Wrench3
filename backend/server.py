@@ -1210,6 +1210,208 @@ async def chat(body: ChatReq, user=Depends(get_user)):
     return ChatResp(session_id=session_id, reply=reply_text, citations=citations, heat_detected=heat)
 
 
+@api.post("/chat/stream")
+async def chat_stream(body: ChatReq, user=Depends(get_user)):
+    """Streaming version of /chat. Returns SSE events:
+        event: meta   - JSON {session_id, citations, heat}
+        event: token  - raw text chunks
+        event: image  - one URL per event for diagrams the web search returned
+        event: done   - JSON {usage_summary} sent last
+    Frontend appends tokens to the message bubble live = ChatGPT-style typing.
+    """
+    from fastapi.responses import StreamingResponse
+    from openai import AsyncOpenAI
+
+    if not OPENAI_API_KEY:
+        raise HTTPException(503, "OPENAI_API_KEY not set for streaming chat.")
+
+    # ----- Same context setup as /chat (auto vehicle pick, parallel mem+lib+search) -----
+    heat = detect_heat(body.message)
+    session_id = body.session_id or str(uuid.uuid4())
+    vehicle = None
+    if body.vehicle_id:
+        vehicle = await db.vehicles.find_one({"id": body.vehicle_id, "user_id": user["id"]}, {"_id": 0})
+    inferred_from_message = False
+    if not vehicle:
+        try:
+            garage = await db.vehicles.find({"user_id": user["id"]}, {"_id": 0}).to_list(200)
+            msg_up = body.message.upper()
+            best = None
+            for v in garage:
+                vin = (v.get("vin") or "").upper()
+                if vin and (vin in msg_up or (len(vin) >= 8 and vin[-8:] in msg_up)):
+                    best = v; break
+            if not best:
+                for v in garage:
+                    mk = (v.get("make") or "").upper()
+                    mdl = (v.get("model") or "").upper().split()[0] if v.get("model") else ""
+                    yr = (v.get("year") or "").strip()
+                    if mk and mk in msg_up and ((mdl and mdl in msg_up) or (yr and yr in msg_up)):
+                        best = v; break
+            if not best:
+                for v in garage:
+                    mdl_first = (v.get("model") or "").upper().split()[0] if v.get("model") else ""
+                    if mdl_first and len(mdl_first) >= 5 and mdl_first in msg_up:
+                        best = v; break
+            if best:
+                vehicle = best; inferred_from_message = True
+        except Exception:
+            pass
+    if inferred_from_message and vehicle:
+        try:
+            await db.users.update_one({"id": user["id"]}, {"$set": {"settings.active_vehicle_id": vehicle["id"]}})
+        except Exception:
+            pass
+    if not vehicle:
+        settings = user.get("settings") or {}
+        if settings.get("active_vehicle_id"):
+            vehicle = await db.vehicles.find_one({"id": settings["active_vehicle_id"], "user_id": user["id"]}, {"_id": 0})
+
+    msg_lower = body.message.lower()
+    diagram_intent = any(k in msg_lower for k in [
+        "diagram", "schematic", "wiring", "connector", "pinout",
+        "picture of", "pic of", "image of", "what does it look like", "where is the",
+        "location of", "exploded view", "torque sequence",
+    ])
+    web_intent = diagram_intent or any(k in msg_lower for k in [
+        "recall", "tsb", "service bulletin", "current price", "look up", "google", "look it up",
+    ])
+
+    import asyncio as _asyncio
+    async def _mem():
+        cur = db.memory_facts.find({"user_id": user["id"]}, {"_id": 0}).sort("created_at", -1)
+        docs = await cur.to_list(20)
+        return [m["fact"] for m in docs]
+    async def _lib():
+        return await retrieve_library(user["id"], body.message, k=5)
+    async def _prior():
+        cur = db.chat_messages.find({"session_id": session_id, "user_id": user["id"]}, {"_id": 0}).sort("created_at", 1)
+        return await cur.to_list(40)
+    async def _search():
+        if not web_intent:
+            return None
+        try:
+            veh_ctx = ""
+            if vehicle:
+                veh_ctx = f"{vehicle.get('year','')} {vehicle.get('make','')} {vehicle.get('model','')} {vehicle.get('engine_summary','')}".strip()
+            return await _openai_web_search(body.message, veh_ctx, diagram_mode=diagram_intent, scope_id=(user.get("shop_id") or os.environ.get("DEFAULT_SHOP_ID", "drunderhood-fortsmith")))
+        except Exception:
+            return None
+    memory_facts, lib_chunks, prior, search_res = await _asyncio.gather(_mem(), _lib(), _prior(), _search())
+
+    sys_prompt = build_system_prompt(user, body.mode, heat, vehicle, memory_facts, lib_chunks)
+
+    search_block = ""
+    search_images = []
+    if search_res:
+        search_images = (search_res.get("image_urls") or [])[:8]
+        srch_text = (search_res.get("answer") or "")[:2500]
+        cit_lines = "\n".join(f"  - {c['title']}: {c['url']}" for c in (search_res.get("citations") or [])[:6])
+        search_block = (
+            "\n\nLIVE WEB SEARCH RESULTS:\n" + srch_text
+            + ("\n\nSOURCES:\n" + cit_lines if cit_lines else "")
+            + (("\n\nIMAGES FOUND:\n" + "\n".join(search_images)) if search_images else "")
+        )
+
+    # Persist the user's turn immediately so it shows up in the session
+    now_ts = datetime.now(timezone.utc).isoformat()
+    await db.chat_messages.insert_one({
+        "id": str(uuid.uuid4()),
+        "user_id": user["id"],
+        "session_id": session_id,
+        "role": "user",
+        "content": body.message,
+        "created_at": now_ts,
+    })
+
+    # Build OpenAI-style message array
+    messages = [{"role": "system", "content": sys_prompt + search_block}]
+    if prior:
+        recap = "\n\nRECENT CONVERSATION:\n" + "\n".join(
+            f"[{t['role'].upper()}]: {t['content'][:300]}" for t in prior[-6:]
+        )
+        messages[0]["content"] += recap
+    messages.append({"role": "user", "content": body.message})
+
+    # Model pick: short -> gpt-5.2-mini (FAST), long/diagnostic -> gpt-5.2
+    use_smart = bool(search_block) or len(body.message) > 200 or any(k in msg_lower for k in [
+        "diagnose", "diagnosis", "why is", "what causes", "troubleshoot", "compare", "explain",
+        "tune", "spark map", "calibration", "long version", "detailed", "deep dive",
+    ])
+    model_name = "gpt-5" if use_smart else "gpt-5-mini"
+
+    citations_payload = [{"source": c.get("source"), "snippet": c.get("text","")[:240]} for c in lib_chunks]
+
+    async def event_gen():
+        client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+        # Meta first so the frontend knows session_id + citations before tokens stream
+        meta = {"session_id": session_id, "citations": citations_payload, "heat_detected": heat, "vehicle": vehicle}
+        yield f"event: meta\ndata: {json.dumps(meta)}\n\n"
+
+        full_reply = ""
+        try:
+            stream = await client.chat.completions.create(
+                model=model_name,
+                messages=messages,
+                stream=True,
+            )
+            async for chunk in stream:
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+                if delta and delta.content:
+                    full_reply += delta.content
+                    yield f"event: token\ndata: {json.dumps(delta.content)}\n\n"
+        except Exception as e:
+            log.exception("stream failed")
+            yield f"event: error\ndata: {json.dumps({'error': str(e)[:200]})}\n\n"
+            return
+
+        # Append search images at the end if model didn't naturally
+        if search_images:
+            already = set(re.findall(r"https?://[^\s<>\)\"]+?\.(?:png|jpe?g|gif|webp)(?:\?[^\s<>\)\"]*)?", full_reply, flags=re.I))
+            for u in search_images[:5]:
+                if u not in already:
+                    yield f"event: image\ndata: {json.dumps(u)}\n\n"
+                    full_reply += "\n" + u
+
+        # Persist the assistant turn
+        try:
+            await db.chat_messages.insert_one({
+                "id": str(uuid.uuid4()),
+                "user_id": user["id"],
+                "session_id": session_id,
+                "role": "assistant",
+                "content": full_reply,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+            # Title the session if it doesn't have one yet
+            sess = await db.chat_sessions.find_one({"id": session_id, "user_id": user["id"]})
+            if not sess or not sess.get("title"):
+                title = await _generate_title(body.message, full_reply)
+                await db.chat_sessions.update_one(
+                    {"id": session_id, "user_id": user["id"]},
+                    {"$set": {"title": title, "updated_at": datetime.now(timezone.utc).isoformat()},
+                     "$setOnInsert": {"id": session_id, "user_id": user["id"],
+                                       "created_at": datetime.now(timezone.utc).isoformat()}},
+                    upsert=True,
+                )
+            else:
+                await db.chat_sessions.update_one(
+                    {"id": session_id, "user_id": user["id"]},
+                    {"$set": {"updated_at": datetime.now(timezone.utc).isoformat()}},
+                )
+        except Exception:
+            log.warning("persist after stream failed", exc_info=True)
+
+        yield f"event: done\ndata: {json.dumps({'model': model_name})}\n\n"
+
+    return StreamingResponse(event_gen(), media_type="text/event-stream", headers={
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+    })
+
+
 async def _generate_title(user_msg: str, reply: str) -> str:
     """Use a tiny LLM call to generate a 3-6 word title for a chat session."""
     try:
