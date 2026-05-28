@@ -81,6 +81,9 @@ Already covered in this session:
 - [ ] (P2) YouTube transcript ingest
 - [ ] (P2) Daily auto-scrape (re-read saved URLs weekly)
 
+## Shipped Feb 28, 2026
+- [x] **Library ZIP bulk upload** — `POST /api/library/upload-zip` accepts a .zip, kicks off a background worker (concurrency=4) that ingests every supported file (PDF, images via GPT-5.2 OCR, TXT/MD/CSV/LOG, .hpt/.hpl). Each file becomes its own `library_items` row tagged with `batch_id`. Status polled via `GET /api/library/batch/{id}`. Frontend Library page now has `UPLOAD ZIP` button + live progress bar. Drag-and-dropping a `.zip` on the dropzone triggers the bulk path automatically.
+
 ## Partner agent (OG / Dr. Underhood Live Assist)
 - Letters round 4, 6, 8 acknowledged. Round 8 documents: case_ids_already_seen + Foreman Mail contract.
 - Their poller hits `/api/brain/recent-outcomes` every 60s with cursor.

@@ -2149,11 +2149,19 @@ async def lib_paste(body: LibraryPasteReq, user=Depends(get_user)):
     return {"ok": True, "item_id": item_id, "title": title, "chunks_ingested": len(chunks), "chars": len(text)}
 
 
-@api.post("/library/upload")
-async def lib_upload(file: UploadFile = File(...), user=Depends(get_user)):
-    raw = await file.read()
-    name = file.filename or "untitled"
-    lower = name.lower()
+LIB_SUPPORTED_EXTS = (
+    ".pdf",
+    ".png", ".jpg", ".jpeg", ".webp", ".gif",
+    ".txt", ".md", ".csv", ".log",
+    ".hpt", ".hpl", ".bin", ".tune",
+)
+
+
+async def _ingest_library_bytes(user_id: str, name: str, raw: bytes, batch_id: Optional[str] = None) -> Dict[str, Any]:
+    """Single-file ingest used by both /library/upload and /library/upload-zip.
+    Extracts text (PDF parse / image OCR / raw decode), creates library_items row,
+    chunks and inserts into library_chunks. Returns the item document."""
+    lower = (name or "untitled").lower()
     kind = "text"
     text = ""
     if lower.endswith(".pdf"):
@@ -2199,7 +2207,7 @@ async def lib_upload(file: UploadFile = File(...), user=Depends(get_user)):
     now = datetime.now(timezone.utc).isoformat()
     item = {
         "id": item_id,
-        "user_id": user["id"],
+        "user_id": user_id,
         "name": name,
         "kind": kind,
         "size": len(raw),
@@ -2207,13 +2215,15 @@ async def lib_upload(file: UploadFile = File(...), user=Depends(get_user)):
         "chunk_count": 0,
         "status": "indexing",
     }
+    if batch_id:
+        item["batch_id"] = batch_id
     await db.library_items.insert_one(item)
 
     chunks = chunk_text(text)
     if chunks:
         docs = [{
             "id": str(uuid.uuid4()),
-            "user_id": user["id"],
+            "user_id": user_id,
             "item_id": item_id,
             "source": name,
             "text": c,
@@ -2225,6 +2235,110 @@ async def lib_upload(file: UploadFile = File(...), user=Depends(get_user)):
     item["status"] = "ready"
     item.pop("_id", None)
     return item
+
+
+@api.post("/library/upload")
+async def lib_upload(file: UploadFile = File(...), user=Depends(get_user)):
+    raw = await file.read()
+    name = file.filename or "untitled"
+    return await _ingest_library_bytes(user["id"], name, raw)
+
+
+@api.post("/library/upload-zip")
+async def lib_upload_zip(file: UploadFile = File(...), user=Depends(get_user)):
+    """Bulk-ingest every supported file inside a .zip. Processes in background
+    with bounded concurrency so the HTTP request returns fast — files appear in
+    /api/library as they finish."""
+    raw = await file.read()
+    if len(raw) > 500 * 1024 * 1024:  # 500MB hard cap
+        raise HTTPException(413, "Zip too big — keep it under 500MB or split it.")
+    try:
+        import zipfile as _zf
+        zf = _zf.ZipFile(io.BytesIO(raw))
+    except Exception:
+        raise HTTPException(400, "Not a valid zip file.")
+
+    entries: List[tuple] = []  # list of (name, bytes)
+    skipped_count = 0
+    for info in zf.infolist():
+        if info.is_dir():
+            continue
+        name = info.filename
+        base = name.split("/")[-1]
+        # skip macOS junk, dotfiles, and unsupported extensions
+        if "__MACOSX" in name or base.startswith(".") or base.startswith("._"):
+            skipped_count += 1
+            continue
+        if not name.lower().endswith(LIB_SUPPORTED_EXTS):
+            skipped_count += 1
+            continue
+        try:
+            data = zf.read(info)
+        except Exception:
+            skipped_count += 1
+            continue
+        entries.append((base, data))
+
+    try:
+        zf.close()
+    except Exception:
+        pass
+
+    if not entries:
+        raise HTTPException(400, f"No supported files found in zip. Skipped {skipped_count}. Supported: PDF, images (PNG/JPG/WEBP/GIF), TXT/MD/CSV/LOG, tune files (HPT/HPL/BIN/TUNE).")
+
+    batch_id = str(uuid.uuid4())
+    user_id = user["id"]
+    total = len(entries)
+
+    # Track batch progress so the UI can poll it
+    await db.library_batches.insert_one({
+        "id": batch_id,
+        "user_id": user_id,
+        "total": total,
+        "done": 0,
+        "failed": 0,
+        "skipped": skipped_count,
+        "status": "running",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+
+    async def _worker():
+        import asyncio as _asyncio
+        sem = _asyncio.Semaphore(4)  # cap concurrent LLM OCR calls
+
+        async def _one(nm: str, data: bytes):
+            async with sem:
+                try:
+                    await _ingest_library_bytes(user_id, nm, data, batch_id=batch_id)
+                    await db.library_batches.update_one({"id": batch_id}, {"$inc": {"done": 1}})
+                except Exception:
+                    log.exception(f"zip ingest failed for {nm}")
+                    await db.library_batches.update_one({"id": batch_id}, {"$inc": {"failed": 1}})
+
+        await _asyncio.gather(*[_one(nm, data) for nm, data in entries])
+        await db.library_batches.update_one(
+            {"id": batch_id},
+            {"$set": {"status": "done", "finished_at": datetime.now(timezone.utc).isoformat()}},
+        )
+
+    import asyncio as _asyncio
+    _asyncio.create_task(_worker())
+
+    return {
+        "ok": True,
+        "batch_id": batch_id,
+        "queued": total,
+        "skipped": skipped_count,
+    }
+
+
+@api.get("/library/batch/{batch_id}")
+async def lib_batch_status(batch_id: str, user=Depends(get_user)):
+    doc = await db.library_batches.find_one({"id": batch_id, "user_id": user["id"]}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Batch not found")
+    return doc
 
 
 @api.get("/library")

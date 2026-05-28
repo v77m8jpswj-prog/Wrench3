@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from "react";
-import { Upload, Trash2, FileText, FileSpreadsheet, BookOpen, RefreshCw, Link as LinkIcon, ExternalLink, Loader, ClipboardPaste } from "lucide-react";
+import { Upload, Trash2, FileText, FileSpreadsheet, BookOpen, RefreshCw, Link as LinkIcon, ExternalLink, Loader, ClipboardPaste, FileArchive } from "lucide-react";
 import api from "@/api";
 
 export default function Library() {
@@ -14,7 +14,10 @@ export default function Library() {
   const [pasteText, setPasteText] = useState("");
   const [pasteBusy, setPasteBusy] = useState(false);
   const [pasteMsg, setPasteMsg] = useState("");
+  const [zipBusy, setZipBusy] = useState(false);
+  const [zipBatch, setZipBatch] = useState(null); // { batch_id, total, done, failed, skipped, status }
   const fileRef = useRef(null);
+  const zipRef = useRef(null);
 
   const refresh = async () => {
     const r = await api.get("/library");
@@ -38,7 +41,12 @@ export default function Library() {
   const onDrop = (e) => {
     e.preventDefault();
     const f = e.dataTransfer.files?.[0];
-    if (f) upload(f);
+    if (!f) return;
+    if ((f.name || "").toLowerCase().endsWith(".zip")) {
+      onZip({ target: { files: [f] } });
+    } else {
+      upload(f);
+    }
   };
 
   const del = async (id) => {
@@ -78,6 +86,44 @@ export default function Library() {
     } finally { setPasteBusy(false); }
   };
 
+  const onZip = async (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    setErr(""); setZipBusy(true); setZipBatch(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", f);
+      const r = await api.post("/library/upload-zip", fd, {
+        headers: { "Content-Type": "multipart/form-data" },
+        timeout: 600000,
+      });
+      // Start polling batch status
+      const initial = { batch_id: r.data.batch_id, total: r.data.queued, done: 0, failed: 0, skipped: r.data.skipped, status: "running" };
+      setZipBatch(initial);
+    } catch (e) {
+      setErr(e?.response?.data?.detail || e.message || "Zip upload failed");
+    } finally {
+      setZipBusy(false);
+      if (zipRef.current) zipRef.current.value = "";
+    }
+  };
+
+  // Poll the active zip batch and refresh the library list as files finish
+  useEffect(() => {
+    if (!zipBatch || zipBatch.status === "done") return;
+    const interval = setInterval(async () => {
+      try {
+        const r = await api.get(`/library/batch/${zipBatch.batch_id}`);
+        setZipBatch(r.data);
+        refresh();
+        if (r.data.status === "done") clearInterval(interval);
+      } catch {
+        // batch row may not exist yet on first tick — keep polling
+      }
+    }, 2500);
+    return () => clearInterval(interval);
+  }, [zipBatch?.batch_id, zipBatch?.status]);
+
   return (
     <div className="p-6" data-testid="library-page">
       <div className="flex items-end justify-between mb-4 border-b border-line pb-4">
@@ -85,9 +131,43 @@ export default function Library() {
           <h1 className="heading text-4xl">LIBRARY <span className="text-rust">// RAG</span></h1>
           <p className="text-ink-2 text-xs mt-1 uppercase tracking-widest">DROP MANUALS, NOTES, LOGS — WRENCH CITES THEM</p>
         </div>
-        <button data-testid="upload-btn" onClick={()=>fileRef.current?.click()} className="btn-rust flex items-center gap-2"><Upload size={16}/>UPLOAD</button>
-        <input ref={fileRef} type="file" hidden accept=".pdf,.txt,.md,.csv,.log,.hpt,.hpl,.bin,.tune" onChange={e=>e.target.files?.[0]&&upload(e.target.files[0])} data-testid="file-input"/>
+        <div className="flex items-center gap-2">
+          <button data-testid="upload-zip-btn" onClick={()=>zipRef.current?.click()} disabled={zipBusy}
+            className="text-xs uppercase tracking-widest border-2 border-amber2 text-amber2 px-3 py-2 flex items-center gap-1.5 hover:bg-amber2/10 disabled:opacity-50">
+            <FileArchive size={14}/>
+            {zipBusy ? "UPLOADING..." : "UPLOAD ZIP"}
+          </button>
+          <button data-testid="upload-btn" onClick={()=>fileRef.current?.click()} className="btn-rust flex items-center gap-2"><Upload size={16}/>UPLOAD</button>
+        </div>
+        <input ref={fileRef} type="file" hidden accept=".pdf,.txt,.md,.csv,.log,.png,.jpg,.jpeg,.webp,.gif,.hpt,.hpl,.bin,.tune" onChange={e=>e.target.files?.[0]&&upload(e.target.files[0])} data-testid="file-input"/>
+        <input ref={zipRef} type="file" hidden accept=".zip" onChange={onZip} data-testid="zip-input"/>
       </div>
+
+      {zipBatch && (
+        <div className="panel p-3 mb-4 border-l-4 border-amber2" data-testid="zip-batch-status">
+          <div className="flex items-center gap-2 text-xs uppercase tracking-widest">
+            <FileArchive size={14} className="text-amber2"/>
+            <span className="text-amber2 font-bold">ZIP INGEST</span>
+            <span className="text-ink-2">
+              {zipBatch.done}/{zipBatch.total} done
+              {zipBatch.failed ? ` · ${zipBatch.failed} failed` : ""}
+              {zipBatch.skipped ? ` · ${zipBatch.skipped} skipped` : ""}
+            </span>
+            <span className={`ml-auto ${zipBatch.status === "done" ? "text-ok" : "text-rust animate-pulse"}`}>
+              {zipBatch.status === "done" ? "✓ COMPLETE" : "WORKING..."}
+            </span>
+          </div>
+          <div className="mt-2 h-1.5 bg-bg-3 overflow-hidden">
+            <div
+              className={`h-full ${zipBatch.status === "done" ? "bg-ok" : "bg-amber2"} transition-all`}
+              style={{ width: `${Math.min(100, Math.round(((zipBatch.done + zipBatch.failed) / Math.max(1, zipBatch.total)) * 100))}%` }}
+            />
+          </div>
+          {zipBatch.status === "done" && (
+            <button onClick={()=>setZipBatch(null)} className="text-[10px] text-ink-3 hover:text-ink mt-2 uppercase tracking-widest">dismiss</button>
+          )}
+        </div>
+      )}
 
       <div
         onDragOver={e=>e.preventDefault()}
@@ -96,7 +176,8 @@ export default function Library() {
         className="border-2 border-dashed border-line p-8 text-center mb-4 hover:border-rust transition-colors">
         <Upload size={28} className="mx-auto text-ink-3 mb-2"/>
         <div className="heading text-xl">DROP FILES HERE</div>
-        <div className="text-ink-3 text-xs uppercase tracking-widest mt-1">PDF · TXT · MD · CSV · LOG · <span className="text-rust">.HPT / .HPL TUNE FILES</span></div>
+        <div className="text-ink-3 text-xs uppercase tracking-widest mt-1">PDF · IMAGES · TXT · MD · CSV · LOG · <span className="text-rust">.HPT / .HPL TUNE FILES</span></div>
+        <div className="text-[10px] text-amber2 uppercase tracking-widest mt-1">GOT A WHOLE BOOK OF PAGES? ZIP IT UP — HIT <span className="font-bold">UPLOAD ZIP</span> ABOVE</div>
         {busy && <div className="text-rust mt-2 animate-blink text-xs">PROCESSING...</div>}
         {err && <div className="text-danger mt-2 text-xs">ERR: {err}</div>}
         <div className="text-[10px] text-ink-3 uppercase tracking-widest mt-3 max-w-xl mx-auto">
