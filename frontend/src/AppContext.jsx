@@ -475,7 +475,19 @@ export function AppProvider({ children }) {
         }
       };
 
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // Browser-level audio constraints for noisy shop environments.
+      // echoCancellation kills speaker bleed-through (when Wrench is talking),
+      // noiseSuppression kills compressor/air-tool/engine drone,
+      // autoGainControl evens out Doc's voice when he leans in/out of the phone.
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          channelCount: 1,
+          sampleRate: 24000,
+        },
+      });
       localStreamRef.current = stream;
       stream.getTracks().forEach(t => pc.addTrack(t, stream));
 

@@ -2564,14 +2564,19 @@ async def realtime_session(user=Depends(get_user)):
             "instructions": sys_prompt,
             "audio": {
                 "input": {
+                    # semantic_vad understands SENTENCE COMPLETION from the words spoken,
+                    # not just silence. Doc can pause mid-thought ("the connector on the...
+                    # uh ... PCM is loose") without getting cut off. eagerness=high
+                    # keeps response latency snappy.
                     "turn_detection": {
-                        "type": "server_vad",
-                        "threshold": 0.55,
-                        "prefix_padding_ms": 300,
-                        "silence_duration_ms": 1800,
+                        "type": "semantic_vad",
+                        "eagerness": "high",
                         "create_response": True,
-                        "interrupt_response": False,
+                        "interrupt_response": True,
                     },
+                    # near_field = OpenAI's built-in noise suppression for handheld /
+                    # close-mic use. Critical for shop / engine bay / air-tool environments.
+                    "noise_reduction": {"type": "near_field"},
                 },
                 "output": {
                     "voice": "ash",
