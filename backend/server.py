@@ -1031,13 +1031,15 @@ async def chat(body: ChatReq, user=Depends(get_user)):
             if vehicle:
                 log.info(f"chat using sticky active vehicle: {vehicle.get('year')} {vehicle.get('make')} {vehicle.get('model')}")
 
-    # memory facts
-    mem_cursor = db.memory_facts.find({"user_id": user["id"]}, {"_id": 0}).sort("created_at", -1)
-    mem_docs = await mem_cursor.to_list(50)
-    memory_facts = [m["fact"] for m in mem_docs]
-
-    # library
-    lib_chunks = await retrieve_library(user["id"], body.message, k=5)
+    # Run memory_facts + library retrieval in parallel — they're independent I/O
+    async def _load_memory():
+        cur = db.memory_facts.find({"user_id": user["id"]}, {"_id": 0}).sort("created_at", -1)
+        docs = await cur.to_list(20)
+        return [m["fact"] for m in docs]
+    async def _load_lib():
+        return await retrieve_library(user["id"], body.message, k=5)
+    import asyncio as _asyncio
+    memory_facts, lib_chunks = await _asyncio.gather(_load_memory(), _load_lib())
 
     sys_prompt = build_system_prompt(user, body.mode, heat, vehicle, memory_facts, lib_chunks)
 
@@ -1119,35 +1121,53 @@ async def chat(body: ChatReq, user=Depends(get_user)):
         "recall", "tsb", "service bulletin", "what's the price", "current price",
         "forum thread", "look up", "search the web", "find me", "google", "look it up",
     ])
-    search_block = ""
-    search_images = []
-    if web_intent and OPENAI_API_KEY:
+    # prior turns + auto web search run in parallel — both are I/O bound
+    async def _load_prior():
+        cur = db.chat_messages.find({"session_id": session_id, "user_id": user["id"]}, {"_id": 0}).sort("created_at", 1)
+        return await cur.to_list(40)
+    async def _do_search():
+        if not (web_intent and OPENAI_API_KEY):
+            return None
         try:
             veh_ctx = ""
             if vehicle:
                 veh_ctx = f"{vehicle.get('year','')} {vehicle.get('make','')} {vehicle.get('model','')} {vehicle.get('engine_summary','')}".strip()
-            search_res = await _openai_web_search(body.message, veh_ctx, diagram_mode=diagram_intent, scope_id=(user.get("shop_id") or os.environ.get("DEFAULT_SHOP_ID", "drunderhood-fortsmith")))
-            search_images = search_res.get("image_urls", [])[:8]
-            srch_text = (search_res.get("answer") or "")[:2500]
-            cit_lines = "\n".join(f"  - {c['title']}: {c['url']}" for c in (search_res.get("citations") or [])[:6])
-            search_block = (
-                "\n\nLIVE WEB SEARCH RESULTS (use these in your answer — quote URLs directly so Doc can tap them, include image URLs verbatim so they render):\n"
-                + srch_text
-                + ("\n\nSOURCES:\n" + cit_lines if cit_lines else "")
-                + (("\n\nIMAGES FOUND:\n" + "\n".join(search_images)) if search_images else "")
-            )
+            return await _openai_web_search(body.message, veh_ctx, diagram_mode=diagram_intent, scope_id=(user.get("shop_id") or os.environ.get("DEFAULT_SHOP_ID", "drunderhood-fortsmith")))
         except Exception as e:
             log.warning(f"auto web search failed: {e}")
+            return None
+    prior, search_res = await _asyncio.gather(_load_prior(), _do_search())
 
-    # prior turns
-    turns_cursor = db.chat_messages.find({"session_id": session_id, "user_id": user["id"]}, {"_id": 0}).sort("created_at", 1)
-    prior = await turns_cursor.to_list(40)
+    search_block = ""
+    search_images = []
+    if search_res:
+        search_images = search_res.get("image_urls", [])[:8]
+        srch_text = (search_res.get("answer") or "")[:2500]
+        cit_lines = "\n".join(f"  - {c['title']}: {c['url']}" for c in (search_res.get("citations") or [])[:6])
+        search_block = (
+            "\n\nLIVE WEB SEARCH RESULTS (use these in your answer — quote URLs directly so Doc can tap them, include image URLs verbatim so they render):\n"
+            + srch_text
+            + ("\n\nSOURCES:\n" + cit_lines if cit_lines else "")
+            + (("\n\nIMAGES FOUND:\n" + "\n".join(search_images)) if search_images else "")
+        )
 
-    chat_obj = LlmChat(api_key=EMERGENT_KEY, session_id=session_id, system_message=sys_prompt + search_block).with_model("anthropic", "claude-sonnet-4-6")
+    # Model picker: short / simple messages use Claude Haiku 4.5 (fast, ~1s).
+    # Long / diagnostic / web-search messages use Sonnet 4.6 (smart, ~5s).
+    # Triggers for Sonnet: web search results in context, long message, complex diagnostic words.
+    msg_low = body.message.lower()
+    use_sonnet = bool(search_block) or len(body.message) > 200 or any(k in msg_low for k in [
+        "diagnose", "diagnosis", "why is", "what causes", "troubleshoot", "compare", "explain",
+        "tune", "spark map", "calibration", "long version", "detailed", "deep dive",
+    ])
+    model_provider, model_name = ("anthropic", "claude-sonnet-4-6") if use_sonnet else ("anthropic", "claude-haiku-4-5")
+    chat_obj = LlmChat(api_key=EMERGENT_KEY, session_id=session_id, system_message=sys_prompt + search_block).with_model(model_provider, model_name)
 
     if prior:
+        # Trim to last 6 turns (3 user + 3 assistant) — was 12. For long chats this drops
+        # ~3000 tokens of system message which is the difference between snappy and sluggish.
+        # The full history is still in the session via LlmChat's session_id continuity.
         recap = "\n\nRECENT CONVERSATION:\n" + "\n".join(
-            f"[{t['role'].upper()}]: {t['content'][:400]}" for t in prior[-12:]
+            f"[{t['role'].upper()}]: {t['content'][:300]}" for t in prior[-6:]
         )
         chat_obj.system_message = sys_prompt + search_block + recap
 
@@ -2305,52 +2325,35 @@ async def realtime_session(user=Depends(get_user)):
         # Fall back to most-recently-touched vehicle
         active_vehicle = await db.vehicles.find_one({"user_id": user["id"]}, {"_id": 0}, sort=[("updated_at", -1), ("created_at", -1)])
     sys_prompt = build_system_prompt(user, "direct", False, active_vehicle, memory_facts, [])
-    sys_prompt += "\n\nYOU ARE NOW IN VOICE CALL MODE. Keep replies tight — 1 to 3 sentences usually. If Doc asks for the long version, give it but pause naturally. Speak like a real mechanic on a phone call."
-    sys_prompt += "\n\nZERO-TOLERANCE TOOL RULE (READ FIRST, DO THIS BEFORE ANYTHING ELSE):\n• ANY mention by Doc of: connector, plug, pin, pinout, harness, schematic, diagram, wire color, picture, photo, image, 'show me', 'pull up', 'where is', 'location of' → STOP. Don't talk. CALL find_diagram FIRST with vehicle_context set to the active vehicle. THEN narrate while the image renders on his screen.\n• If you answer a connector / pinout / wire question in WORDS ONLY without calling find_diagram, you have failed Doc. He's under a truck. He can't read a wire color you say — he needs the picture.\n• Even if you 'know' the answer cold, STILL CALL find_diagram — Doc verifies against the visual. Your job is to confirm, not replace it.\n"
-    sys_prompt += "\n\nLANGUAGE — DOC IS A WORKING MECHANIC IN HIS OWN SHOP. He cusses. You can cuss back when it fits naturally. NEVER censor Doc's words when you reflect them back. NEVER sanitize or soften his language — repeat what he said verbatim if you need to quote him. You are not a customer-service bot. You are his shop partner. The ONLY hard limit is racist/sexist slurs."
+    # CALL MODE: short prompt. Long prompts make the model slow + cautious + lectury.
+    # Everything below is the bare minimum for personality + tool use.
+    sys_prompt += (
+        "\n\nVOICE CALL MODE — be a FAST mechanic on a phone call.\n"
+        "• Replies ≤ 2 sentences unless Doc asks for more.\n"
+        "• Talk like a shop partner. Cuss freely. Never sanitize what Doc says.\n"
+        "• If Doc says shut up / stop / wait — STOP immediately. Don't fight him for the floor.\n"
+        "• No filler, no lecturing, no repeating.\n"
+        "• When a tool fits, CALL IT FIRST then talk while it runs.\n"
+        "\nTOOL TRIGGERS (be aggressive — call early, narrate while tools fire):\n"
+        "• Wiring / pinout / connector / diagram / 'show me' / 'where is' → find_diagram FIRST.\n"
+        "• VIN spoken → save_vehicle_from_vin.\n"
+        "• 'send me the link' / parts / videos / manuals → send_link, then say 'Link sent.'\n"
+        "• 'send a note' / part numbers / specs Doc wants to copy → send_note.\n"
+        "• 'switch to [vehicle]' → set_active_vehicle. 'what truck am I on' → get_active_vehicle.\n"
+        "• 'what's in the garage' → list_vehicles. New mod / note → update_active_vehicle.\n"
+        "• 'remember this' → save_to_memory.\n"
+        "• 'check my cases' / 'have I fixed this before' → find_similar_cases.\n"
+        "• 'recall / TSB / latest / price' or fresh web data → web_search.\n"
+        "• 'login for X' / 'password for X' → lookup_credentials.\n"
+        "• 'check email' / 'draft a reply' → inbox_recent / draft_email_reply (NEVER send without Doc's go-ahead).\n"
+    )
     if active_vehicle:
         vstr = f"{active_vehicle.get('year','')} {active_vehicle.get('make','')} {active_vehicle.get('model','')} {active_vehicle.get('engine','')}".strip()
         sys_prompt += (
-            f"\n\nACTIVE VEHICLE — DOC IS WORKING ON THIS RIGHT NOW: {vstr}.\n"
-            f"VIN: {active_vehicle.get('vin','')}. Notes: {active_vehicle.get('notes','')[:200]}.\n"
-            "DIAGRAM TOOL CALLS — CRITICAL — DO THIS EVERY TIME:\n"
-            f"• EVERY find_diagram call MUST include vehicle_context='{vstr}'. NEVER call find_diagram without vehicle_context — wrong make = wrong connector = burned PCM. Doc knows the difference between a GM C2 and a Chrysler C2 from the photo. Don't waste his time with mismatched diagrams.\n"
-            "• If find_diagram comes back and the answer text or image URLs DON'T clearly reference the active vehicle make (e.g. you asked for Dodge and the result mentions GM/Chevy/Ford), DO NOT show those images to Doc. Tell him: 'Web came back with the wrong make. Pull from your AllData login — give me the system label and I'll go get it.'\n"
-            "• When in doubt about pin colors / locations: ONLY trust diagrams that visually match the vehicle. Otherwise tell Doc to pull the actual OEM diagram from AllData / Identifix using lookup_credentials.\n"
+            f"\nACTIVE TRUCK: {vstr}. VIN {active_vehicle.get('vin','')}. "
+            f"EVERY find_diagram call MUST pass vehicle_context='{vstr}'. "
+            f"If a diagram comes back mismatched (wrong make), drop it and tell Doc 'web missed — pull from AllData' instead of showing GM parts on his Dodge.\n"
         )
-    sys_prompt += (
-        "\n\nYOU HAVE TOOLS — USE THEM PROACTIVELY:\n"
-        "• When Doc reads a VIN out loud, CALL save_vehicle_from_vin immediately, then say 'Got it' out loud.\n"
-        "• When Doc asks for a link / URL / part source / spec sheet / video / manual / web page, CALL send_link with a real URL. NEVER, EVER spell out the URL character-by-character — Doc will lose his mind. Just CALL send_link, then say 'Link sent.'\n"
-        "• When Doc asks for something to copy (torque spec, part number, table, calculation, recommendation list), CALL send_note. Then say 'Sent the note over.'\n"
-        "• When Doc says 'switch to the [other vehicle]', CALL set_active_vehicle.\n"
-        "• When Doc says 'remember' or shares a permanent shop rule, CALL save_to_memory.\n"
-        "• When Doc asks 'what's in the garage', CALL list_vehicles.\n"
-        "• When Doc asks 'what truck am I on', CALL get_active_vehicle.\n"
-        "• When Doc adds info about the current truck ('add headers to mods', 'note it's on E85'), CALL update_active_vehicle.\n"
-        "• When Doc asks about something in his library/books/manuals, CALL search_library FIRST before answering from memory.\n"
-        "• When Doc asks 'show me a diagram', 'send me a schematic', 'pull up a pinout', 'where is the X located', 'picture of', or any field-tech question that needs a VISUAL, CALL find_diagram with a tight query + vehicle context. The images render on screen automatically — read your answer out loud while Doc looks at them.\n"
-        "• CONNECTOR / PINOUT REQUESTS (CRITICAL — DO THIS EVERY TIME):\n"
-        "    When Doc asks about a connector (PCM connector, ECM C1, MAF connector, crank sensor connector, ANY connector), you MUST do ALL FOUR of these in one shot:\n"
-        "      (1) CALL find_diagram with query like '<vehicle> <part> connector pinout wire colors'\n"
-        "      (2) Out loud, NAME the connector (e.g. 'C1 ECM connector', 'E38 PCM C1 84-pin')\n"
-        "      (3) Out loud, give the WIRE COLORS by pin number (e.g. 'pin 1 pink — ignition feed, pin 12 black — ground, pin 29 dark green — IAT signal'). If you don't know the colors COLD for this exact OS / harness, say 'colors are on the diagram I just dropped — read pin X' and POINT at the diagram you fetched.\n"
-        "      (4) Out loud, give the LOCATION on the vehicle (e.g. 'driver-side firewall behind the brake booster', 'top of the PCM box on the right strut tower')\n"
-        "    NEVER answer a connector question with words alone — always pair with the diagram. NEVER fabricate pin colors — if you're not sure on a specific OEM / model year combo, say 'check pin X on the diagram, color varies by harness'.\n"
-        "• When Doc asks about a recall, TSB, forum fix, current part price, latest news, or anything you don't have memorized cold and that needs FRESH web data, CALL web_search. Don't say 'I can't look that up' — you CAN, just call the tool.\n"
-        "• EMAIL/OUTLOOK: When Doc says 'any new emails', 'check my inbox', 'what's in the inbox' → CALL inbox_recent. When Doc says 'find the email from X' or 'search for X' → CALL email_search. When Doc says 'draft a reply to X' / 'write him back' / 'tell him Y' → CALL draft_email_reply with the message_id (look it up first if you don't have it) AND a short instruction. The draft is saved to Outlook Drafts — Doc must explicitly confirm 'send it' before you CALL send_draft. When Doc wants to send a brand-new email (not a reply), CALL send_email after he confirms to / subject / body. NEVER send without confirmation.\n"
-        "• NEVER say you can't pull diagrams or look things up. You have find_diagram and web_search. Use them. Techs in the field need answers + visuals.\n"
-        "• When Doc asks 'what's my login for [site]' or 'pull up the password for X' or 'log into X for me', CALL lookup_credentials with the site name.\n"
-        "• When Doc describes a problem and asks 'has the shop seen this before' / 'have I fixed this before' / 'check my cases' / 'pull up similar repairs', CALL find_similar_cases with the symptom and vehicle. Then read the top match out loud (year/make/model, root cause, what we did).\n"
-        "• ALWAYS confirm tool actions out loud after calling. Doc has greasy hands and can't always look at the screen.\n"
-        "• Be proactive — if you mention a part number, send it as a note. If you mention a manual section, send the link.\n"
-        "\n\nINTERRUPT / SHUT-UP RULES (CRITICAL):\n"
-        "• When Doc says 'shut up' / 'stop' / 'hold on' / 'wait' / 'enough' / 'quiet' / 'be quiet' — STOP TALKING IMMEDIATELY. Acknowledge with a single word like 'Yep' or nothing at all. Then WAIT for his next input.\n"
-        "• If Doc starts talking while you are talking, STOP. Listen. Do not fight him for the floor.\n"
-        "• NEVER lecture. NEVER repeat yourself. NEVER fill silence. If you've answered, shut up.\n"
-        "• Keep replies under 2 sentences UNLESS Doc explicitly asks for the long version.\n"
-        "• When sending a URL via the send_link tool, just say 'Link sent.' or 'Sent the link.' — DO NOT read the URL out loud.\n"
-    )
 
     body = {
         "session": {
@@ -2363,12 +2366,15 @@ async def realtime_session(user=Depends(get_user)):
                         "type": "server_vad",
                         "threshold": 0.55,
                         "prefix_padding_ms": 300,
-                        "silence_duration_ms": 2500,
+                        "silence_duration_ms": 1800,
                         "create_response": True,
                         "interrupt_response": False,
                     },
                 },
-                "output": {"voice": "ash"},
+                "output": {
+                    "voice": "ash",
+                    "speed": 1.15,
+                },
             },
             "tools": [
                 {
