@@ -55,7 +55,7 @@ export default function Chat() {
       setRecording(false);
       setStatus("IDLE", "#52525B");
       setMicError("Mic hung up — tap again.");
-    }, 20000);
+    }, 35000);
     return () => clearTimeout(watchdog);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recording]);
@@ -657,11 +657,13 @@ export default function Chat() {
       setStatus("LISTENING", "#FF5722");
 
       // === Voice Activity Detection (VAD) ===
-      // MediaRecorder by itself never auto-stops. Without VAD, Doc taps the mic,
-      // talks, then nothing ever sends. Watch the input volume and:
-      //   - require ~400ms of audible speech first
-      //   - then once volume drops below the floor for 1500ms, stop & send
-      //   - hard cap at 12 seconds in case the room is loud / silent threshold misses
+      // Tuned for shop tech use: tech talks, pauses, looks at the truck, keeps talking.
+      // The previous SILENCE_MS=1500 was cutting Doc off mid-thought. The fix is:
+      //   1) Longer silence required (2800ms) before we decide he's done
+      //   2) Lower SPEAK_FLOOR so background bay noise + heavy breathing still
+      //      register as "still talking, don't cut"
+      //   3) HARD_CAP pushed to 30s so he can give long diag descriptions
+      //   4) Use a frame-average over 100ms instead of instantaneous to dampen breath blips
       try {
         const AC = window.AudioContext || window.webkitAudioContext;
         if (AC) {
@@ -674,10 +676,13 @@ export default function Chat() {
 
           const startedAt = Date.now();
           let lastVoiceAt = 0;
-          const SPEAK_FLOOR = 14;      // 0-255 RMS, anything above is "speech"
-          const SILENCE_MS = 1500;      // stop after this much trailing silence
-          const MIN_SPEAK_MS = 400;     // require this much speech first
-          const HARD_CAP_MS = 12000;    // hard cap
+          const SPEAK_FLOOR = 7;       // 0-255 RMS, anything above is "speech-or-active"
+          const SILENCE_MS = 2800;     // stop after this much trailing silence
+          const MIN_SPEAK_MS = 300;    // require this much speech first
+          const HARD_CAP_MS = 30000;   // hard cap (30s for long descriptions)
+          // Smooth the RMS over recent frames so a single quiet syllable doesn't trip silence
+          const window = [];
+          const WINDOW_FRAMES = 6;     // ~100ms at 60fps
 
           const stopOnce = () => {
             try { mr.state !== "inactive" && mr.stop(); } catch {}
@@ -687,21 +692,22 @@ export default function Chat() {
           const tick = () => {
             if (mr.state !== "recording") return;
             analyser.getByteTimeDomainData(buf);
-            // RMS centered around 128
             let sumSq = 0;
             for (let i = 0; i < buf.length; i++) {
               const v = buf[i] - 128;
               sumSq += v * v;
             }
             const rms = Math.sqrt(sumSq / buf.length);
+            window.push(rms);
+            if (window.length > WINDOW_FRAMES) window.shift();
+            const smoothed = window.reduce((a,b) => a+b, 0) / window.length;
             const now = Date.now();
-            if (rms > SPEAK_FLOOR) {
+            if (smoothed > SPEAK_FLOOR) {
               lastVoiceAt = now;
             }
             const elapsed = now - startedAt;
             const sinceVoice = lastVoiceAt ? now - lastVoiceAt : elapsed;
             if (elapsed > HARD_CAP_MS) { stopOnce(); return; }
-            // Only consider silence-stop after we've heard SOME speech
             if (lastVoiceAt && (now - startedAt) > MIN_SPEAK_MS && sinceVoice > SILENCE_MS) {
               stopOnce();
               return;
@@ -710,12 +716,11 @@ export default function Chat() {
           };
           requestAnimationFrame(tick);
         } else {
-          // No WebAudio — just hard-cap stop after 8s
-          setTimeout(() => { try { mr.state !== "inactive" && mr.stop(); } catch {} }, 8000);
+          // No WebAudio — just hard-cap stop after 15s
+          setTimeout(() => { try { mr.state !== "inactive" && mr.stop(); } catch {} }, 15000);
         }
       } catch (e) {
-        // VAD setup failed for some reason — fall back to a hard 8s cap
-        setTimeout(() => { try { mr.state !== "inactive" && mr.stop(); } catch {} }, 8000);
+        setTimeout(() => { try { mr.state !== "inactive" && mr.stop(); } catch {} }, 15000);
       }
     } catch (e) {
       const msg = (e && e.name) || "";
