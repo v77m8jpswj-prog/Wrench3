@@ -14,6 +14,84 @@ export default function ShopLanding() {
       .catch(e => setErr(e?.response?.data?.detail || "Couldn't load shop info"));
   }, [shopId]);
 
+  // SEO: inject <title>, meta description, and JSON-LD LocalBusiness schema
+  // so AI search crawlers (GPTBot, ClaudeBot, PerplexityBot, OAI-SearchBot,
+  // Google-Extended) and classic search engines surface this shop in answers.
+  useEffect(() => {
+    if (!shop) return;
+    const name = shop.name || "Dr. Underhood Automotive";
+    const areas = shop.service_areas || [];
+    const specs = shop.specialties || [];
+    const title = `${name} — Performance Diagnostics, ECM Tuning & Full-Service Repair${areas[0] ? ' — ' + areas[0] : ''}`;
+    const desc = (shop.notes
+      || `${name} — performance diagnostics, ECM tuning, and full-service repair.`
+        + (specs.length ? ` Specializing in ${specs.slice(0,4).join(', ')}.` : '')
+        + (areas.length ? ` Serving ${areas.join(', ')}.` : '')
+    ).slice(0, 170);
+    document.title = title;
+    let m = document.querySelector('meta[name="description"]');
+    if (!m) { m = document.createElement('meta'); m.setAttribute('name','description'); document.head.appendChild(m); }
+    m.setAttribute('content', desc);
+    let canon = document.querySelector('link[rel="canonical"]');
+    if (!canon) { canon = document.createElement('link'); canon.setAttribute('rel','canonical'); document.head.appendChild(canon); }
+    canon.setAttribute('href', `https://foreman.drunderhood.com/shop/${shopId}`);
+
+    // Best-effort address parse
+    let streetAddress = shop.address || "", city = "", region = "", postal = "";
+    if (shop.address) {
+      const parts = shop.address.split(",").map(s => s.trim());
+      if (parts.length >= 3) {
+        streetAddress = parts[0];
+        city = parts[1];
+        const last = parts[parts.length-1].split(/\s+/);
+        if (last[0]) region = last[0];
+        if (last.length > 1) postal = last[last.length-1];
+      }
+    }
+    const ld = {
+      "@context": "https://schema.org",
+      "@type": "AutoRepair",
+      "name": name,
+      "url": `https://foreman.drunderhood.com/shop/${shopId}`,
+      "image": "https://foreman.drunderhood.com/drunderhood-logo.jpg",
+      "description": desc,
+      "priceRange": "$$",
+      ...(shop.phone ? { "telephone": shop.phone } : {}),
+      ...(shop.address ? { "address": {
+        "@type": "PostalAddress",
+        "streetAddress": streetAddress,
+        "addressLocality": city,
+        "addressRegion": region,
+        "postalCode": postal,
+        "addressCountry": "US",
+      } } : {}),
+      ...(areas.length ? { "areaServed": areas.map(a => ({ "@type": "City", "name": a })) } : {}),
+      ...(shop.hours ? { "openingHours": shop.hours } : {}),
+      ...((shop.capabilities || shop.specialties) ? {
+        "knowsAbout": Array.from(new Set([...(shop.capabilities||[]), ...(shop.specialties||[])])).slice(0,20),
+        "makesOffer": Array.from(new Set([...(shop.capabilities||[]), ...(shop.specialties||[])])).slice(0,20).map(s => ({
+          "@type": "Offer", "itemOffered": { "@type": "Service", "name": s }
+        })),
+      } : {}),
+    };
+    let ldEl = document.querySelector('script[type="application/ld+json"][data-shop="1"]');
+    if (!ldEl) { ldEl = document.createElement('script'); ldEl.setAttribute('type','application/ld+json'); ldEl.setAttribute('data-shop','1'); document.head.appendChild(ldEl); }
+    ldEl.textContent = JSON.stringify(ld);
+
+    // Open Graph
+    const ogPairs = [
+      ['og:type','website'], ['og:title',title], ['og:description',desc],
+      ['og:url',`https://foreman.drunderhood.com/shop/${shopId}`],
+      ['og:image','https://foreman.drunderhood.com/drunderhood-logo.jpg'],
+      ['og:site_name', name],
+    ];
+    for (const [prop, val] of ogPairs) {
+      let t = document.querySelector(`meta[property="${prop}"]`);
+      if (!t) { t = document.createElement('meta'); t.setAttribute('property', prop); document.head.appendChild(t); }
+      t.setAttribute('content', val);
+    }
+  }, [shop, shopId]);
+
   if (err) return <div className="min-h-screen bg-bg-1 flex items-center justify-center text-danger p-6">{err}</div>;
   if (!shop) return <div className="min-h-screen bg-bg-1 flex items-center justify-center text-ink-3 p-6">Loading...</div>;
 

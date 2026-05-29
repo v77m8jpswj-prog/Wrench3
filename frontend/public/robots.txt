@@ -1,0 +1,92 @@
+# robots.txt — Dr. Underhood Automotive / Data Wrench
+# Last updated 2026-02 — AI search era
+
+# ============================================================
+# AI / LLM CRAWLERS — EXPLICITLY WELCOMED
+# These bots feed answers into ChatGPT, Claude, Perplexity, Gemini,
+# Bing Chat, Google AI Overviews. Letting them in means when someone
+# asks an LLM "best diesel tuner in Fort Smith AR" — we get named.
+# ============================================================
+
+User-agent: GPTBot
+Allow: /
+
+User-agent: OAI-SearchBot
+Allow: /
+
+User-agent: ChatGPT-User
+Allow: /
+
+User-agent: ClaudeBot
+Allow: /
+
+User-agent: Claude-Web
+Allow: /
+
+User-agent: anthropic-ai
+Allow: /
+
+User-agent: PerplexityBot
+Allow: /
+
+User-agent: Perplexity-User
+Allow: /
+
+User-agent: Google-Extended
+Allow: /
+
+User-agent: GoogleOther
+Allow: /
+
+User-agent: Applebot-Extended
+Allow: /
+
+User-agent: Bingbot
+Allow: /
+
+User-agent: cohere-ai
+Allow: /
+
+User-agent: Diffbot
+Allow: /
+
+User-agent: Bytespider
+Allow: /
+
+User-agent: Amazonbot
+Allow: /
+
+User-agent: meta-externalagent
+Allow: /
+
+User-agent: FacebookBot
+Allow: /
+
+# ============================================================
+# CLASSIC SEARCH ENGINES
+# ============================================================
+
+User-agent: Googlebot
+Allow: /
+
+User-agent: DuckDuckBot
+Allow: /
+
+User-agent: YandexBot
+Allow: /
+
+# ============================================================
+# BLANKET RULE — anything else allowed too
+# ============================================================
+
+User-agent: *
+Allow: /
+Disallow: /api/auth/
+Disallow: /api/admin/
+Disallow: /settings
+Disallow: /vault
+Disallow: /memory
+Disallow: /letters
+Disallow: /sms
+
+Sitemap: https://foreman.drunderhood.com/sitemap.xml

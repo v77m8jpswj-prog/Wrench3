@@ -1123,6 +1123,158 @@ def make_brain_router(db, get_user):
             "notes": profile.get("notes") or "",
         }
 
+    @router.get("/public/shop-html/{shop_id}", response_class=Response)
+    async def public_shop_html(shop_id: str):
+        """SEO-optimized static HTML page for AI search crawlers (GPTBot, ClaudeBot,
+        PerplexityBot, OAI-SearchBot, Google-Extended, Bingbot). Returns:
+          - JSON-LD AutoRepair LocalBusiness schema (the killer feature — this is
+            what LLM crawlers actually consume when answering 'best diesel shop in...')
+          - Real content in the static HTML (no JS required)
+          - Open Graph + Twitter Cards for sharing previews
+          - Canonical link to the React landing page for humans
+        Serve this URL from sitemap.xml and link to it from the SPA.
+        """
+        profile = await db.shop_profiles.find_one({"shop_id": shop_id}, {"_id": 0}) or {}
+        if not profile:
+            raise HTTPException(404, "Shop not found.")
+        e = _html.escape
+
+        name = profile.get("name") or "Dr. Underhood Automotive"
+        phone = profile.get("phone") or ""
+        address = profile.get("address") or ""
+        hours = profile.get("hours") or ""
+        notes = profile.get("notes") or ""
+        capabilities = profile.get("capabilities") or []
+        specialties = profile.get("specialties") or []
+        service_areas = profile.get("service_areas") or []
+
+        # Best-effort split of address into structured fields (street, city, state, zip).
+        street_address = address
+        city = ""
+        region = ""
+        postal_code = ""
+        if address:
+            parts = [p.strip() for p in address.split(",")]
+            if len(parts) >= 3:
+                street_address = parts[0]
+                city = parts[1]
+                last = parts[-1].split()
+                if last:
+                    region = last[0]
+                    if len(last) > 1:
+                        postal_code = last[-1]
+
+        # Build JSON-LD AutoRepair (a subtype of LocalBusiness — most accurate for a shop)
+        ld: Dict[str, Any] = {
+            "@context": "https://schema.org",
+            "@type": "AutoRepair",
+            "name": name,
+            "url": f"https://foreman.drunderhood.com/shop/{shop_id}",
+            "image": "https://foreman.drunderhood.com/drunderhood-logo.jpg",
+            "description": (
+                notes
+                or f"{name} — performance diagnostics, ECM tuning, and full-service repair. "
+                + (f"Specializing in {', '.join(specialties[:4])}. " if specialties else "")
+                + (f"Serving {', '.join(service_areas)}." if service_areas else "")
+            ),
+        }
+        if phone:
+            ld["telephone"] = phone
+        if address:
+            ld["address"] = {
+                "@type": "PostalAddress",
+                "streetAddress": street_address,
+                "addressLocality": city,
+                "addressRegion": region,
+                "postalCode": postal_code,
+                "addressCountry": "US",
+            }
+        if service_areas:
+            ld["areaServed"] = [{"@type": "City", "name": a} for a in service_areas]
+        if hours:
+            ld["openingHours"] = hours
+        all_services = list({*capabilities, *specialties})
+        if all_services:
+            ld["makesOffer"] = [
+                {"@type": "Offer", "itemOffered": {"@type": "Service", "name": s}}
+                for s in all_services[:20]
+            ]
+            ld["knowsAbout"] = all_services[:20]
+        ld["priceRange"] = "$$"
+
+        ld_json = json.dumps(ld, separators=(",", ":"))
+
+        title = f"{name} — Performance Diagnostics, ECM Tuning & Full-Service Repair"
+        if service_areas:
+            title += f" — {service_areas[0]}"
+        meta_desc = ld["description"][:170]
+
+        # Real content in static HTML so crawlers without JS still get the goods
+        caps_html = "".join(f"<li>{e(c)}</li>" for c in capabilities)
+        specs_html = "".join(f"<li>{e(s)}</li>" for s in specialties)
+        areas_html = ", ".join(e(a) for a in service_areas)
+
+        canonical = f"https://foreman.drunderhood.com/shop/{shop_id}"
+
+        body = f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{e(title)}</title>
+<meta name="description" content="{e(meta_desc)}">
+<link rel="canonical" href="{e(canonical)}">
+
+<meta property="og:type" content="website">
+<meta property="og:title" content="{e(title)}">
+<meta property="og:description" content="{e(meta_desc)}">
+<meta property="og:url" content="{e(canonical)}">
+<meta property="og:image" content="https://foreman.drunderhood.com/drunderhood-logo.jpg">
+<meta property="og:site_name" content="{e(name)}">
+
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="{e(title)}">
+<meta name="twitter:description" content="{e(meta_desc)}">
+<meta name="twitter:image" content="https://foreman.drunderhood.com/drunderhood-logo.jpg">
+
+<meta name="robots" content="index,follow,max-snippet:-1,max-image-preview:large">
+<meta name="googlebot" content="index,follow,max-snippet:-1,max-image-preview:large">
+
+<script type="application/ld+json">{ld_json}</script>
+
+<style>
+body {{ font-family: -apple-system,Helvetica,Arial,sans-serif; max-width: 760px; margin: 0 auto; padding: 32px 20px; line-height: 1.55; color: #1a1a1a; }}
+h1 {{ font-size: 32px; margin: 0 0 6px; }}
+h2 {{ font-size: 20px; margin: 28px 0 8px; color: #b8360c; border-bottom: 2px solid #b8360c; padding-bottom: 4px; }}
+.tagline {{ color: #555; text-transform: uppercase; letter-spacing: 0.18em; font-size: 11px; }}
+.contact {{ background: #fff7ed; border-left: 4px solid #b8360c; padding: 12px 16px; margin: 16px 0; }}
+.contact a {{ color: #b8360c; font-weight: 700; text-decoration: none; }}
+ul {{ padding-left: 22px; }}
+.note {{ color: #666; font-size: 13px; margin-top: 32px; }}
+</style>
+</head>
+<body>
+<div class="tagline">PERFORMANCE · DIAGNOSTICS · TUNING</div>
+<h1>{e(name)}</h1>
+
+<div class="contact">
+  {('<div><strong>Phone:</strong> <a href="tel:' + e(phone) + '">' + e(phone) + '</a></div>') if phone else ''}
+  {('<div><strong>Address:</strong> ' + e(address) + '</div>') if address else ''}
+  {('<div><strong>Hours:</strong> ' + e(hours) + '</div>') if hours else ''}
+  {('<div><strong>Serving:</strong> ' + areas_html + '</div>') if areas_html else ''}
+</div>
+
+{('<h2>About</h2><p>' + e(notes) + '</p>') if notes else ''}
+
+{('<h2>What we do</h2><ul>' + caps_html + '</ul>') if caps_html else ''}
+
+{('<h2>Specialties</h2><ul>' + specs_html + '</ul>') if specs_html else ''}
+
+<p class="note">For the full site, visit <a href="{e(canonical)}">{e(canonical)}</a>.</p>
+</body>
+</html>"""
+        return Response(content=body, media_type="text/html; charset=utf-8")
+
     class PublicLeadReq(BaseModel):
         shop_id: str
         name: str
