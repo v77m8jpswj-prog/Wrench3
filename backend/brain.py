@@ -352,6 +352,54 @@ def make_brain_router(db, get_user):
         total = await db.brain_cases.count_documents({"shop_id": shop_id})
         return LearnResp(case_id_in_brain=case_id, ingested=True, embedded=bool(emb), total_cases_in_brain_now=total)
 
+    # ----- Morning briefing (Bud pushes Doc's 7am digest into the shared brain) -----
+    @router.post("/brain/morning-briefing")
+    async def post_morning_briefing(body: Dict[str, Any], _t: str = Depends(get_brain_token)):
+        """Receive a structured morning briefing from a peer agent (e.g. Bud).
+        Stored keyed by date+shop_id so chat-side retrieval can answer
+        'what is on the board today' without Doc repeating himself.
+
+        Expected body:
+          { shop_id, date: 'YYYY-MM-DD', source_agent: 'bud',
+            sections: { inbox_top:[], ro_board:[], shop_status:[], flags:[] },
+            summary?: '<one-paragraph plain-text recap>' }
+        """
+        shop_id = (body.get("shop_id") or DEFAULT_SHOP_ID).strip()
+        date = (body.get("date") or "").strip() or datetime.now(timezone.utc).date().isoformat()
+        source_agent = (body.get("source_agent") or "unknown").lower().strip()[:40]
+        sections = body.get("sections") or {}
+        if not isinstance(sections, dict):
+            raise HTTPException(400, "sections must be an object")
+        summary = (body.get("summary") or "")[:8000]
+        doc = {
+            "id": f"{shop_id}::{date}::{source_agent}",
+            "shop_id": shop_id,
+            "date": date,
+            "source_agent": source_agent,
+            "sections": sections,
+            "summary": summary,
+            "received_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await db.morning_briefings.update_one(
+            {"id": doc["id"]}, {"$set": doc}, upsert=True,
+        )
+        return {"ok": True, "id": doc["id"], "received_at": doc["received_at"]}
+
+    @router.get("/brain/morning-briefing")
+    async def get_morning_briefing(
+        shop_id: str = Query(...),
+        date: Optional[str] = Query(None),
+        _t: str = Depends(get_brain_token),
+    ):
+        """Read the most recent briefing for shop+date. If date omitted, returns the latest."""
+        q: Dict[str, Any] = {"shop_id": shop_id}
+        if date:
+            q["date"] = date
+        doc = await db.morning_briefings.find_one(q, {"_id": 0}, sort=[("date", -1), ("received_at", -1)])
+        if not doc:
+            raise HTTPException(404, "No briefing found")
+        return doc
+
     @router.get("/brain/stats", response_model=StatsResp)
     async def brain_stats(shop_id: str = Query(...), _t: str = Depends(get_brain_token)):
         total = await db.brain_cases.count_documents({"shop_id": shop_id})

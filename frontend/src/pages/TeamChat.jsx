@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Send, Hash, User, Brain, Check } from "lucide-react";
+import { Send, Hash, User, Brain, Check, UserPlus, X } from "lucide-react";
 import api from "@/api";
 
 export default function TeamChat() {
@@ -10,6 +10,13 @@ export default function TeamChat() {
   const [me, setMe] = useState(null);
   const [absorbing, setAbsorbing] = useState(false);
   const [absorbedMsg, setAbsorbedMsg] = useState("");
+  const [showAddTech, setShowAddTech] = useState(false);
+  const [techName, setTechName] = useState("");
+  const [techEmail, setTechEmail] = useState("");
+  const [techPassword, setTechPassword] = useState("");
+  const [techRole, setTechRole] = useState("tech");
+  const [techSaving, setTechSaving] = useState(false);
+  const [techErr, setTechErr] = useState("");
   const endRef = useRef(null);
 
   useEffect(() => {
@@ -82,13 +89,49 @@ export default function TeamChat() {
     } finally { setAbsorbing(false); }
   };
 
+  const submitNewTech = async () => {
+    setTechErr("");
+    const name = techName.trim();
+    const email = techEmail.trim().toLowerCase();
+    const password = techPassword;
+    if (!name || !email || password.length < 6) {
+      setTechErr("Name, email, and a 6+ char password are required.");
+      return;
+    }
+    setTechSaving(true);
+    try {
+      await api.post("/techs", { name, email, password, role: techRole });
+      setTechName(""); setTechEmail(""); setTechPassword(""); setTechRole("tech");
+      setShowAddTech(false);
+      await refreshThreads();
+    } catch (e) {
+      setTechErr(e?.response?.data?.detail || "Failed to add tech.");
+    } finally { setTechSaving(false); }
+  };
+
+  const isOwner = (me?.role || "owner") === "owner";
+
   return (
     <div className="flex h-full" style={{minHeight:"calc(100dvh - 90px)"}} data-testid="team-chat-page">
       {/* Threads sidebar */}
       <aside className="w-[200px] md:w-[260px] border-r border-line bg-bg-2 flex flex-col flex-shrink-0">
         <div className="px-3 py-3 border-b border-line">
-          <div className="heading text-base md:text-lg">SHOP TEAM</div>
-          <div className="text-[10px] text-ink-3 uppercase tracking-widest mt-0.5">{me?.shop_id}</div>
+          <div className="flex items-center justify-between gap-2">
+            <div className="min-w-0">
+              <div className="heading text-base md:text-lg">SHOP TEAM</div>
+              <div className="text-[10px] text-ink-3 uppercase tracking-widest mt-0.5 truncate">{me?.shop_id}</div>
+            </div>
+            {isOwner && (
+              <button
+                data-testid="add-tech-btn"
+                onClick={()=>{ setShowAddTech(true); setTechErr(""); }}
+                title="Add a tech to this shop"
+                className="border-2 border-amber2 text-amber2 hover:bg-amber2/10 px-2 py-1 flex items-center gap-1 text-[10px] uppercase tracking-widest font-bold shrink-0"
+              >
+                <UserPlus size={12}/> ADD TECH
+              </button>
+            )}
+          </div>
         </div>
         <div className="flex-1 overflow-auto">
           {threads.map(t => (
@@ -169,6 +212,106 @@ export default function TeamChat() {
           <div ref={endRef} />
         </div>
       </main>
+
+      {showAddTech && (
+        <div
+          className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 px-4"
+          onClick={()=>!techSaving && setShowAddTech(false)}
+          data-testid="add-tech-modal"
+        >
+          <div
+            className="bg-bg-1 border-2 border-amber2 max-w-md w-full p-5"
+            onClick={e=>e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-line pb-3 mb-4">
+              <div className="flex items-center gap-2">
+                <UserPlus size={18} className="text-amber2"/>
+                <h2 className="heading text-xl">ADD A TECH</h2>
+              </div>
+              <button
+                onClick={()=>!techSaving && setShowAddTech(false)}
+                className="text-ink-3 hover:text-ink"
+                data-testid="add-tech-close"
+              >
+                <X size={18}/>
+              </button>
+            </div>
+            <p className="text-[11px] text-ink-3 uppercase tracking-widest mb-3">
+              Drops them into THIS shop ({me?.shop_id}). They can log in with the password you set.
+            </p>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-[10px] uppercase tracking-widest text-ink-3 mb-1">Name</label>
+                <input
+                  data-testid="add-tech-name"
+                  value={techName}
+                  onChange={e=>setTechName(e.target.value)}
+                  placeholder="e.g. Mike Stewart"
+                  className="input-shop w-full text-sm"
+                  autoFocus
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] uppercase tracking-widest text-ink-3 mb-1">Email</label>
+                <input
+                  data-testid="add-tech-email"
+                  type="email"
+                  value={techEmail}
+                  onChange={e=>setTechEmail(e.target.value)}
+                  placeholder="mike@drunderhood.com"
+                  className="input-shop w-full text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] uppercase tracking-widest text-ink-3 mb-1">Starter password (6+ chars)</label>
+                <input
+                  data-testid="add-tech-password"
+                  type="text"
+                  value={techPassword}
+                  onChange={e=>setTechPassword(e.target.value)}
+                  placeholder="they'll change it themselves"
+                  className="input-shop w-full text-sm font-mono"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] uppercase tracking-widest text-ink-3 mb-1">Role</label>
+                <select
+                  data-testid="add-tech-role"
+                  value={techRole}
+                  onChange={e=>setTechRole(e.target.value)}
+                  className="input-shop w-full text-sm"
+                >
+                  <option value="tech">Tech</option>
+                  <option value="owner">Owner (full access)</option>
+                </select>
+              </div>
+            </div>
+            {techErr && (
+              <div className="mt-3 text-danger text-xs border-l-2 border-danger pl-3" data-testid="add-tech-error">
+                {techErr}
+              </div>
+            )}
+            <div className="flex gap-2 mt-5 pt-3 border-t border-line">
+              <button
+                data-testid="add-tech-cancel"
+                onClick={()=>setShowAddTech(false)}
+                disabled={techSaving}
+                className="flex-1 border-2 border-line text-ink-2 hover:bg-bg-3 px-3 py-2 text-xs uppercase tracking-widest"
+              >
+                Cancel
+              </button>
+              <button
+                data-testid="add-tech-submit"
+                onClick={submitNewTech}
+                disabled={techSaving}
+                className="flex-1 btn-rust px-3 py-2 text-xs disabled:opacity-50"
+              >
+                {techSaving ? "ADDING..." : "ADD TO SHOP"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -84,6 +84,28 @@ Already covered in this session:
 ## Shipped Feb 28, 2026
 - [x] **Library ZIP bulk upload** — `POST /api/library/upload-zip` accepts a .zip, kicks off a background worker (concurrency=4) that ingests every supported file (PDF, images via GPT-5.2 OCR, TXT/MD/CSV/LOG, .hpt/.hpl). Each file becomes its own `library_items` row tagged with `batch_id`. Status polled via `GET /api/library/batch/{id}`. Frontend Library page now has `UPLOAD ZIP` button + live progress bar. Drag-and-dropping a `.zip` on the dropzone triggers the bulk path automatically.
 
+## Shipped Feb 29, 2026 (overnight session)
+- [x] **Brain ingest: 2017 Tahoe RO #19344** — Tier 1 case for AFM cam+lifter pattern failure, ingested with corrected $7,500 OTD pricing per OG R31 (parts subtotal $1,710.55 explicitly flagged DO NOT surface to consumers). Brain corpus → 26 cases.
+- [x] **ADD TECH on TeamChat (P1 backlog item)** — Owner-only `ADD TECH` button in TeamChat sidebar opens modal (name/email/password/role) that POSTs to `/api/techs`, refreshes thread list. Same shop_id auto-scope. Tested end-to-end (create → DM thread appears → delete → DM gone).
+- [x] **Shared Voice Service for peer agents (Bud/OG)** — Three new endpoints on `/api/voice/*`, `X-Agent-Token` gated (reuses `AGENT_MAIL_INBOUND_TOKEN`):
+   - `POST /voice/ephemeral-token` mints OpenAI Realtime client_secret with per-caller persona/voice/eagerness. Auto-injects up to 15 LOCKED memory_facts so peer-side voice stays consistent with Wrench-side voice. Returns `session_id`, `client_secret`, `expires_at`, `model`. Persists session row in `voice_sessions` for audit.
+   - `POST /voice/turn-log/{session_id}` peer-client fire-and-forget turn logging into `voice_turns` (shared cross-device-continuity store).
+   - `GET /voice/turn-log/{session_id}` read-back for resume / hand-off.
+- [x] **Morning briefing receiver** — `POST /api/brain/morning-briefing` accepts Bud's structured 7am digest (`sections: { inbox_top, ro_board, shop_status, flags }` + summary), upserts on `(shop_id, date, source_agent)`. `GET` returns latest. New `morning_briefings` collection.
+- [x] **Agent-mail triangle CLOSED (4th leg)** — Original "9 → Bud" pending state was not a token typo (token was correct from R32 the whole time) — we just never sent anything to Bud's inbox. Six letters delivered overnight: R34/R36 to OG, R2/R3/R4/R5/R6 to Bud. Full backlog cleared.
+
+## Pending / open items after overnight session
+- [ ] Twilio toll-free TFV — pending review (Twilio side, ETA 1-3 days from 5/27 submission)
+- [ ] AutoLeap Email Parser (Outlook RO emails → brain cases)
+- [ ] Wrench BUILDS mode (self-serve feature deploy)
+- [ ] DB Preview→Prod migration script (library_chunks, cases, vault)
+- [ ] Outlook 365 token refresh / re-login bug
+- [ ] `/api/brain/urgent-event` endpoint (Bud P0 push, lower priority than morning briefing)
+- [ ] `/api/voice/session/{id}/inject` (mid-session prompt patch — defer until peer agent requests it)
+- [ ] Add `agent_voice_tokens` per-peer collection (revocable individual tokens instead of shared `AGENT_MAIL_INBOUND_TOKEN`)
+- [ ] Surface morning briefing in WRENCH chat retrieval pass (wire after Bud starts posting real briefings)
+- [ ] Push prod deploy to expose `UPLOAD ZIP` button + ADD TECH button on `foreman.drunderhood.com`
+
 ## Partner agent (OG / Dr. Underhood Live Assist)
 - Letters round 4, 6, 8 acknowledged. Round 8 documents: case_ids_already_seen + Foreman Mail contract.
 - Their poller hits `/api/brain/recent-outcomes` every 60s with cursor.

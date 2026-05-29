@@ -2974,6 +2974,158 @@ async def realtime_session(user=Depends(get_user)):
         raise HTTPException(503, f"Realtime upstream error: {e}")
 
 
+# ============ Shared Voice Service (Bud / OG callers via agent token) ============
+# Agent peers call these to mint Realtime tokens + log voice turns into the
+# shared brain. Uses AGENT_MAIL_INBOUND_TOKEN as the shared agent-network token
+# (same trust boundary as agent-mail). Browser clients still use /realtime/session.
+class VoiceTokenReq(BaseModel):
+    caller_agent: str  # "bud" | "og" | etc.
+    persona: Optional[str] = None  # short addendum appended to the base persona
+    voice: Optional[str] = "ash"  # ash | onyx | nova | shimmer | echo | alloy
+    eagerness: Optional[Literal["low", "medium", "high"]] = "medium"
+    doc_user_email: Optional[str] = None  # whose brain to load context from
+
+
+class VoiceTurnLogReq(BaseModel):
+    caller_agent: str
+    role: Literal["user", "assistant", "system"]
+    text: str
+    audio_url: Optional[str] = None
+    tool_calls: Optional[List[Dict[str, Any]]] = None
+
+
+def _check_agent_token(x_agent_token: str):
+    expected = os.environ.get("AGENT_MAIL_INBOUND_TOKEN", "").strip()
+    if not expected:
+        raise HTTPException(503, "Voice service not configured (missing AGENT_MAIL_INBOUND_TOKEN)")
+    if (x_agent_token or "").strip() != expected:
+        raise HTTPException(401, "Invalid or missing X-Agent-Token")
+
+
+@api.post("/voice/ephemeral-token")
+async def voice_ephemeral_token(body: VoiceTokenReq, x_agent_token: str = Header(default="")):
+    """Mints an OpenAI Realtime ephemeral client_secret for a peer agent's client.
+    Peer's browser/native client uses the secret to open a direct WebRTC PC to
+    OpenAI. We log the session here for audit + turn-log writes."""
+    _check_agent_token(x_agent_token)
+    if not OPENAI_API_KEY:
+        raise HTTPException(503, "OpenAI Realtime not configured on shared voice service.")
+
+    caller = body.caller_agent.lower().strip() or "unknown"
+
+    # Resolve which user's memory/vehicle context to seed the session with.
+    target_user = None
+    if body.doc_user_email:
+        target_user = await db.users.find_one({"email": body.doc_user_email.lower()}, {"_id": 0})
+    if not target_user:
+        # Default: Doc himself
+        target_user = await db.users.find_one({"role": "owner"}, {"_id": 0})
+
+    memory_facts: List[str] = []
+    if target_user:
+        mem_cursor = db.memory_facts.find({"user_id": target_user["id"]}, {"_id": 0}).sort("created_at", -1)
+        mem_docs = await mem_cursor.to_list(20)
+        memory_facts = [m["fact"] for m in mem_docs]
+
+    base_persona = (
+        f"You are speaking through the {caller.upper()} client on Doc's behalf. "
+        "Keep replies short and conversational — phone-call tempo, not lecture. "
+        "Cuss freely. If Doc says stop / wait / shut up, halt immediately."
+    )
+    if body.persona:
+        base_persona += "\n\n" + body.persona.strip()[:2000]
+    if memory_facts:
+        base_persona += "\n\nLOCKED MEMORY ABOUT DOC (do not contradict):\n" + "\n".join(f"- {f}" for f in memory_facts[:15])
+
+    session_id = str(uuid.uuid4())
+
+    rt_body = {
+        "session": {
+            "type": "realtime",
+            "model": "gpt-realtime",
+            "instructions": base_persona,
+            "audio": {
+                "input": {
+                    "turn_detection": {
+                        "type": "semantic_vad",
+                        "eagerness": body.eagerness or "medium",
+                        "create_response": True,
+                        "interrupt_response": True,
+                    },
+                    "noise_reduction": {"type": "near_field"},
+                },
+                "output": {"voice": body.voice or "ash", "speed": 1.1},
+            },
+        }
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.post(
+                "https://api.openai.com/v1/realtime/client_secrets",
+                headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"},
+                json=rt_body,
+            )
+        if r.status_code != 200:
+            log.error(f"voice/ephemeral upstream failed for {caller}: {r.status_code} {r.text[:300]}")
+            raise HTTPException(r.status_code, f"OpenAI upstream: {r.text[:300]}")
+        payload = r.json()
+    except httpx.HTTPError as e:
+        raise HTTPException(503, f"Realtime upstream error: {e}")
+
+    # Persist a session row for audit + future turn-log writes
+    await db.voice_sessions.insert_one({
+        "id": session_id,
+        "caller_agent": caller,
+        "user_id": (target_user or {}).get("id", ""),
+        "user_email": (target_user or {}).get("email", ""),
+        "model": rt_body["session"]["model"],
+        "voice": rt_body["session"]["audio"]["output"]["voice"],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "openai_secret_expires": payload.get("expires_at"),
+    })
+
+    return {
+        "session_id": session_id,
+        "client_secret": payload.get("value") or payload.get("client_secret"),
+        "expires_at": payload.get("expires_at"),
+        "model": rt_body["session"]["model"],
+        "voice": rt_body["session"]["audio"]["output"]["voice"],
+        "raw": payload,  # full OpenAI response for caller convenience
+    }
+
+
+@api.post("/voice/turn-log/{session_id}")
+async def voice_turn_log(session_id: str, body: VoiceTurnLogReq, x_agent_token: str = Header(default="")):
+    """Peer agents POST every turn here for shared-brain logging + cross-device
+    continuity. Writes into voice_turns. Lightweight, fire-and-forget."""
+    _check_agent_token(x_agent_token)
+    sess = await db.voice_sessions.find_one({"id": session_id}, {"_id": 0})
+    if not sess:
+        raise HTTPException(404, "Unknown voice session_id")
+    doc = {
+        "id": str(uuid.uuid4()),
+        "session_id": session_id,
+        "caller_agent": body.caller_agent.lower().strip(),
+        "user_id": sess.get("user_id", ""),
+        "role": body.role,
+        "text": (body.text or "")[:8000],
+        "audio_url": body.audio_url,
+        "tool_calls": body.tool_calls or [],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.voice_turns.insert_one(doc)
+    return {"ok": True, "turn_id": doc["id"]}
+
+
+@api.get("/voice/turn-log/{session_id}")
+async def voice_turn_log_read(session_id: str, x_agent_token: str = Header(default=""), limit: int = 200):
+    """Read back a voice session's turns (for cross-device continuity)."""
+    _check_agent_token(x_agent_token)
+    cur = db.voice_turns.find({"session_id": session_id}, {"_id": 0}).sort("created_at", 1).limit(limit)
+    return await cur.to_list(limit)
+
+
 # ============ Usage / cost dashboard ============
 # Rough cost estimates (USD). These are blended in+out averages for current
 # models we route through. Adjust here when provider pricing changes.
