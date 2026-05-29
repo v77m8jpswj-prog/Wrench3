@@ -1803,7 +1803,73 @@ async def transcribe(audio: UploadFile = File(...), user=Depends(get_user)):
     finally:
         try: os.unlink(tmp_path)
         except: pass
-    return {"text": text or ""}
+
+    # Whisper hallucination filter — when Whisper gets silence, near-silence, or
+    # garbled audio, it emits common training-data phrases (YouTube outros, anime
+    # subtitle filler, repeated words). These poison chat history if we let them
+    # through as if Doc said them. Reject anything that smells like that here.
+    text = (text or "").strip()
+    # Strip trailing period/exclamation that Whisper adds to single-word output
+    bare = text.lower().rstrip(".!?,").strip()
+    SINGLE_WORD_HALLUCINATIONS = {
+        "you", "thank you", "thanks", "okay", "ok", "yeah", "uh", "um",
+        "hmm", "bye", "the", "and", "yes", "no", ".", "..", "...",
+        "mm", "mhm", "uh-huh", "huh",
+    }
+    if bare in SINGLE_WORD_HALLUCINATIONS:
+        log.info(f"whisper single-word hallucination filtered: {text!r}")
+        return {"text": "", "filtered": "single_word_hallucination", "raw": text}
+    if text:
+        lower = text.lower()
+        # Common Whisper-isms
+        HALLUCINATIONS = (
+            "thanks for watching",
+            "thank you for watching",
+            "subscribe to",
+            "hit subscribe",
+            "like and subscribe",
+            "see you next time",
+            "see you in the next",
+            "see ya next time",
+            "please subscribe",
+            "don't forget to subscribe",
+            "this video so far",
+            "lets out a deep sigh",
+            "sigh of relief",
+            "the end",
+            "♪",
+            "[music]",
+            "[applause]",
+            "[laughter]",
+            "[silence]",
+            "(silence)",
+            "transcript by",
+            "subtitles by",
+            "captions by",
+            "amara.org",
+            "mr. beast",
+            "patreon",
+        )
+        if any(h in lower for h in HALLUCINATIONS):
+            log.info(f"whisper hallucination filtered: {text[:120]!r}")
+            return {"text": "", "filtered": "hallucination", "raw": text}
+        # Repetition guard — "the the the the" / "you you you" / single-word loops
+        words = lower.split()
+        if len(words) >= 4:
+            unique_ratio = len(set(words)) / max(1, len(words))
+            if unique_ratio <= 0.5:
+                log.info(f"whisper repetition filtered: {text[:120]!r} (uniq_ratio={unique_ratio:.2f})")
+                return {"text": "", "filtered": "repetition", "raw": text}
+        # Starts with "the the" / "you you" — short hallucination pattern
+        if len(lower) < 30 and (lower.startswith("the the ") or lower.startswith("you you ")):
+            log.info(f"whisper short-repetition filtered: {text[:120]!r}")
+            return {"text": "", "filtered": "short_repetition", "raw": text}
+        # No alphabetic content (just punctuation / whitespace noise)
+        import re as _re
+        if not _re.search(r"[a-z]", lower):
+            return {"text": "", "filtered": "no_alpha", "raw": text}
+
+    return {"text": text}
 
 
 @api.post("/voice/speak")
