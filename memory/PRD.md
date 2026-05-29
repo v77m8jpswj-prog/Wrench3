@@ -94,6 +94,18 @@ Already covered in this session:
 - [x] **Morning briefing receiver** — `POST /api/brain/morning-briefing` accepts Bud's structured 7am digest (`sections: { inbox_top, ro_board, shop_status, flags }` + summary), upserts on `(shop_id, date, source_agent)`. `GET` returns latest. New `morning_briefings` collection.
 - [x] **Agent-mail triangle CLOSED (4th leg)** — Original "9 → Bud" pending state was not a token typo (token was correct from R32 the whole time) — we just never sent anything to Bud's inbox. Six letters delivered overnight: R34/R36 to OG, R2/R3/R4/R5/R6 to Bud. Full backlog cleared.
 
+## Shipped Feb 29, 2026 (overnight session, part 2)
+- [x] **Background scheduler — TRAINING ALWAYS ON** (`/app/backend/scheduler.py`):
+  - **Daily crawler loop** — every 24h sweeps every user's `crawl_watchlist`, ingests fresh chunks, dedupes via content fingerprint, writes run summary to `scheduled_runs`. Survives uvicorn hot-reload via `_started` guard.
+  - **Hourly auto-harvest loop** — every 60min runs Claude-Sonnet fact extraction over the last 2h of every user's chat turns. High-conf (>=0.85, seen >=2x) auto-locks into `memory_facts`. Lower-conf queues for tap-approve on `/learn`.
+  - **Weekly digest loop** — checks every hour; fires Sunday 9pm UTC once per week. Builds an HTML digest (new facts, locked, library chunks, brain cases, crawl/harvest run counts, watchlist status table) and ships it to Doc's connected Outlook via `notify_shop()`.
+  - Wired into `server.py` startup via `start_scheduler(db)`.
+  - **New endpoints**:
+    - `GET /api/scheduler/status` — last_run summary + 24h success counts for each loop
+    - `POST /api/scheduler/run/{crawler|harvest|digest}` (owner-only) — manual force-trigger
+  - **New collections**: `scheduled_runs` (run audit log)
+  - Tunable via env vars: `SCHED_CRAWL_INTERVAL_SEC`, `SCHED_HARVEST_INTERVAL_SEC`, `SCHED_DIGEST_CHECK_INTERVAL_SEC`
+
 ## Pending / open items after overnight session
 - [ ] Twilio toll-free TFV — pending review (Twilio side, ETA 1-3 days from 5/27 submission)
 - [ ] AutoLeap Email Parser (Outlook RO emails → brain cases)

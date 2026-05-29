@@ -3317,6 +3317,49 @@ sms_router = make_sms_router(db, get_user)
 api.include_router(sms_router)
 
 
+# ============ Scheduler status (so Doc can see the loops ticking) ============
+@api.get("/scheduler/status")
+async def scheduler_status(user=Depends(get_user)):
+    """Returns the last run summary for each background loop + their intervals."""
+    out = {
+        "intervals": {
+            "crawler_sec": int(os.environ.get("SCHED_CRAWL_INTERVAL_SEC", str(24 * 3600))),
+            "harvest_sec": int(os.environ.get("SCHED_HARVEST_INTERVAL_SEC", str(3600))),
+            "digest_check_sec": int(os.environ.get("SCHED_DIGEST_CHECK_INTERVAL_SEC", str(3600))),
+        },
+        "loops": {},
+    }
+    for kind in ("crawler", "harvest", "digest"):
+        last = await db.scheduled_runs.find({"kind": kind}, {"_id": 0}).sort("ran_at", -1).limit(1).to_list(1)
+        ok_24h = await db.scheduled_runs.count_documents({
+            "kind": kind, "status": "ok",
+            "ran_at": {"$gt": (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()},
+        })
+        out["loops"][kind] = {
+            "last_run": last[0] if last else None,
+            "successful_runs_24h": ok_24h,
+        }
+    return out
+
+
+@api.post("/scheduler/run/{kind}")
+async def scheduler_force_run(kind: str, user=Depends(get_user)):
+    """Manual trigger so Doc (or testing) can fire a loop without waiting."""
+    if (user.get("role") or "owner") != "owner":
+        raise HTTPException(403, "Owner only")
+    from scheduler import _run_crawler_pass, _run_harvest_pass, _run_digest_pass, _record_run
+    if kind == "crawler":
+        summary = await _run_crawler_pass(db)
+    elif kind == "harvest":
+        summary = await _run_harvest_pass(db)
+    elif kind == "digest":
+        summary = await _run_digest_pass(db)
+    else:
+        raise HTTPException(400, "kind must be crawler | harvest | digest")
+    await _record_run(db, kind, "ok", summary)
+    return {"ok": True, "kind": kind, "summary": summary}
+
+
 # ============ Register router ============
 app.include_router(api)
 app.add_middleware(
@@ -3376,6 +3419,13 @@ async def startup_migrate():
         )
     except Exception as e:
         log.warning(f"shop_profile phone backfill: {e}")
+
+    # Fire up the background scheduler: daily crawler + hourly harvester + weekly digest
+    try:
+        from scheduler import start_scheduler
+        start_scheduler(db)
+    except Exception as e:
+        log.exception(f"scheduler start failed: {e}")
 
 
 @app.on_event("shutdown")
