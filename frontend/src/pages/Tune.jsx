@@ -97,8 +97,10 @@ export default function Tune() {
         }
       }
       if (!inTextarea) {
-        const text = e.clipboardData.getData("text");
+        let text = e.clipboardData.getData("text");
         if (text) {
+          // Hard cap so a runaway clipboard can't blow up the renderer
+          if (text.length > 50000) text = text.slice(0, 50000) + "\n[truncated, paste was huge]";
           setInput(prev => prev ? prev + "\n" + text : text);
         }
       }
@@ -286,14 +288,29 @@ export default function Tune() {
 }
 
 // ── Stripped markdown leak + URL render helpers (mirrors Chat.jsx) ─────────────
+// Strip markdown noise — defensive against catastrophic regex backtracking on
+// large tables / pastes by short-circuiting for long inputs and using non-greedy
+// patterns that bail fast on overflow.
 function stripMarkdown(s) {
   if (!s) return s;
-  return s
-    .replace(/\*\*\*([^*\n]+?)\*\*\*/g, "$1")
-    .replace(/\*\*([^*\n]+?)\*\*/g, "$1")
-    .replace(/(^|\s)\*([^*\n]+?)\*(?=\s|[.,!?;:]|$)/g, "$1$2")
-    .replace(/__([^_\n]+?)__/g, "$1")
-    .replace(/^#{1,6}\s+/gm, "");
+  // For very long strings, skip the * cleanup entirely — VE tables and big pastes
+  // contain enough numbers/symbols to trigger catastrophic backtracking. The leak
+  // we're protecting against (** bolding) won't be in a 30KB paste anyway.
+  if (s.length > 8000) {
+    try {
+      return s.replace(/^#{1,6}\s+/gm, "");
+    } catch { return s; }
+  }
+  try {
+    return s
+      .replace(/\*\*\*([^*\n]+?)\*\*\*/g, "$1")
+      .replace(/\*\*([^*\n]+?)\*\*/g, "$1")
+      .replace(/(^|\s)\*([^*\n]+?)\*(?=\s|[.,!?;:]|$)/g, "$1$2")
+      .replace(/__([^_\n]+?)__/g, "$1")
+      .replace(/^#{1,6}\s+/gm, "");
+  } catch {
+    return s;
+  }
 }
 
 // ── Message row ────────────────────────────────────────────────────────────────
@@ -317,19 +334,28 @@ function Msg({ m, idx }) {
 // Render assistant text — extract fenced code blocks as one-tap COPY blocks
 function renderTuneContent(text) {
   if (!text) return null;
-  // Strip the leading [TUNE] tag from user messages
-  text = text.replace(/^\[TUNE\][^\n]*\n?/, "");
-  const out = [];
-  const fenceRe = /```([^\n]*)\n([\s\S]*?)```/g;
-  let last = 0;
-  let m;
-  while ((m = fenceRe.exec(text)) !== null) {
-    if (m.index > last) out.push(<span key={`t${last}`}>{stripMarkdown(text.slice(last, m.index))}</span>);
-    out.push(<CopyBlock key={`c${m.index}`} text={m[2].replace(/\n+$/, "")} lang={(m[1]||"").trim()}/>);
-    last = m.index + m[0].length;
+  try {
+    // Strip the leading [TUNE] tag from user messages
+    text = text.replace(/^\[TUNE\][^\n]*\n?/, "");
+    const out = [];
+    const fenceRe = /```([^\n]*)\n([\s\S]*?)```/g;
+    let last = 0;
+    let m;
+    let safety = 0;
+    while ((m = fenceRe.exec(text)) !== null) {
+      if (++safety > 200) break; // guard against any malformed input that could loop
+      if (m.index > last) out.push(<span key={`t${last}`}>{stripMarkdown(text.slice(last, m.index))}</span>);
+      out.push(<CopyBlock key={`c${m.index}`} text={m[2].replace(/\n+$/, "")} lang={(m[1]||"").trim()}/>);
+      last = m.index + m[0].length;
+    }
+    if (last < text.length) out.push(<span key={`t${last}`}>{stripMarkdown(text.slice(last))}</span>);
+    return out;
+  } catch (e) {
+    // Last-ditch: render raw text so the page never blanks
+    // eslint-disable-next-line no-console
+    console.warn("[Tune] renderTuneContent failed, falling back to raw text", e);
+    return <span>{String(text)}</span>;
   }
-  if (last < text.length) out.push(<span key={`t${last}`}>{stripMarkdown(text.slice(last))}</span>);
-  return out;
 }
 
 function CopyBlock({ text, lang }) {

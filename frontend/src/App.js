@@ -32,6 +32,11 @@ import ShopLanding from "@/pages/ShopLanding";
 import Settings from "@/pages/Settings";
 import SmsInbox from "@/pages/SmsInbox";
 import Shell from "@/components/Shell";
+import ErrorBoundary from "@/components/ErrorBoundary";
+
+// Wrap a route's element in an ErrorBoundary so one bad render never blanks the
+// whole app. The label shows up in the recovery panel.
+const guard = (label, el) => <ErrorBoundary label={label}>{el}</ErrorBoundary>;
 
 function Protected({ children }) {
   const [ready, setReady] = useState(false);
@@ -55,36 +60,36 @@ function App() {
     <div className="App grain">
       <BrowserRouter>
         <Routes>
-          <Route path="/login" element={<Login />} />
-          <Route path="/shop/:shopId" element={<ShopLanding />} />
+          <Route path="/login" element={guard("login", <Login />)} />
+          <Route path="/shop/:shopId" element={guard("shop", <ShopLanding />)} />
           <Route path="/quote" element={<Navigate to="/shop/drunderhood-fortsmith" replace />} />
-          <Route path="/snippets" element={<Snippets />} />
-          <Route path="/snippets/:id" element={<Snippets />} />
+          <Route path="/snippets" element={guard("snippets", <Snippets />)} />
+          <Route path="/snippets/:id" element={guard("snippets", <Snippets />)} />
           <Route path="/*" element={
             <AppProvider>
               <Routes>
-                <Route path="/" element={<Protected><Home /></Protected>} />
-                <Route path="/chat" element={<Protected><Chat /></Protected>} />
-                <Route path="/call" element={<Protected><Call /></Protected>} />
-                <Route path="/charts" element={<Protected><Charts /></Protected>} />
-                <Route path="/library" element={<Protected><Library /></Protected>} />
-                <Route path="/vehicles" element={<Protected><Vehicles /></Protected>} />
-                <Route path="/datalog" element={<Protected><Datalog /></Protected>} />
-                <Route path="/memory" element={<Protected><Memory /></Protected>} />
-                <Route path="/vault" element={<Protected><Vault /></Protected>} />
-                <Route path="/cases" element={<Protected><Cases /></Protected>} />
-                <Route path="/team" element={<Protected><TeamChat /></Protected>} />
-                <Route path="/letters" element={<Protected><Letters /></Protected>} />
-                <Route path="/jobs" element={<Protected><Jobs /></Protected>} />
-                <Route path="/email" element={<Protected><Email /></Protected>} />
-                <Route path="/diff" element={<Protected><DiffTune /></Protected>} />
-                <Route path="/tune" element={<Protected><Tune /></Protected>} />
-                <Route path="/leads" element={<Protected><Leads /></Protected>} />
-                <Route path="/learn" element={<Protected><Learn /></Protected>} />
-                <Route path="/usage" element={<Protected><Suspense fallback={<div className="p-6 text-rust">Loading...</div>}><LlmUsageScreen /></Suspense></Protected>} />
-                <Route path="/watchlist" element={<Protected><Watchlist /></Protected>} />
-                <Route path="/sms" element={<Protected><SmsInbox /></Protected>} />
-                <Route path="/settings" element={<Protected><Settings /></Protected>} />
+                <Route path="/" element={<Protected>{guard("home", <Home />)}</Protected>} />
+                <Route path="/chat" element={<Protected>{guard("chat", <Chat />)}</Protected>} />
+                <Route path="/call" element={<Protected>{guard("call", <Call />)}</Protected>} />
+                <Route path="/charts" element={<Protected>{guard("charts", <Charts />)}</Protected>} />
+                <Route path="/library" element={<Protected>{guard("library", <Library />)}</Protected>} />
+                <Route path="/vehicles" element={<Protected>{guard("vehicles", <Vehicles />)}</Protected>} />
+                <Route path="/datalog" element={<Protected>{guard("datalog", <Datalog />)}</Protected>} />
+                <Route path="/memory" element={<Protected>{guard("memory", <Memory />)}</Protected>} />
+                <Route path="/vault" element={<Protected>{guard("vault", <Vault />)}</Protected>} />
+                <Route path="/cases" element={<Protected>{guard("cases", <Cases />)}</Protected>} />
+                <Route path="/team" element={<Protected>{guard("team", <TeamChat />)}</Protected>} />
+                <Route path="/letters" element={<Protected>{guard("letters", <Letters />)}</Protected>} />
+                <Route path="/jobs" element={<Protected>{guard("jobs", <Jobs />)}</Protected>} />
+                <Route path="/email" element={<Protected>{guard("email", <Email />)}</Protected>} />
+                <Route path="/diff" element={<Protected>{guard("diff", <DiffTune />)}</Protected>} />
+                <Route path="/tune" element={<Protected>{guard("tune", <Tune />)}</Protected>} />
+                <Route path="/leads" element={<Protected>{guard("leads", <Leads />)}</Protected>} />
+                <Route path="/learn" element={<Protected>{guard("learn", <Learn />)}</Protected>} />
+                <Route path="/usage" element={<Protected>{guard("usage", <Suspense fallback={<div className="p-6 text-rust">Loading...</div>}><LlmUsageScreen /></Suspense>)}</Protected>} />
+                <Route path="/watchlist" element={<Protected>{guard("watchlist", <Watchlist />)}</Protected>} />
+                <Route path="/sms" element={<Protected>{guard("sms", <SmsInbox />)}</Protected>} />
+                <Route path="/settings" element={<Protected>{guard("settings", <Settings />)}</Protected>} />
                 <Route path="*" element={<Navigate to="/" />} />
               </Routes>
             </AppProvider>

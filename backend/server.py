@@ -2,7 +2,7 @@
 Data Wrench - AI Foreman Backend
 FastAPI app for Dr. Underhood Automotive's personal AI shop assistant.
 """
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, UploadFile, File, Form, Header, Query
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, UploadFile, File, Form, Header, Query, Request
 from fastapi.responses import Response
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -3381,6 +3381,33 @@ agentmail_router = make_agentmail_router(db, get_user)
 api.include_router(agentmail_router)
 sms_router = make_sms_router(db, get_user)
 api.include_router(sms_router)
+
+
+# ============ Client error reporter (called by frontend ErrorBoundary) ============
+@api.post("/client-errors")
+async def report_client_error(body: Dict[str, Any], request: Request):
+    """Frontend ErrorBoundary POSTs render-crash details here so we have a real
+    audit trail of black-screen bugs (instead of guessing from screenshots).
+    No auth required — anonymous reports are still better than no signal."""
+    try:
+        ip = request.client.host if request.client else "unknown"
+        doc = {
+            "id": str(uuid.uuid4()),
+            "received_at": datetime.now(timezone.utc).isoformat(),
+            "page": str(body.get("page", ""))[:120],
+            "message": str(body.get("message", ""))[:1000],
+            "stack": str(body.get("stack", ""))[:3000],
+            "component_stack": str(body.get("component_stack", ""))[:3000],
+            "user_agent": str(body.get("user_agent", ""))[:300],
+            "url": str(body.get("url", ""))[:400],
+            "ip": ip,
+        }
+        await db.client_errors.insert_one(doc)
+        log.warning(f"[client-error] {doc['page']} | {doc['message'][:160]}")
+        return {"ok": True}
+    except Exception as e:
+        log.exception(f"client-error reporter failed: {e}")
+        return {"ok": False}
 
 
 # ============ Scheduler status (so Doc can see the loops ticking) ============
