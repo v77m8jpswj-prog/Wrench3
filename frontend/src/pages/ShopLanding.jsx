@@ -178,6 +178,79 @@ export default function ShopLanding() {
         </div>
       </div>
 
+      {/* JASPER ENGINES & TRANSMISSIONS — Authorized Installer Co-Op Block */}
+      {/* Follows Jasper brand guidelines: full text intact, proportional, not altered. */}
+      <div className="py-10 md:py-14 px-4 md:px-8 border-b border-line bg-white text-black" data-testid="jasper-section">
+        <a
+          href="https://www.jasperengines.com"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="block max-w-5xl mx-auto group"
+          data-testid="jasper-link"
+        >
+          <div className="flex flex-col md:flex-row items-center gap-6 md:gap-10">
+            {/* Approved logo block — recreated per Jasper brand rules (full elements together) */}
+            <div className="text-center md:text-left shrink-0">
+              <div className="text-[12px] md:text-sm tracking-widest uppercase font-bold text-black mb-1">We Install</div>
+              <div
+                className="leading-none font-black tracking-tight"
+                style={{ color: "#ED1C24", fontFamily: "'Impact', 'Oswald', system-ui, sans-serif", fontSize: "clamp(48px, 9vw, 110px)" }}
+              >
+                JASPER
+              </div>
+              <div className="text-[13px] md:text-[15px] tracking-[0.18em] font-bold text-black uppercase -mt-1">
+                Engines &amp; Transmissions
+              </div>
+              <div className="mt-3 text-[14px] md:text-base font-extrabold text-black leading-tight">
+                3 Years / 100,000 Miles<br/>Parts &amp; Labor
+              </div>
+              <div className="mt-1 italic text-[14px] font-bold" style={{ color: "#ED1C24" }}>
+                Nationwide Warranty!
+              </div>
+            </div>
+
+            {/* Pitch + cool link */}
+            <div className="flex-1">
+              <h2
+                className="text-2xl md:text-4xl font-black tracking-tight mb-3 leading-none"
+                style={{ fontFamily: "'Impact', 'Oswald', system-ui, sans-serif" }}
+              >
+                AUTHORIZED <span style={{ color: "#ED1C24" }}>JASPER</span> INSTALLER &amp; DEALER
+              </h2>
+              <p className="text-sm md:text-base text-gray-800 mb-4 leading-relaxed">
+                Reman gas engines, transmissions, marine, &amp; differentials — backed by Jasper's
+                <strong> 3 Year / 100,000 Mile nationwide warranty</strong>. Installed right by Dr. Underhood, warranted everywhere.
+              </p>
+              <span
+                className="inline-flex items-center gap-2 px-5 py-3 font-extrabold text-white text-sm md:text-base uppercase tracking-widest group-hover:gap-3 transition-all"
+                style={{ backgroundColor: "#ED1C24" }}
+                data-testid="jasper-cta"
+              >
+                Visit JasperEngines.com
+                <span aria-hidden="true" className="text-lg">→</span>
+              </span>
+            </div>
+          </div>
+        </a>
+      </div>
+
+      {/* QUICK SCAN section — placeholder for QR code (wiring with OG separately) */}
+      <div className="py-12 md:py-16 px-4 md:px-8 border-b border-line bg-bg-2" data-testid="scan-section">
+        <div className="max-w-5xl mx-auto text-center">
+          <div className="text-[11px] tracking-[0.3em] text-amber2 uppercase mb-3">PHONE? POINT IT HERE.</div>
+          <h2 className="heading text-4xl md:text-6xl lg:text-7xl leading-none mb-4">
+            SCAN <span className="text-rust">//</span> TAP <span className="text-rust">//</span> ROLL IN
+          </h2>
+          <p className="text-base md:text-lg text-ink-2 mb-6 max-w-2xl mx-auto">
+            Pop your camera at the QR code, get the shop in your pocket. Quote requests, hours, address, directions — one tap.
+          </p>
+          <div className="inline-block border-4 border-dashed border-amber2/40 px-6 py-8 bg-bg-1" data-testid="qr-placeholder">
+            <div className="text-[10px] uppercase tracking-widest text-amber2 font-bold mb-2">QR CODE</div>
+            <div className="text-ink-3 text-sm italic">Coming soon — Doc &amp; OG wiring it up</div>
+          </div>
+        </div>
+      </div>
+
       {/* Quote form */}
       <QuoteForm shopId={shopId}/>
 
