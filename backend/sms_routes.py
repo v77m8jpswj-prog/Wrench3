@@ -42,8 +42,72 @@ def make_router(db, get_user):
         FromState: str = Form(""),
     ):
         """Twilio webhook. Validates only on production via signature optional check.
-        We keep this permissive so dev/preview testing works without ngrok."""
+        We keep this permissive so dev/preview testing works without ngrok.
+
+        Special behavior: if the inbound is FROM the owner's own cell (because
+        Doc replied to the notification text on his phone), we treat that as a
+        forward to the last customer who texted in, NOT as a new customer
+        message. This prevents the loop where Doc's reply pings him back."""
         ts = datetime.now(timezone.utc).isoformat()
+
+        owner_cell = (os.environ.get("TWILIO_OWNER_CELL", "") or "").strip()
+
+        def _norm(n: str) -> str:
+            return "".join(ch for ch in (n or "") if ch.isdigit())
+
+        is_owner_reply = bool(owner_cell) and _norm(From) and _norm(From) == _norm(owner_cell)
+
+        if is_owner_reply:
+            # Find the most recent inbound from a non-owner number (the customer)
+            last_cust = await db.sms_messages.find_one(
+                {"direction": "inbound", "from_number": {"$ne": owner_cell}},
+                {"_id": 0},
+                sort=[("created_at", -1)],
+            )
+            if not last_cust:
+                # No customer to reply to — log + acknowledge silently
+                log.info(f"owner replied via SMS but no customer in history yet: {Body[:80]}")
+                await db.sms_messages.insert_one({
+                    "id": str(uuid.uuid4()),
+                    "direction": "inbound",
+                    "twilio_sid": MessageSid,
+                    "from_number": From,
+                    "to_number": To,
+                    "body": Body[:2000],
+                    "created_at": ts,
+                    "read": True,
+                    "kind": "owner_reply_orphan",
+                })
+                return Response(
+                    content='<?xml version="1.0" encoding="UTF-8"?><Response></Response>',
+                    media_type="application/xml",
+                )
+
+            cust_number = last_cust["from_number"]
+            # Forward Doc's reply to that customer
+            try:
+                ok = await send_sms(cust_number, Body)
+            except Exception as e:
+                log.warning(f"owner reply forward failed: {e}")
+                ok = False
+            await db.sms_messages.insert_one({
+                "id": str(uuid.uuid4()),
+                "direction": "outbound",
+                "from_number": To,  # the toll-free
+                "to_number": cust_number,
+                "body": Body[:2000],
+                "created_at": ts,
+                "read": True,
+                "kind": "owner_reply_forward",
+                "owner_reply_sid": MessageSid,
+                "ok": ok,
+            })
+            # Empty TwiML so Twilio doesn't echo
+            return Response(
+                content='<?xml version="1.0" encoding="UTF-8"?><Response></Response>',
+                media_type="application/xml",
+            )
+
         doc = {
             "id": str(uuid.uuid4()),
             "direction": "inbound",
@@ -63,11 +127,14 @@ def make_router(db, get_user):
         except Exception as e:
             log.warning(f"sms inbound insert failed: {e}")
 
-        # Notify Doc by text immediately
+        # Notify Doc by text immediately. Prefix with the customer's number so
+        # Doc knows who texted, AND so he could in theory paste it elsewhere.
+        # Doc can reply directly to this notification text — we'll auto-forward
+        # to this same customer (see is_owner_reply path above).
         loc = f" ({FromCity}, {FromState})" if FromCity else ""
         snippet = (Body[:120] + "…") if len(Body) > 120 else Body
         try:
-            await notify_owner(f"NEW SMS from {From}{loc}: {snippet}")
+            await notify_owner(f"NEW SMS from {From}{loc}: {snippet}\n\n(Reply to this text to text them back.)")
         except Exception as e:
             log.warning(f"owner notify on inbound sms failed: {e}")
 
