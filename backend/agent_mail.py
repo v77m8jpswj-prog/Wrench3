@@ -59,6 +59,26 @@ class ConfigureReq(BaseModel):
     inbound_token: Optional[str] = None  # token WE require when they post to us
 
 
+class CredentialSendReq(BaseModel):
+    """Send a credential to a peer agent WITH automatic pre-flight verification.
+    The pipe will REFUSE to deliver if the credential doesn't actually work
+    against the target endpoint. Prevents the 'I sent a wrong/stale token and
+    cost the peer days of debugging' failure mode.
+    """
+    peer: str = Field(..., description="Peer name (e.g. 'bud')")
+    subject: str
+    body_intro: str = Field("", description="Intro text rendered before the credential block")
+    body_outro: str = Field("", description="Outro text rendered after the credential block")
+    credential_label: str = Field(..., description="What this credential is, e.g. 'Brain bearer token'")
+    credential_value: str = Field(..., description="The actual secret/token/key string")
+    credential_header: str = Field("Authorization", description="HTTP header name to test with")
+    credential_header_format: str = Field("Bearer {value}", description="Header value template. Use {value} as the placeholder.")
+    verify_url: str = Field(..., description="Full URL to GET against to confirm the credential works (must 200)")
+    verify_expect_status: int = Field(200, description="Expected HTTP status from verify call")
+    round: Optional[int] = None
+    in_reply_to: Optional[str] = None
+
+
 def make_agentmail_router(db, get_user):
     router = APIRouter()
 
@@ -133,6 +153,129 @@ def make_agentmail_router(db, get_user):
             return {"ok": True, "peer_ack": data}
         except httpx.HTTPError as e:
             raise HTTPException(503, f"Couldn't reach peer: {e}")
+
+    # ----- SEND-CREDENTIAL: like /send, but pre-flight-verifies the credential -----
+    @router.post("/agent-mail/send-credential")
+    async def send_credential(body: CredentialSendReq, user=Depends(get_user)):
+        """Send a credential to a peer WITH automatic verification.
+
+        Flow:
+          1. Build the verification header from credential_header_format + value
+          2. Hit verify_url with that header
+          3. If status != verify_expect_status, REFUSE TO SEND. Return the
+             diagnostic so Doc can fix the wrong cred BEFORE it leaves the pipe.
+          4. Only if verify passes, package into a letter and ship it via the
+             normal /send pipe.
+
+        This guards against the failure mode where a wrong/stale token leaves
+        the pipe, the peer 401s for days, and we waste cycles debugging.
+        """
+        peer = await db.agent_mail_peers.find_one({"peer": body.peer.lower().strip()})
+        if not peer:
+            raise HTTPException(404, f"Peer '{body.peer}' not configured. Hit /agent-mail/configure first.")
+        if not body.credential_value.strip():
+            raise HTTPException(400, "credential_value is empty")
+        if "{value}" not in body.credential_header_format:
+            raise HTTPException(400, "credential_header_format must contain {value}")
+        if not body.verify_url.startswith("http"):
+            raise HTTPException(400, "verify_url must be http(s)")
+
+        header_val = body.credential_header_format.format(value=body.credential_value.strip())
+
+        # 1) PRE-FLIGHT VERIFY
+        try:
+            async with httpx.AsyncClient(timeout=20) as c:
+                vr = await c.get(body.verify_url, headers={body.credential_header: header_val})
+            ok = vr.status_code == body.verify_expect_status
+        except httpx.HTTPError as e:
+            raise HTTPException(503, f"Couldn't reach verify_url to pre-flight: {e}")
+
+        diagnostic = {
+            "verify_url": body.verify_url,
+            "verify_status": vr.status_code,
+            "verify_expected": body.verify_expect_status,
+            "verify_response_snippet": vr.text[:200] if vr.text else "",
+            "credential_length": len(body.credential_value.strip()),
+            "header_sent": body.credential_header,
+            "header_format": body.credential_header_format,
+        }
+
+        if not ok:
+            # REFUSE TO SEND. This is the whole point of this endpoint.
+            log.warning(f"send-credential REFUSED — peer={body.peer} verify_url={body.verify_url} got_status={vr.status_code}")
+            # Audit the refusal so we have evidence
+            await db.agent_mail_outbox.insert_one({
+                "id": str(uuid.uuid4()),
+                "to_peer": body.peer,
+                "subject": "[REFUSED] " + body.subject,
+                "body": f"[NOT SENT — credential failed pre-flight]\nDiagnostic:\n{diagnostic}",
+                "round": body.round,
+                "sent_at": _now().isoformat(),
+                "peer_ack": None,
+                "refused": True,
+                "diagnostic": diagnostic,
+                "user_id": user["id"],
+            })
+            raise HTTPException(
+                422,
+                f"Credential failed pre-flight verification — refusing to send. "
+                f"Hit {body.verify_url} with header '{body.credential_header}: {body.credential_header_format.format(value='***')}' "
+                f"and got HTTP {vr.status_code} (expected {body.verify_expect_status}). "
+                f"Fix the credential and retry. Snippet: {vr.text[:160]}"
+            )
+
+        # 2) VERIFIED — compose the letter body with credential block + diagnostic stamp
+        cred_block = (
+            f"{body.body_intro}\n\n"
+            f"═══ CREDENTIAL ═══\n"
+            f"{body.credential_label}:\n  {body.credential_value.strip()}\n\n"
+            f"Test header:  {body.credential_header}: {body.credential_header_format.format(value=body.credential_value.strip())}\n"
+            f"Verified against:  {body.verify_url}\n"
+            f"Pre-flight result:  HTTP {vr.status_code} at {_now().isoformat()}\n"
+            f"Credential length:  {len(body.credential_value.strip())} chars\n"
+            f"═══════════════════\n\n"
+            f"{body.body_outro}"
+        ).strip()
+
+        payload: Dict[str, Any] = {
+            "from_agent": "nine",
+            "subject": body.subject,
+            "body": cred_block,
+            "body_format": "markdown",
+            "verified_credential": True,
+        }
+        if body.round is not None:
+            payload["round"] = body.round
+        if body.in_reply_to:
+            payload["in_reply_to"] = body.in_reply_to
+
+        # 3) Ship via the same path /send uses
+        try:
+            async with httpx.AsyncClient(timeout=30) as c:
+                r = await c.post(
+                    peer["inbox_url"],
+                    headers={"X-Agent-Token": peer["outbound_token"],
+                             "Content-Type": "application/json"},
+                    json=payload,
+                )
+            if r.status_code >= 400:
+                raise HTTPException(502, f"Peer returned {r.status_code}: {r.text[:200]}")
+            data = r.json() if r.text else {}
+            await db.agent_mail_outbox.insert_one({
+                "id": str(uuid.uuid4()),
+                "to_peer": peer["peer"],
+                "subject": payload["subject"],
+                "body": payload["body"],
+                "round": payload.get("round"),
+                "sent_at": _now().isoformat(),
+                "peer_ack": data,
+                "verified_credential": True,
+                "diagnostic": diagnostic,
+                "user_id": user["id"],
+            })
+            return {"ok": True, "verified": True, "peer_ack": data, "diagnostic": diagnostic}
+        except httpx.HTTPError as e:
+            raise HTTPException(503, f"Couldn't reach peer after verify passed: {e}")
 
     # ----- CONFIGURE: Doc tells us about a peer agent -----
     @router.post("/agent-mail/configure")
