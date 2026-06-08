@@ -106,6 +106,10 @@ Already covered in this session:
   - **New collections**: `scheduled_runs` (run audit log)
   - Tunable via env vars: `SCHED_CRAWL_INTERVAL_SEC`, `SCHED_HARVEST_INTERVAL_SEC`, `SCHED_DIGEST_CHECK_INTERVAL_SEC`
 
+## Shipped Mar 1, 2026
+- [x] **`/api/brain/operator-profile` endpoint LIVE** — One-shot operator profile dump for peer agents (Bud, OG). Returns shop_profile + operator_style + locked_memory_facts + candidate_facts + recent_chat_turns + voice_turn_highlights + recent_cases + window/counts. Time-windowed (default 7d, no count cap, max_messages safety ceiling 5000). Accepts master ingress token OR Bud's revocable peer token (`BRAIN_PEER_TOKEN_BUD`). Tested on Preview (HTTP 200, 27 locked facts) and Prod (HTTP 200, 9 locked facts, 8 cases — old chat_limit contract until Doc deploys).
+- [x] **Bud access letter shipped via pre-flight credential pipe** — `/api/agent-mail/send-credential` ran the verify against the live preview endpoint (HTTP 200, credential length 43), then delivered the letter to Bud's inbox (id `aedf7398-4377-4aa9-8d5f-df1147afcc7e`). Letter includes endpoint contract, query-param reference, sample curl, persona tone-contract, and Bud-scoped revocable token.
+
 ## Pending / open items after overnight session
 - [ ] Twilio toll-free TFV — pending review (Twilio side, ETA 1-3 days from 5/27 submission)
 - [ ] AutoLeap Email Parser (Outlook RO emails → brain cases)

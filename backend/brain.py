@@ -417,9 +417,9 @@ def make_brain_router(db, get_user):
     @router.get("/brain/operator-profile")
     async def operator_profile(
         shop_id: str = Query(...),
-        chat_limit: int = Query(200, ge=10, le=2000),
-        voice_limit: int = Query(50, ge=0, le=500),
+        since_days: int = Query(7, ge=1, le=365, description="Window for chat + voice transcripts. Default 7 days, no count cap."),
         cases_limit: int = Query(20, ge=0, le=200),
+        max_messages: int = Query(5000, ge=100, le=20000, description="Hard safety ceiling per message stream to prevent OOM."),
         _t: str = Depends(get_brain_token),
     ):
         """One-shot operator profile for peer agents (Bud, OG, etc.) to learn who
@@ -427,8 +427,8 @@ def make_brain_router(db, get_user):
           - shop_profile: name, address, hours, capabilities, specialties
           - locked_memory_facts: explicit personality / preference rules
           - candidate_facts: pending facts (lower confidence, may shift)
-          - recent_chat_turns: most recent N chat exchanges (Doc + assistant)
-          - voice_turn_highlights: most recent N voice turns
+          - recent_chat_turns: ALL chat exchanges within `since_days` (default 7d, no cap)
+          - voice_turn_highlights: ALL voice turns within `since_days`
           - recent_cases: N most recent brain cases (shop work history)
           - operator_style: a concise text block summarizing tone, language, dont's
         Heavyweight payload — call once on peer init, then poll lighter
@@ -456,29 +456,34 @@ def make_brain_router(db, get_user):
             ).sort("confidence", -1).limit(60)
             candidate_facts = await cand_cur.to_list(60)
 
-        # Recent chat (last N user+assistant pairs)
+        # Time window — created_at is stored as ISO string, so string compare works
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=since_days)).isoformat()
+
+        # Recent chat — ALL messages within window (no count cap, only safety ceiling)
         chat_turns: List[Dict[str, Any]] = []
         if owner_id:
             chat_cur = db.chat_messages.find(
-                {"user_id": owner_id, "role": {"$in": ["user", "assistant"]}},
+                {"user_id": owner_id,
+                 "role": {"$in": ["user", "assistant"]},
+                 "created_at": {"$gte": cutoff}},
                 {"_id": 0, "role": 1, "content": 1, "session_id": 1, "created_at": 1},
-            ).sort("created_at", -1).limit(chat_limit)
-            chat_turns = list(reversed(await chat_cur.to_list(chat_limit)))
+            ).sort("created_at", 1).limit(max_messages)
+            chat_turns = await chat_cur.to_list(max_messages)
             # Truncate excessively long content (some have full RAG context)
             for t in chat_turns:
                 if t.get("content") and len(t["content"]) > 2500:
                     t["content"] = t["content"][:2500] + " …[truncated]"
 
-        # Voice turn highlights — most recent across all sessions
+        # Voice turns — ALL within window
         voice_turns: List[Dict[str, Any]] = []
-        if owner_id and voice_limit > 0:
+        if owner_id:
             v_cur = db.voice_turns.find(
-                {"user_id": owner_id},
+                {"user_id": owner_id, "created_at": {"$gte": cutoff}},
                 {"_id": 0, "role": 1, "text": 1, "session_id": 1, "caller_agent": 1, "created_at": 1},
-            ).sort("created_at", -1).limit(voice_limit)
-            voice_turns = list(reversed(await v_cur.to_list(voice_limit)))
+            ).sort("created_at", 1).limit(max_messages)
+            voice_turns = await v_cur.to_list(max_messages)
 
-        # Recent shop cases
+        # Recent shop cases (still count-based — cases age slower than chat)
         cases: List[Dict[str, Any]] = []
         if cases_limit > 0:
             c_cur = db.brain_cases.find(
@@ -514,6 +519,11 @@ def make_brain_router(db, get_user):
             "recent_chat_turns": chat_turns,
             "voice_turn_highlights": voice_turns,
             "recent_cases": cases,
+            "window": {
+                "since_days": since_days,
+                "cutoff_iso": cutoff,
+                "max_messages_ceiling": max_messages,
+            },
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "counts": {
                 "locked_facts": len(locked_facts),
