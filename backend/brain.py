@@ -270,9 +270,23 @@ def get_brain_token(authorization: Optional[str] = Header(None)) -> str:
         raise HTTPException(503, "Brain not configured (missing BRAIN_INGRESS_TOKEN)")
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(401, "Missing brain bearer token")
-    if authorization[7:] != BRAIN_TOKEN:
-        raise HTTPException(401, "Invalid brain bearer token")
-    return BRAIN_TOKEN
+    presented = authorization[7:].strip()
+    if presented == BRAIN_TOKEN:
+        return BRAIN_TOKEN
+    # Also accept any peer-scoped brain token (revocable per-agent tokens)
+    # stored in env as BRAIN_PEER_TOKENS=peer1:abc,peer2:def
+    # OR as individual envs BRAIN_PEER_TOKEN_<NAME>=<value> (preferred for secrets)
+    peer_tokens_blob = os.environ.get("BRAIN_PEER_TOKENS", "")
+    if peer_tokens_blob:
+        for pair in peer_tokens_blob.split(","):
+            if ":" in pair:
+                _, tok = pair.split(":", 1)
+                if presented == tok.strip():
+                    return presented
+    for env_key, env_val in os.environ.items():
+        if env_key.startswith("BRAIN_PEER_TOKEN_") and env_val and presented == env_val.strip():
+            return presented
+    raise HTTPException(401, "Invalid brain bearer token")
 
 
 # ============ Router factory (called from server.py with db) ============
@@ -399,6 +413,116 @@ def make_brain_router(db, get_user):
         if not doc:
             raise HTTPException(404, "No briefing found")
         return doc
+
+    @router.get("/brain/operator-profile")
+    async def operator_profile(
+        shop_id: str = Query(...),
+        chat_limit: int = Query(200, ge=10, le=2000),
+        voice_limit: int = Query(50, ge=0, le=500),
+        cases_limit: int = Query(20, ge=0, le=200),
+        _t: str = Depends(get_brain_token),
+    ):
+        """One-shot operator profile for peer agents (Bud, OG, etc.) to learn who
+        Doc is and how he talks. Returns:
+          - shop_profile: name, address, hours, capabilities, specialties
+          - locked_memory_facts: explicit personality / preference rules
+          - candidate_facts: pending facts (lower confidence, may shift)
+          - recent_chat_turns: most recent N chat exchanges (Doc + assistant)
+          - voice_turn_highlights: most recent N voice turns
+          - recent_cases: N most recent brain cases (shop work history)
+          - operator_style: a concise text block summarizing tone, language, dont's
+        Heavyweight payload — call once on peer init, then poll lighter
+        endpoints for deltas. Safe for cross-agent sharing under bearer token.
+        """
+        sp = await db.shop_profiles.find_one({"shop_id": shop_id}, {"_id": 0}) or {}
+
+        # Find Doc's user_id from the shop owner
+        owner = await db.users.find_one({"shop_id": shop_id, "role": "owner"}, {"_id": 0}) \
+                or await db.users.find_one({"role": "owner"}, {"_id": 0}) \
+                or {}
+        owner_id = owner.get("id", "")
+
+        locked_facts: List[str] = []
+        candidate_facts: List[Dict[str, Any]] = []
+        if owner_id:
+            mem_cur = db.memory_facts.find({"user_id": owner_id}, {"_id": 0}).sort("created_at", -1).limit(200)
+            for m in await mem_cur.to_list(200):
+                fact = (m.get("fact") or "").strip()
+                if fact:
+                    locked_facts.append(fact)
+            cand_cur = db.candidate_facts.find(
+                {"user_id": owner_id, "status": "pending"},
+                {"_id": 0, "fact": 1, "category": 1, "confidence": 1, "seen_count": 1},
+            ).sort("confidence", -1).limit(60)
+            candidate_facts = await cand_cur.to_list(60)
+
+        # Recent chat (last N user+assistant pairs)
+        chat_turns: List[Dict[str, Any]] = []
+        if owner_id:
+            chat_cur = db.chat_messages.find(
+                {"user_id": owner_id, "role": {"$in": ["user", "assistant"]}},
+                {"_id": 0, "role": 1, "content": 1, "session_id": 1, "created_at": 1},
+            ).sort("created_at", -1).limit(chat_limit)
+            chat_turns = list(reversed(await chat_cur.to_list(chat_limit)))
+            # Truncate excessively long content (some have full RAG context)
+            for t in chat_turns:
+                if t.get("content") and len(t["content"]) > 2500:
+                    t["content"] = t["content"][:2500] + " …[truncated]"
+
+        # Voice turn highlights — most recent across all sessions
+        voice_turns: List[Dict[str, Any]] = []
+        if owner_id and voice_limit > 0:
+            v_cur = db.voice_turns.find(
+                {"user_id": owner_id},
+                {"_id": 0, "role": 1, "text": 1, "session_id": 1, "caller_agent": 1, "created_at": 1},
+            ).sort("created_at", -1).limit(voice_limit)
+            voice_turns = list(reversed(await v_cur.to_list(voice_limit)))
+
+        # Recent shop cases
+        cases: List[Dict[str, Any]] = []
+        if cases_limit > 0:
+            c_cur = db.brain_cases.find(
+                {"shop_id": shop_id},
+                {"_id": 0, "id": 1, "vehicle": 1, "symptom": 1, "root_cause": 1,
+                 "repair_summary": 1, "outcome": 1, "created_at": 1, "technician_name": 1},
+            ).sort("created_at", -1).limit(cases_limit)
+            cases = await c_cur.to_list(cases_limit)
+
+        operator_style = (
+            "Doc Underhood — operator of Dr. Underhood Automotive Specialist, LLC, Fort Smith AR. "
+            "Talks like a gruff, no-bullshit shop owner. Often types in ALL CAPS, curses freely, "
+            "expects fast direct answers, no preamble, no markdown bolding (** breaks immersion), "
+            "no emoji. Despises padding and apology spirals. Direct mechanic tone wins. "
+            "If he's frustrated, acknowledge briefly and just FIX it. Never lecture."
+        )
+
+        return {
+            "shop_profile": {
+                "shop_id": shop_id,
+                "name": sp.get("name", ""),
+                "address": sp.get("address", ""),
+                "phone": sp.get("phone", ""),
+                "hours": sp.get("hours", ""),
+                "capabilities": sp.get("capabilities", []),
+                "specialties": sp.get("specialties", []),
+                "service_areas": sp.get("service_areas", []),
+                "notes": sp.get("notes", ""),
+            },
+            "operator_style": operator_style,
+            "locked_memory_facts": locked_facts,
+            "candidate_facts": candidate_facts,
+            "recent_chat_turns": chat_turns,
+            "voice_turn_highlights": voice_turns,
+            "recent_cases": cases,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "counts": {
+                "locked_facts": len(locked_facts),
+                "candidate_facts": len(candidate_facts),
+                "chat_turns": len(chat_turns),
+                "voice_turns": len(voice_turns),
+                "cases": len(cases),
+            },
+        }
 
     @router.get("/brain/stats", response_model=StatsResp)
     async def brain_stats(shop_id: str = Query(...), _t: str = Depends(get_brain_token)):
