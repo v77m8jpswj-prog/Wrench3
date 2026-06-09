@@ -113,6 +113,12 @@ Already covered in this session:
 - [x] **NEW: `/api/brain/sync-facts` endpoint (bearer)** — Upserts memory_facts + candidate_facts for a shop's owner. Idempotent on normalized fact text. Resolves owner user_id from shop_id internally so script doesn't need to know prod's user mapping.
 - [x] **NEW: `/api/brain/sync-library` endpoint (bearer)** — Upserts library_items + library_chunks for a shop's owner. Idempotent on item.id. No embeddings required (library RAG is keyword-scored). Both endpoints smoke-tested on Preview (insert + dedup verified, smoke data cleaned up).
 - [x] **Twilio creds shipped to Bud** — Pre-flight verified against Twilio's account-info endpoint (HTTP 200, account active). Letter id `076455f9-e5a8-4e51-b891-8bc3f2742d11`. Includes SID/FROM/OWNER metadata + Basic auth credential + wire format + usage rules + TFV pending status.
+- [x] **Customer-SMS pipeline LIVE** — Bud-driven draft → confirm → send. Three new bearer endpoints in `brain.py`:
+   - `POST /api/brain/sms-draft` (Wrench composes via Claude Sonnet 4.5 with shop persona, returns draft_id + body + char/segment counts, 15-min TTL)
+   - `POST /api/brain/sms-send` (requires confirmed:true exactly, supports override_body, idempotent on draft_id, mirrors outbound into sms_messages for Doc's SMS log)
+   - `POST /api/brain/sms-cancel` (Doc said "DROP IT")
+   Smoke-tested end-to-end: draft passes, bad-confirm 400, cancel 200, post-cancel-send 409, bad-E.164 400. Drafted SMS body was clean ("Mrs. Jenkins, your 2018 Camry is ready..." 198 chars / 2 segments).
+- [x] **Bud SMS playbook letter** delivered (id `978cb586-9b39-4768-af16-88d5aab612e0`) — endpoint contracts, voice-flow rules, TTL/idempotency/TFV gotchas.
 
 ## Pending PROD redeploy (Mar 1)
 - [ ] PROD redeploy needed to expose `/api/brain/sync-facts` + `/api/brain/sync-library`. After deploy, run `cd /app/backend && python3 sync_preview_to_prod.py --apply` to push:

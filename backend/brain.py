@@ -29,7 +29,7 @@ import html as _html
 import httpx
 
 from email_mod import notify_shop
-from twilio_mod import notify_owner as twilio_notify_owner
+from twilio_mod import notify_owner as twilio_notify_owner, send_sms as twilio_send_sms
 
 log = logging.getLogger("datawrench.brain")
 
@@ -510,6 +510,229 @@ def make_brain_router(db, get_user):
             "items": {"inserted": items_inserted, "skipped_duplicate": items_skipped, "total_now": item_total},
             "chunks": {"inserted": chunks_inserted, "total_now": chunk_total},
         }
+
+    # ----- Bud-driven customer SMS (draft -> confirm -> send) -----
+    _SMS_DRAFT_TTL_MIN = 15  # drafts expire after 15 min un-sent
+
+    def _normalize_e164(num: str) -> str:
+        n = (num or "").strip().replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+        if not n.startswith("+"):
+            raise HTTPException(400, f"to_phone must be E.164 with leading +, got {num!r}")
+        if len(n) < 8 or len(n) > 16:
+            raise HTTPException(400, f"to_phone length invalid: {num!r}")
+        return n
+
+    def _sms_segments(body: str) -> int:
+        # Single-segment SMS: 160 GSM-7 chars / 70 UCS-2 chars.
+        # Multi-part: 153 / 67. Approximate (no encoding sniffing).
+        n = len(body)
+        if n <= 160:
+            return 1
+        return (n + 152) // 153
+
+    _SMS_DRAFT_SYSTEM = (
+        "You are Wrench, the shop voice for Dr. Underhood Automotive Specialist (Fort Smith, AR). "
+        "You are drafting a customer SMS on behalf of Doc (the owner). Compose ONE message body — "
+        "no preamble, no quotes, no markdown — that Doc will text to a customer. Rules:\n"
+        "  - Stay short: 160 chars target, hard cap 320 chars (2 SMS segments).\n"
+        "  - Professional but warm. Use 'we' / 'your truck' / 'your car'. Plain English.\n"
+        "  - Sign off with: -Dr. Underhood Automotive (only if room).\n"
+        "  - Never use emoji.\n"
+        "  - Never use markdown bolding (**), exclamation overload, or ALL CAPS shouting.\n"
+        "  - If Doc's intent is unclear, write the safest minimum-info message.\n"
+        "  - Do not invent prices, times, or part names not in Doc's intent.\n"
+        "  - Reply with the message body ONLY. No 'Here is the draft:' wrapper."
+    )
+
+    @router.post("/brain/sms-draft")
+    async def sms_draft(body: Dict[str, Any], _t: str = Depends(get_brain_token)):
+        """Bud calls this to have Wrench compose a customer SMS. Returns a
+        draft (not sent) and a draft_id. Bud reads it back to Doc, who says
+        'SEND IT' or 'FIX IT'. Then Bud calls /brain/sms-send.
+
+        Body:
+          { shop_id: str,
+            to_phone: '+1...',
+            intent: 'tell the camry lady her car is ready, pickup any time',
+            customer_hint?: 'Mrs. Jenkins, 2018 Camry, brakes',
+            tone?: 'friendly' | 'urgent' | 'apologetic' | 'professional' }
+        """
+        sid = (body.get("shop_id") or DEFAULT_SHOP_ID).strip()
+        to_phone = _normalize_e164(body.get("to_phone") or "")
+        intent = (body.get("intent") or "").strip()
+        if not intent:
+            raise HTTPException(400, "intent required (what should the SMS say?)")
+        if len(intent) > 600:
+            raise HTTPException(400, "intent too long (max 600 chars)")
+        customer_hint = (body.get("customer_hint") or "").strip()[:200]
+        tone = (body.get("tone") or "professional").strip().lower()
+        if tone not in ("friendly", "urgent", "apologetic", "professional"):
+            tone = "professional"
+
+        sp = await db.shop_profiles.find_one({"shop_id": sid}, {"_id": 0}) or {}
+        shop_name = sp.get("name") or "Dr. Underhood Automotive"
+
+        prompt = (
+            f"Shop: {shop_name}\n"
+            f"Tone target: {tone}\n"
+            f"Customer context (may be empty): {customer_hint or '(none provided)'}\n"
+            f"Doc's intent (what he wants the customer to know):\n  {intent}\n\n"
+            f"Write the customer-facing SMS body now (text only, no quotes)."
+        )
+
+        try:
+            from emergentintegrations.llm.chat import LlmChat, UserMessage
+            chat = LlmChat(
+                api_key=EMERGENT_LLM_KEY,
+                session_id=f"sms-draft-{uuid.uuid4().hex[:8]}",
+                system_message=_SMS_DRAFT_SYSTEM,
+            ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+            draft_text = await chat.send_message(UserMessage(text=prompt))
+            draft_text = (draft_text or "").strip().strip('"').strip("'")
+        except Exception as e:
+            log.warning(f"sms-draft LLM call failed: {e}")
+            raise HTTPException(502, f"SMS draft generation failed: {e}")
+
+        if not draft_text:
+            raise HTTPException(502, "LLM returned empty SMS draft")
+        # Hard safety: never send a draft over 320 chars without truncating
+        if len(draft_text) > 320:
+            draft_text = draft_text[:317].rstrip() + "..."
+
+        draft_id = str(uuid.uuid4())
+        now = datetime.now(timezone.utc)
+        expires = now + timedelta(minutes=_SMS_DRAFT_TTL_MIN)
+        await db.sms_drafts.insert_one({
+            "id": draft_id,
+            "shop_id": sid,
+            "to_phone": to_phone,
+            "intent": intent,
+            "customer_hint": customer_hint,
+            "tone": tone,
+            "body": draft_text,
+            "status": "pending",
+            "created_at": now.isoformat(),
+            "expires_at": expires.isoformat(),
+            "drafted_by": "bud-via-wrench",
+        })
+        return {
+            "draft_id": draft_id,
+            "to_phone": to_phone,
+            "body": draft_text,
+            "character_count": len(draft_text),
+            "segment_count": _sms_segments(draft_text),
+            "expires_at": expires.isoformat(),
+            "shop_name": shop_name,
+        }
+
+    @router.post("/brain/sms-send")
+    async def sms_send_confirmed(body: Dict[str, Any], _t: str = Depends(get_brain_token)):
+        """Fire a previously-drafted SMS once Doc has confirmed. Body:
+          { draft_id: str,
+            confirmed: true,                 # required, must be exactly true
+            override_body?: str }            # if Doc said 'send this instead'
+        Returns Twilio send result. Marks draft as 'sent' (idempotent — re-call
+        with same draft_id returns the original send record without re-firing)."""
+        draft_id = (body.get("draft_id") or "").strip()
+        if not draft_id:
+            raise HTTPException(400, "draft_id required")
+        if body.get("confirmed") is not True:
+            raise HTTPException(400, "confirmed must be exactly true (Doc must approve the draft)")
+
+        d = await db.sms_drafts.find_one({"id": draft_id}, {"_id": 0})
+        if not d:
+            raise HTTPException(404, f"draft not found: {draft_id}")
+
+        # Idempotency: re-call returns the original result
+        if d.get("status") == "sent":
+            return {
+                "ok": True,
+                "already_sent": True,
+                "draft_id": draft_id,
+                "twilio_ok": d.get("twilio_ok"),
+                "sent_at": d.get("sent_at"),
+                "to_phone": d.get("to_phone"),
+                "body": d.get("body"),
+            }
+        if d.get("status") in ("expired", "cancelled"):
+            raise HTTPException(409, f"draft is {d.get('status')} — re-draft via /brain/sms-draft")
+
+        # Expiry check
+        try:
+            exp = datetime.fromisoformat(d.get("expires_at"))
+            if datetime.now(timezone.utc) > exp:
+                await db.sms_drafts.update_one({"id": draft_id}, {"$set": {"status": "expired"}})
+                raise HTTPException(409, "draft expired — re-draft via /brain/sms-draft")
+        except HTTPException:
+            raise
+        except Exception:
+            pass  # malformed expires_at, allow send
+
+        override = (body.get("override_body") or "").strip()
+        final_body = override if override else d["body"]
+        if len(final_body) > 1600:
+            raise HTTPException(400, "final SMS body too long (max 1600 chars)")
+
+        to = d["to_phone"]
+        ok = await twilio_send_sms(to, final_body)
+        now = datetime.now(timezone.utc).isoformat()
+
+        await db.sms_drafts.update_one(
+            {"id": draft_id},
+            {"$set": {
+                "status": "sent" if ok else "send_failed",
+                "final_body": final_body,
+                "was_overridden": bool(override),
+                "twilio_ok": bool(ok),
+                "sent_at": now,
+            }},
+        )
+
+        # Mirror into sms_messages so it shows in Doc's SMS log alongside everything else
+        if ok:
+            try:
+                await db.sms_messages.insert_one({
+                    "id": str(uuid.uuid4()),
+                    "direction": "outbound",
+                    "from_number": os.environ.get("TWILIO_FROM_NUMBER", ""),
+                    "to_number": to,
+                    "body": final_body,
+                    "created_at": now,
+                    "read": True,
+                    "ok": True,
+                    "source": "bud-via-wrench",
+                    "draft_id": draft_id,
+                })
+            except Exception as e:
+                log.warning(f"sms_messages mirror insert failed: {e}")
+
+        return {
+            "ok": ok,
+            "draft_id": draft_id,
+            "to_phone": to,
+            "body": final_body,
+            "was_overridden": bool(override),
+            "sent_at": now if ok else None,
+            "twilio_ok": bool(ok),
+            "note": None if ok else "Twilio send returned False — check sms logs / TFV status",
+        }
+
+    @router.post("/brain/sms-cancel")
+    async def sms_cancel(body: Dict[str, Any], _t: str = Depends(get_brain_token)):
+        """Cancel a pending draft (Doc said 'FIX IT' or 'DROP IT'). Body: { draft_id }."""
+        draft_id = (body.get("draft_id") or "").strip()
+        if not draft_id:
+            raise HTTPException(400, "draft_id required")
+        r = await db.sms_drafts.update_one(
+            {"id": draft_id, "status": "pending"},
+            {"$set": {"status": "cancelled", "cancelled_at": datetime.now(timezone.utc).isoformat()}},
+        )
+        if r.matched_count == 0:
+            d = await db.sms_drafts.find_one({"id": draft_id}, {"_id": 0, "status": 1})
+            if not d:
+                raise HTTPException(404, f"draft not found: {draft_id}")
+            return {"ok": False, "draft_id": draft_id, "current_status": d.get("status")}
+        return {"ok": True, "draft_id": draft_id, "current_status": "cancelled"}
 
     # ----- Morning briefing (Bud pushes Doc's 7am digest into the shared brain) -----
     @router.post("/brain/morning-briefing")
