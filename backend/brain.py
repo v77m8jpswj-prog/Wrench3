@@ -541,6 +541,9 @@ def make_brain_router(db, get_user):
         "  - Never use markdown bolding (**), exclamation overload, or ALL CAPS shouting.\n"
         "  - If Doc's intent is unclear, write the safest minimum-info message.\n"
         "  - Do not invent prices, times, or part names not in Doc's intent.\n"
+        "  - If 'Prior SMS Doc has sent to THIS customer' samples are provided in the prompt, "
+        "MATCH that voice — terse if those were terse, warmer if those were warm. The samples "
+        "are Doc's actual past texts to this exact number, they are the source of truth on tone.\n"
         "  - Reply with the message body ONLY. No 'Here is the draft:' wrapper."
     )
 
@@ -572,10 +575,34 @@ def make_brain_router(db, get_user):
         sp = await db.shop_profiles.find_one({"shop_id": sid}, {"_id": 0}) or {}
         shop_name = sp.get("name") or "Dr. Underhood Automotive"
 
+        # Tone-match: pull the last 3 outbound SMS to this same number so the LLM
+        # can match Doc's prior voice with this specific customer. Short/curt with
+        # a fleet manager, warmer with a retail customer — whatever has worked before.
+        prior_cur = db.sms_messages.find(
+            {"direction": "outbound", "to_number": to_phone, "ok": True},
+            {"_id": 0, "body": 1, "created_at": 1},
+        ).sort("created_at", -1).limit(3)
+        prior_msgs = await prior_cur.to_list(3)
+        prior_block = ""
+        if prior_msgs:
+            # Reverse to oldest-first for natural reading
+            samples = list(reversed(prior_msgs))
+            lines = []
+            for i, p in enumerate(samples, 1):
+                body_sample = (p.get("body") or "").strip()
+                if body_sample:
+                    lines.append(f"  [prior #{i}, {p.get('created_at','')[:10]}] {body_sample}")
+            if lines:
+                prior_block = (
+                    "\nPrior SMS Doc has sent to THIS customer (match his voice/length to them):\n"
+                    + "\n".join(lines) + "\n"
+                )
+
         prompt = (
             f"Shop: {shop_name}\n"
             f"Tone target: {tone}\n"
             f"Customer context (may be empty): {customer_hint or '(none provided)'}\n"
+            f"{prior_block}"
             f"Doc's intent (what he wants the customer to know):\n  {intent}\n\n"
             f"Write the customer-facing SMS body now (text only, no quotes)."
         )
@@ -623,6 +650,8 @@ def make_brain_router(db, get_user):
             "segment_count": _sms_segments(draft_text),
             "expires_at": expires.isoformat(),
             "shop_name": shop_name,
+            "tone_matched": bool(prior_msgs),
+            "prior_sample_count": len(prior_msgs),
         }
 
     @router.post("/brain/sms-send")

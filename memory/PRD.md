@@ -119,6 +119,8 @@ Already covered in this session:
    - `POST /api/brain/sms-cancel` (Doc said "DROP IT")
    Smoke-tested end-to-end: draft passes, bad-confirm 400, cancel 200, post-cancel-send 409, bad-E.164 400. Drafted SMS body was clean ("Mrs. Jenkins, your 2018 Camry is ready..." 198 chars / 2 segments).
 - [x] **Bud SMS playbook letter** delivered (id `978cb586-9b39-4768-af16-88d5aab612e0`) — endpoint contracts, voice-flow rules, TTL/idempotency/TFV gotchas.
+- [x] **Tone-match upgrade** — `/brain/sms-draft` now pulls the last 3 outbound SMS Doc has sent to the same number (where ok=true) and feeds them to the composer as voice samples. System prompt explicitly tells the LLM to mirror the voice/length of those samples. Returns `tone_matched` + `prior_sample_count` in the response. Smoke-tested: same intent → 175 chars / 2 segments with no prior history, 103 chars / 1 segment when 2 terse priors were seeded. Bud notified (letter `5f300a60-b8f2-4925-b73b-8f034e304136`, threaded as reply to playbook letter).
+- [x] **TFV status confirmed with OG** — Round 37/38 exchange. TFV APPROVED 6/8/26, number +18557711264. Approval letter (case #, daily cap, content rules) still pending Bud's forward. Per OG's recommendation, Bud gate stays on verified-caller-IDs-only until the letter lands. Two consent pages live (drunderhood.com/sms-terms + drunderhood.shop/sms-consent) — needs Doc to confirm which is canonical / which was submitted to Twilio.
 
 ## Pending PROD redeploy (Mar 1)
 - [ ] PROD redeploy needed to expose `/api/brain/sync-facts` + `/api/brain/sync-library`. After deploy, run `cd /app/backend && python3 sync_preview_to_prod.py --apply` to push:
