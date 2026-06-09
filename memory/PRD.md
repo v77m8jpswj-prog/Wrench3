@@ -107,8 +107,19 @@ Already covered in this session:
   - Tunable via env vars: `SCHED_CRAWL_INTERVAL_SEC`, `SCHED_HARVEST_INTERVAL_SEC`, `SCHED_DIGEST_CHECK_INTERVAL_SEC`
 
 ## Shipped Mar 1, 2026
-- [x] **`/api/brain/operator-profile` endpoint LIVE** — One-shot operator profile dump for peer agents (Bud, OG). Returns shop_profile + operator_style + locked_memory_facts + candidate_facts + recent_chat_turns + voice_turn_highlights + recent_cases + window/counts. Time-windowed (default 7d, no count cap, max_messages safety ceiling 5000). Accepts master ingress token OR Bud's revocable peer token (`BRAIN_PEER_TOKEN_BUD`). Tested on Preview (HTTP 200, 27 locked facts) and Prod (HTTP 200, 9 locked facts, 8 cases — old chat_limit contract until Doc deploys).
-- [x] **Bud access letter shipped via pre-flight credential pipe** — `/api/agent-mail/send-credential` ran the verify against the live preview endpoint (HTTP 200, credential length 43), then delivered the letter to Bud's inbox (id `aedf7398-4377-4aa9-8d5f-df1147afcc7e`). Letter includes endpoint contract, query-param reference, sample curl, persona tone-contract, and Bud-scoped revocable token.
+- [x] **`/api/brain/operator-profile` endpoint LIVE** — One-shot operator profile dump for peer agents (Bud, OG). Returns shop_profile + operator_style + locked_memory_facts + candidate_facts + recent_chat_turns + voice_turn_highlights + recent_cases + window/counts. Time-windowed (default 7d, no count cap, max_messages safety ceiling 5000). Accepts master ingress token OR Bud's revocable peer token (`BRAIN_PEER_TOKEN_BUD`). Deployed to PROD (verified — 525 chat turns in 30d window, 9 locked facts on prod corpus).
+- [x] **Bud access letter shipped via pre-flight credential pipe** — Verify against live preview endpoint passed HTTP 200, letter delivered to Bud's inbox (id `aedf7398-4377-4aa9-8d5f-df1147afcc7e`).
+- [x] **PROD brain_cases sync (8 → 22)** — `/app/backend/sync_preview_to_prod.py` migration script. Pushes Preview cases through the existing `/api/brain/learn` endpoint (idempotent on case_id, re-embeds server-side, no Prod DB creds needed). Filters TEST_p1 noise. Pushed Tahoe RO 19344 + 13 other real cases — all 14/14 succeeded. `/brain/ask` on Prod returns confidence=high for Tahoe-symptom query.
+- [x] **NEW: `/api/brain/sync-facts` endpoint (bearer)** — Upserts memory_facts + candidate_facts for a shop's owner. Idempotent on normalized fact text. Resolves owner user_id from shop_id internally so script doesn't need to know prod's user mapping.
+- [x] **NEW: `/api/brain/sync-library` endpoint (bearer)** — Upserts library_items + library_chunks for a shop's owner. Idempotent on item.id. No embeddings required (library RAG is keyword-scored). Both endpoints smoke-tested on Preview (insert + dedup verified, smoke data cleaned up).
+- [x] **Twilio creds shipped to Bud** — Pre-flight verified against Twilio's account-info endpoint (HTTP 200, account active). Letter id `076455f9-e5a8-4e51-b891-8bc3f2742d11`. Includes SID/FROM/OWNER metadata + Basic auth credential + wire format + usage rules + TFV pending status.
+
+## Pending PROD redeploy (Mar 1)
+- [ ] PROD redeploy needed to expose `/api/brain/sync-facts` + `/api/brain/sync-library`. After deploy, run `cd /app/backend && python3 sync_preview_to_prod.py --apply` to push:
+   - memory_facts: 27 (re-run is dedup-safe)
+   - candidate_facts: 21
+   - library: 11 items / 30 chunks
+   (brain_cases already in sync — 22/22.)
 
 ## Pending / open items after overnight session
 - [ ] Twilio toll-free TFV — pending review (Twilio side, ETA 1-3 days from 5/27 submission)

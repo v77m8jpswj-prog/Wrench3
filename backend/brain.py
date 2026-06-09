@@ -366,6 +366,151 @@ def make_brain_router(db, get_user):
         total = await db.brain_cases.count_documents({"shop_id": shop_id})
         return LearnResp(case_id_in_brain=case_id, ingested=True, embedded=bool(emb), total_cases_in_brain_now=total)
 
+    # ----- Cross-env sync (Preview → Prod) for memory_facts + library -----
+    async def _resolve_owner_id(sid: str) -> str:
+        owner = await db.users.find_one({"shop_id": sid, "role": "owner"}, {"_id": 0, "id": 1}) \
+                or await db.users.find_one({"role": "owner"}, {"_id": 0, "id": 1})
+        if not owner:
+            raise HTTPException(404, f"No owner user found for shop_id={sid}")
+        return owner["id"]
+
+    @router.post("/brain/sync-facts")
+    async def sync_facts(body: Dict[str, Any], _t: str = Depends(get_brain_token)):
+        """Bearer-protected upsert of memory_facts + candidate_facts for a shop's owner.
+        Idempotent: dedupes by normalized fact text within a user. Used by the
+        Preview→Prod migration script. Body:
+          { shop_id: str,
+            memory_facts: [{fact: str, created_at?: str}, ...],
+            candidate_facts: [{fact: str, category?: str, confidence?: float,
+                              seen_count?: int, status?: str, created_at?: str}, ...] }
+        """
+        sid = (body.get("shop_id") or DEFAULT_SHOP_ID).strip()
+        owner_id = await _resolve_owner_id(sid)
+
+        # Build set of existing normalized facts so we don't dupe
+        existing_mem = {((m.get("fact") or "").strip().lower())
+                       async for m in db.memory_facts.find({"user_id": owner_id}, {"_id": 0, "fact": 1})}
+        existing_cand = {((c.get("norm") or (c.get("fact") or "").strip().lower()))
+                        async for c in db.candidate_facts.find({"user_id": owner_id}, {"_id": 0, "fact": 1, "norm": 1})}
+
+        mf_inserted = 0
+        mf_skipped = 0
+        for item in (body.get("memory_facts") or []):
+            fact = (item.get("fact") or "").strip()
+            if not fact:
+                continue
+            norm = fact.lower()
+            if norm in existing_mem:
+                mf_skipped += 1
+                continue
+            await db.memory_facts.insert_one({
+                "id": item.get("id") or str(uuid.uuid4()),
+                "user_id": owner_id,
+                "fact": fact,
+                "created_at": item.get("created_at") or datetime.now(timezone.utc).isoformat(),
+                "source": "sync",
+                "is_locked": fact.startswith("[LOCKED]"),
+            })
+            existing_mem.add(norm)
+            mf_inserted += 1
+
+        cf_inserted = 0
+        cf_skipped = 0
+        for item in (body.get("candidate_facts") or []):
+            fact = (item.get("fact") or "").strip()
+            if not fact:
+                continue
+            norm = (item.get("norm") or fact.lower()).strip()
+            if norm in existing_cand or norm in existing_mem:
+                cf_skipped += 1
+                continue
+            await db.candidate_facts.insert_one({
+                "id": item.get("id") or str(uuid.uuid4()),
+                "user_id": owner_id,
+                "fact": fact,
+                "norm": norm,
+                "category": item.get("category") or "general",
+                "confidence": float(item.get("confidence") or 0.7),
+                "seen_count": int(item.get("seen_count") or 1),
+                "status": item.get("status") or "pending",
+                "sources": item.get("sources") or [],
+                "created_at": item.get("created_at") or datetime.now(timezone.utc).isoformat(),
+            })
+            existing_cand.add(norm)
+            cf_inserted += 1
+
+        mem_total = await db.memory_facts.count_documents({"user_id": owner_id})
+        cand_total = await db.candidate_facts.count_documents({"user_id": owner_id})
+        return {
+            "ok": True,
+            "owner_id": owner_id,
+            "memory_facts": {"inserted": mf_inserted, "skipped_duplicate": mf_skipped, "total_now": mem_total},
+            "candidate_facts": {"inserted": cf_inserted, "skipped_duplicate": cf_skipped, "total_now": cand_total},
+        }
+
+    @router.post("/brain/sync-library")
+    async def sync_library(body: Dict[str, Any], _t: str = Depends(get_brain_token)):
+        """Bearer-protected upsert of library_items + library_chunks for a shop's
+        owner. Idempotent on item.id (skip if it already exists). Body:
+          { shop_id: str,
+            items: [{id, name, kind, size, status, chunk_count, created_at,
+                     chunks: [{id, item_id, source, text, created_at}, ...]}, ...] }
+        Chunks are inserted alongside their item. Embeddings not required —
+        library retrieval is keyword-scored, not vector-scored.
+        """
+        sid = (body.get("shop_id") or DEFAULT_SHOP_ID).strip()
+        owner_id = await _resolve_owner_id(sid)
+
+        existing_items = {x["id"]
+                         async for x in db.library_items.find({"user_id": owner_id}, {"_id": 0, "id": 1})}
+
+        items_inserted = 0
+        items_skipped = 0
+        chunks_inserted = 0
+        for it in (body.get("items") or []):
+            item_id = it.get("id") or str(uuid.uuid4())
+            if item_id in existing_items:
+                items_skipped += 1
+                continue
+            await db.library_items.insert_one({
+                "id": item_id,
+                "user_id": owner_id,
+                "name": it.get("name") or "synced-item",
+                "kind": it.get("kind") or "txt",
+                "size": int(it.get("size") or 0),
+                "status": it.get("status") or "ready",
+                "chunk_count": int(it.get("chunk_count") or 0),
+                "source_tier": it.get("source_tier"),
+                "source_label": it.get("source_label"),
+                "created_at": it.get("created_at") or datetime.now(timezone.utc).isoformat(),
+                "source": "sync",
+            })
+            items_inserted += 1
+            existing_items.add(item_id)
+
+            for ch in (it.get("chunks") or []):
+                txt = (ch.get("text") or "").strip()
+                if not txt:
+                    continue
+                await db.library_chunks.insert_one({
+                    "id": ch.get("id") or str(uuid.uuid4()),
+                    "user_id": owner_id,
+                    "item_id": item_id,
+                    "source": ch.get("source") or it.get("name") or "synced",
+                    "text": txt,
+                    "created_at": ch.get("created_at") or datetime.now(timezone.utc).isoformat(),
+                })
+                chunks_inserted += 1
+
+        item_total = await db.library_items.count_documents({"user_id": owner_id})
+        chunk_total = await db.library_chunks.count_documents({"user_id": owner_id})
+        return {
+            "ok": True,
+            "owner_id": owner_id,
+            "items": {"inserted": items_inserted, "skipped_duplicate": items_skipped, "total_now": item_total},
+            "chunks": {"inserted": chunks_inserted, "total_now": chunk_total},
+        }
+
     # ----- Morning briefing (Bud pushes Doc's 7am digest into the shared brain) -----
     @router.post("/brain/morning-briefing")
     async def post_morning_briefing(body: Dict[str, Any], _t: str = Depends(get_brain_token)):

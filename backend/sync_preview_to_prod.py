@@ -100,14 +100,17 @@ async def main(apply: bool, limit: int | None):
     print(f"MODE:        {'APPLY (writing to prod)' if apply else 'DRY-RUN'}")
     print()
 
-    # 1) Pull preview cases
     pclient = AsyncIOMotorClient(PREVIEW_DB_URL)
     pdb = pclient[PREVIEW_DB_NAME]
+
+    # ============================================================
+    # PART 1 — brain_cases via /brain/learn (idempotent on case_id)
+    # ============================================================
+    print("==[ BRAIN_CASES ]" + "=" * 50)
     cur = pdb.brain_cases.find({"shop_id": SHOP_ID}, {"_id": 0, "embedding": 0}).sort("created_at", -1)
     preview_cases = await cur.to_list(10000)
     print(f"PREVIEW brain_cases (shop={SHOP_ID}): {len(preview_cases)}")
 
-    # 2) Pull prod state via API
     try:
         prod_state = await fetch_prod_state()
     except Exception as e:
@@ -116,68 +119,120 @@ async def main(apply: bool, limit: int | None):
     print(f"PROD brain_cases (via API):           {prod_state['total']}")
     prod_ids = prod_state["ids"]
 
-    # 3) Diff
     TEST_MARKERS = ("TEST_p1", "TEST_P1", "smoke test", "draft case test")
     to_push = []
     skipped_test = 0
     for c in preview_cases:
         cid = c.get("id") or c.get("case_id")
         if not cid:
-            print(f"  [skip:no-id] symptom={c.get('symptom','')[:60]!r}")
             continue
         if cid in prod_ids:
             continue
         sym = c.get("symptom") or ""
         if any(m in sym for m in TEST_MARKERS):
             skipped_test += 1
-            print(f"  [skip:test-data] {cid[:8]}  {sym[:80]!r}")
             continue
         to_push.append(c)
-    if skipped_test:
-        print(f"  ({skipped_test} test-marker case(s) filtered out)")
-    print(f"MISSING ON PROD:                      {len(to_push)}")
+    print(f"MISSING ON PROD:                      {len(to_push)} (filtered {skipped_test} test rows)")
+
     if limit is not None:
         to_push = to_push[:limit]
-        print(f"LIMIT applied — will process:         {len(to_push)}")
+
+    if to_push and apply:
+        async with httpx.AsyncClient() as client:
+            ok = 0
+            for c in to_push:
+                payload = case_to_learn_payload(c)
+                success, msg = await push_case(client, payload)
+                tag = "OK " if success else "FAIL"
+                print(f"  [{tag}] {c.get('id','')[:8]}  {msg}")
+                if success:
+                    ok += 1
+            print(f"  pushed {ok}/{len(to_push)}")
+    elif to_push:
+        for c in to_push:
+            v = c.get("vehicle") or {}
+            veh = f"{v.get('year','')} {v.get('make','')} {v.get('model','')}".strip()
+            print(f"  - {c.get('id','')[:8]}  {veh:35s}  {(c.get('symptom') or '')[:80]!r}")
+    else:
+        print("  nothing to sync — prod is current.")
     print()
 
-    if not to_push:
-        print("Nothing to sync — prod is current.")
-        return
+    # ============================================================
+    # PART 2 — memory_facts + candidate_facts via /brain/sync-facts
+    # ============================================================
+    print("==[ MEMORY_FACTS + CANDIDATE_FACTS ]" + "=" * 30)
+    mem = await pdb.memory_facts.find({}, {"_id": 0}).to_list(10000)
+    cand = await pdb.candidate_facts.find({}, {"_id": 0}).to_list(10000)
+    print(f"PREVIEW memory_facts:                 {len(mem)}")
+    print(f"PREVIEW candidate_facts:              {len(cand)}")
+    if not apply:
+        # preview a sample
+        for m in mem[:5]:
+            print(f"  - mem: {(m.get('fact') or '')[:100]!r}")
+        for c in cand[:3]:
+            print(f"  - cand({c.get('category','?')}, conf={c.get('confidence','?')}): {(c.get('fact') or '')[:90]!r}")
+    if apply and (mem or cand):
+        payload = {
+            "shop_id": SHOP_ID,
+            "memory_facts": [{"id": m.get("id"), "fact": m.get("fact"), "created_at": m.get("created_at")} for m in mem],
+            "candidate_facts": [
+                {
+                    "id": c.get("id"), "fact": c.get("fact"), "norm": c.get("norm"),
+                    "category": c.get("category"), "confidence": c.get("confidence"),
+                    "seen_count": c.get("seen_count"), "status": c.get("status"),
+                    "sources": c.get("sources"), "created_at": c.get("created_at"),
+                } for c in cand
+            ],
+        }
+        async with httpx.AsyncClient(timeout=60) as client:
+            r = await client.post(
+                f"{PROD_URL}/api/brain/sync-facts",
+                headers={"Authorization": f"Bearer {BRAIN_TOKEN}", "Content-Type": "application/json"},
+                json=payload,
+            )
+        if r.status_code != 200:
+            print(f"  FAIL HTTP {r.status_code}: {r.text[:300]}")
+        else:
+            j = r.json()
+            print(f"  OK  mem inserted={j['memory_facts']['inserted']} skipped={j['memory_facts']['skipped_duplicate']} total_now={j['memory_facts']['total_now']}")
+            print(f"      cand inserted={j['candidate_facts']['inserted']} skipped={j['candidate_facts']['skipped_duplicate']} total_now={j['candidate_facts']['total_now']}")
+    print()
 
-    # 4) Preview each
-    for c in to_push:
-        v = c.get("vehicle") or {}
-        veh = f"{v.get('year','')} {v.get('make','')} {v.get('model','')} {v.get('engine','')}".strip()
-        sym = (c.get("symptom") or "")[:90]
-        print(f"  - {c.get('id')[:8]}  {veh:50s}  outcome={c.get('outcome','FIXED'):10s}  {sym!r}")
+    # ============================================================
+    # PART 3 — library_items + library_chunks via /brain/sync-library
+    # ============================================================
+    print("==[ LIBRARY ]" + "=" * 53)
+    items = await pdb.library_items.find({}, {"_id": 0}).to_list(10000)
+    items_with_chunks = []
+    for it in items:
+        chunks = await pdb.library_chunks.find({"item_id": it["id"]}, {"_id": 0}).to_list(5000)
+        it_copy = dict(it)
+        it_copy["chunks"] = chunks
+        items_with_chunks.append(it_copy)
+    total_chunks = sum(len(it["chunks"]) for it in items_with_chunks)
+    print(f"PREVIEW library_items:                {len(items_with_chunks)} ({total_chunks} chunks)")
+    if not apply:
+        for it in items_with_chunks[:10]:
+            print(f"  - {it.get('id','')[:8]}  kind={it.get('kind'):6s} chunks={len(it.get('chunks',[])):3d}  name={it.get('name','')[:60]!r}")
+    if apply and items_with_chunks:
+        payload = {"shop_id": SHOP_ID, "items": items_with_chunks}
+        async with httpx.AsyncClient(timeout=120) as client:
+            r = await client.post(
+                f"{PROD_URL}/api/brain/sync-library",
+                headers={"Authorization": f"Bearer {BRAIN_TOKEN}", "Content-Type": "application/json"},
+                json=payload,
+            )
+        if r.status_code != 200:
+            print(f"  FAIL HTTP {r.status_code}: {r.text[:300]}")
+        else:
+            j = r.json()
+            print(f"  OK  items inserted={j['items']['inserted']} skipped={j['items']['skipped_duplicate']} total_now={j['items']['total_now']}")
+            print(f"      chunks inserted={j['chunks']['inserted']} total_now={j['chunks']['total_now']}")
     print()
 
     if not apply:
-        print("DRY-RUN — not pushing. Re-run with --apply to actually sync.")
-        return
-
-    # 5) Push
-    ok = 0
-    fail = []
-    async with httpx.AsyncClient() as client:
-        for c in to_push:
-            payload = case_to_learn_payload(c)
-            success, msg = await push_case(client, payload)
-            tag = "OK " if success else "FAIL"
-            print(f"  [{tag}] {c.get('id','')[:8]}  {msg}")
-            if success:
-                ok += 1
-            else:
-                fail.append((c.get("id"), msg))
-    print()
-    print(f"DONE — pushed {ok}/{len(to_push)}. Failures: {len(fail)}")
-    for cid, msg in fail:
-        print(f"  FAIL {cid}: {msg}")
-
-    # 6) Verify final prod count
-    final = await fetch_prod_state()
-    print(f"PROD brain_cases now:                 {final['total']}")
+        print("DRY-RUN — re-run with --apply to actually sync all three streams.")
 
 
 if __name__ == "__main__":
