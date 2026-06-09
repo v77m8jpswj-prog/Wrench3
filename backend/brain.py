@@ -575,27 +575,48 @@ def make_brain_router(db, get_user):
         sp = await db.shop_profiles.find_one({"shop_id": sid}, {"_id": 0}) or {}
         shop_name = sp.get("name") or "Dr. Underhood Automotive"
 
-        # Tone-match: pull the last 3 outbound SMS to this same number so the LLM
-        # can match Doc's prior voice with this specific customer. Short/curt with
-        # a fleet manager, warmer with a retail customer — whatever has worked before.
-        prior_cur = db.sms_messages.find(
+        # Tone-match: pull the last 3 outbound SMS Doc has sent to this number
+        # (voice samples) AND the last 2 inbound SMS the customer has sent us
+        # (question/context Wrench should respond to). Both filter to ok=true to
+        # avoid polluting with failed sends.
+        prior_out_cur = db.sms_messages.find(
             {"direction": "outbound", "to_number": to_phone, "ok": True},
             {"_id": 0, "body": 1, "created_at": 1},
         ).sort("created_at", -1).limit(3)
-        prior_msgs = await prior_cur.to_list(3)
+        prior_out = await prior_out_cur.to_list(3)
+
+        prior_in_cur = db.sms_messages.find(
+            {"direction": "inbound", "from_number": to_phone},
+            {"_id": 0, "body": 1, "created_at": 1},
+        ).sort("created_at", -1).limit(2)
+        prior_in = await prior_in_cur.to_list(2)
+
         prior_block = ""
-        if prior_msgs:
-            # Reverse to oldest-first for natural reading
-            samples = list(reversed(prior_msgs))
+        if prior_out:
+            samples = list(reversed(prior_out))
             lines = []
             for i, p in enumerate(samples, 1):
                 body_sample = (p.get("body") or "").strip()
                 if body_sample:
                     lines.append(f"  [prior #{i}, {p.get('created_at','')[:10]}] {body_sample}")
             if lines:
-                prior_block = (
+                prior_block += (
                     "\nPrior SMS Doc has sent to THIS customer (match his voice/length to them):\n"
                     + "\n".join(lines) + "\n"
+                )
+
+        if prior_in:
+            samples_in = list(reversed(prior_in))
+            lines_in = []
+            for i, p in enumerate(samples_in, 1):
+                body_sample = (p.get("body") or "").strip()
+                if body_sample:
+                    lines_in.append(f"  [customer wrote, {p.get('created_at','')[:10]}] {body_sample}")
+            if lines_in:
+                prior_block += (
+                    "\nRecent inbound SMS from this customer (your draft should answer "
+                    "or acknowledge what they said, if relevant to Doc's intent):\n"
+                    + "\n".join(lines_in) + "\n"
                 )
 
         prompt = (
@@ -650,8 +671,10 @@ def make_brain_router(db, get_user):
             "segment_count": _sms_segments(draft_text),
             "expires_at": expires.isoformat(),
             "shop_name": shop_name,
-            "tone_matched": bool(prior_msgs),
-            "prior_sample_count": len(prior_msgs),
+            "tone_matched": bool(prior_out),
+            "prior_sample_count": len(prior_out),
+            "inbound_context_used": bool(prior_in),
+            "inbound_sample_count": len(prior_in),
         }
 
     @router.post("/brain/sms-send")
