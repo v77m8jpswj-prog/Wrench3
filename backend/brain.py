@@ -1912,6 +1912,101 @@ ul {{ padding-left: 22px; }}
     class LeadStatusReq(BaseModel):
         status: Literal["new", "contacted", "won", "lost"] = "new"
 
+    @router.post("/leads/{lead_id}/email")
+    async def email_lead(lead_id: str, body: Dict[str, Any], user=Depends(get_user)):
+        """Doc taps EMAIL on a lead -> proxies to OG's /api/email/send (Resend
+        under the hood). Body: { subject: str, text: str }. OG endpoint URL +
+        bearer token come from env. Marks lead 'contacted' on success."""
+        sid = user.get("shop_id") or DEFAULT_SHOP_ID
+        lead = await db.leads.find_one({"id": lead_id, "shop_id": sid}, {"_id": 0})
+        if not lead:
+            raise HTTPException(404, "Lead not found.")
+
+        contact = (lead.get("contact") or "").strip()
+        if "@" not in contact:
+            raise HTTPException(400, f"Lead contact '{contact}' is not an email — use the TEXT button instead.")
+
+        subject = (body.get("subject") or "").strip()
+        text = (body.get("text") or "").strip()
+        if not subject:
+            raise HTTPException(400, "subject required")
+        if not text:
+            raise HTTPException(400, "text required")
+        if len(text) > 20000:
+            raise HTTPException(400, "email body too long (max 20000 chars)")
+
+        og_url = os.environ.get("OG_EMAIL_SEND_URL", "https://auto-ai-glasses.emergent.host/api/email/send")
+        brain_token = os.environ.get("BRAIN_INGRESS_TOKEN", "")
+
+        payload = {
+            "to": contact,
+            "subject": subject,
+            "text": text,
+            "reply_to": "doc@drunderhood.com",
+            "from_email": "doc@drunderhood.com",
+        }
+
+        provider_id = None
+        provider_error = None
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=30) as c:
+                r = await c.post(
+                    og_url,
+                    headers={"Authorization": f"Bearer {brain_token}", "Content-Type": "application/json"},
+                    json=payload,
+                )
+            if r.status_code == 200:
+                jr = r.json()
+                provider_id = jr.get("id") or jr.get("message_id")
+            elif r.status_code == 405:
+                provider_error = "OG's /api/email/send endpoint isn't accepting POST yet (405). The Resend wiring on OG's side isn't live — message saved as a draft, will retry when OG flips it on."
+            elif r.status_code == 401:
+                provider_error = "OG rejected the bearer token (401). Brain token may have rotated."
+            elif r.status_code == 404:
+                provider_error = "OG's email endpoint is missing (404). Send pipe not deployed on OG's side."
+            elif r.status_code == 503:
+                provider_error = "OG email endpoint says: not configured (503)."
+            else:
+                provider_error = f"OG email pipe HTTP {r.status_code}: {r.text[:200]}"
+        except Exception as e:
+            provider_error = f"network error reaching OG: {e}"
+
+        ok = bool(provider_id) and not provider_error
+        now = datetime.now(timezone.utc).isoformat()
+
+        # Log everything to email_outbox — sent or not, Doc can audit + retry later
+        await db.email_outbox.insert_one({
+            "id": str(uuid.uuid4()),
+            "lead_id": lead_id,
+            "to": contact,
+            "from": "doc@drunderhood.com",
+            "subject": subject,
+            "text": text,
+            "created_at": now,
+            "status": "sent" if ok else "queued_pending_pipe",
+            "provider": "og-resend-proxy",
+            "provider_id": provider_id,
+            "provider_error": provider_error,
+            "sent_by": user.get("email", "owner"),
+        })
+
+        if ok:
+            await db.leads.update_one(
+                {"id": lead_id},
+                {"$set": {"status": "contacted", "doc_reply_at": now}},
+            )
+
+        return {
+            "ok": ok,
+            "to": contact,
+            "subject": subject,
+            "provider_id": provider_id,
+            "provider_error": provider_error,
+            "sent_at": now if ok else None,
+            "note": None if ok else "Saved as draft. The email send pipe isn't live yet on the other side — your text is queued in email_outbox and will go out once it is.",
+        }
+
     @router.patch("/leads/{lead_id}")
     async def update_lead(lead_id: str, body: LeadStatusReq, user=Depends(get_user)):
         sid = user.get("shop_id") or DEFAULT_SHOP_ID

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { Phone, Mail, Truck, Clock, MessageSquare, Check, X as XIcon, RefreshCw, Send, Loader2 } from "lucide-react";
+import { Phone, Mail, Truck, Clock, MessageSquare, Check, X as XIcon, RefreshCw, Send, Loader2, Copy } from "lucide-react";
 import api from "@/api";
 
 const STATUS_COLORS = {
@@ -88,10 +88,120 @@ function TextComposer({ lead, onClose, onSent }) {
   );
 }
 
+function EmailComposer({ lead, onClose, onSent }) {
+  const [subject, setSubject] = useState(
+    lead.vehicle ? `Re: your ${lead.vehicle}` : `Re: your inquiry`
+  );
+  const [text, setText] = useState("");
+  const [sending, setSending] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [msgKind, setMsgKind] = useState("err");
+
+  const send = async () => {
+    if (!subject.trim() || !text.trim()) { setMsg("Subject and body required."); setMsgKind("err"); return; }
+    setSending(true); setMsg("");
+    try {
+      const r = await api.post(`/leads/${lead.id}/email`, { subject, text });
+      if (r.data?.ok) {
+        onSent(r.data);
+        onClose();
+      } else {
+        setMsgKind("warn");
+        setMsg(r.data?.note || r.data?.provider_error || "Email send pipe not live yet — message saved as draft.");
+      }
+    } catch (e) {
+      setMsgKind("err");
+      setMsg(e?.response?.data?.detail || "Send failed.");
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <div className="mt-3 border-t border-line pt-3" data-testid={`lead-email-composer-${lead.id}`}>
+      <div className="text-[10px] uppercase tracking-widest text-ink-3 mb-2">
+        Emailing <span className="text-amber2">{lead.contact}</span> · {lead.name} · from doc@drunderhood.com
+      </div>
+      <input
+        type="text"
+        value={subject}
+        onChange={(e) => setSubject(e.target.value)}
+        placeholder="Subject"
+        maxLength={200}
+        className="w-full bg-bg-3 border border-line text-ink text-sm p-2 mb-2 focus:outline-none focus:border-rust"
+        data-testid={`lead-email-subject-${lead.id}`}
+      />
+      <textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder="Write your reply. Plain English. They'll see it as a real email from your shop address."
+        rows={6}
+        maxLength={20000}
+        className="w-full bg-bg-3 border border-line text-ink text-sm p-2 focus:outline-none focus:border-rust"
+        data-testid={`lead-email-input-${lead.id}`}
+        autoFocus
+      />
+      <div className="flex items-center justify-between mt-2 gap-2">
+        <div className="text-[10px] text-ink-3 uppercase tracking-widest">
+          {text.length} chars
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={onClose}
+            disabled={sending}
+            className="btn-ghost text-xs"
+            data-testid={`lead-email-cancel-${lead.id}`}
+          >
+            CANCEL
+          </button>
+          <button
+            onClick={send}
+            disabled={sending || !text.trim() || !subject.trim()}
+            className="btn-ghost text-xs flex items-center gap-1 border-rust text-rust"
+            data-testid={`lead-email-send-${lead.id}`}
+          >
+            {sending ? <Loader2 size={11} className="animate-spin"/> : <Send size={11}/>}
+            {sending ? "SENDING..." : "SEND EMAIL"}
+          </button>
+        </div>
+      </div>
+      {msg && (
+        <div className={`mt-2 text-xs ${msgKind === "err" ? "text-rust" : "text-amber2"}`} data-testid={`lead-email-msg-${lead.id}`}>
+          {msg}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ContactDisplay({ contact, isPhone }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(contact); setCopied(true); setTimeout(() => setCopied(false), 1500); }
+    catch {/*ignore*/}
+  };
+  if (isPhone) {
+    return (
+      <a href={`tel:${contact}`} className="text-sm text-ink hover:text-rust flex items-center gap-1.5">
+        <Phone size={12}/>{contact}
+      </a>
+    );
+  }
+  // For email: NO mailto. Show + copy-to-clipboard button.
+  return (
+    <button onClick={copy} className="text-sm text-ink hover:text-rust flex items-center gap-1.5" data-testid="lead-copy-email">
+      <Mail size={12}/>{contact}
+      <Copy size={10} className="opacity-50"/>
+      {copied && <span className="text-[10px] text-ok ml-1">COPIED</span>}
+    </button>
+  );
+}
+
 export default function Leads() {
   const [leads, setLeads] = useState([]);
   const [busy, setBusy] = useState(false);
   const [textingId, setTextingId] = useState(null);
+  const [emailingId, setEmailingId] = useState(null);
 
   const refresh = useCallback(async () => {
     setBusy(true);
@@ -148,9 +258,7 @@ export default function Leads() {
                     <span className="text-[10px] text-ink-3 uppercase tracking-widest flex items-center gap-1"><Clock size={10}/>{timeAgo(l.created_at)}</span>
                   </div>
                   <div className="text-base font-bold text-amber2 mt-1">{l.name}</div>
-                  <a href={isPhone(l.contact) ? `tel:${l.contact}` : `mailto:${l.contact}`} className="text-sm text-ink hover:text-rust flex items-center gap-1.5">
-                    {isPhone(l.contact) ? <Phone size={12}/> : <Mail size={12}/>}{l.contact}
-                  </a>
+                  <ContactDisplay contact={l.contact} isPhone={isPhone(l.contact)} />
                   {l.vehicle && (
                     <div className="text-xs text-ink-2 mt-0.5 flex items-center gap-1"><Truck size={11}/>{l.vehicle}</div>
                   )}
@@ -163,11 +271,20 @@ export default function Leads() {
                 <div className="flex gap-2 mt-3 flex-wrap">
                   {isPhone(l.contact) && textingId !== l.id && (
                     <button
-                      onClick={() => setTextingId(l.id)}
+                      onClick={() => { setTextingId(l.id); setEmailingId(null); }}
                       className="btn-ghost text-xs flex items-center gap-1 border-rust text-rust"
                       data-testid={`lead-text-${l.id}`}
                     >
                       <Send size={11}/>TEXT
+                    </button>
+                  )}
+                  {!isPhone(l.contact) && emailingId !== l.id && (
+                    <button
+                      onClick={() => { setEmailingId(l.id); setTextingId(null); }}
+                      className="btn-ghost text-xs flex items-center gap-1 border-rust text-rust"
+                      data-testid={`lead-email-${l.id}`}
+                    >
+                      <Mail size={11}/>EMAIL
                     </button>
                   )}
                   {l.status === "new" && (
@@ -187,6 +304,13 @@ export default function Leads() {
                 <TextComposer
                   lead={l}
                   onClose={() => setTextingId(null)}
+                  onSent={refresh}
+                />
+              )}
+              {emailingId === l.id && (
+                <EmailComposer
+                  lead={l}
+                  onClose={() => setEmailingId(null)}
                   onSent={refresh}
                 />
               )}
