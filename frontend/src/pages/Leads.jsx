@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from "react";
-import { Phone, Mail, Truck, Clock, MessageSquare, Check, X as XIcon, RefreshCw } from "lucide-react";
+import React, { useCallback, useEffect, useState } from "react";
+import { Phone, Mail, Truck, Clock, MessageSquare, Check, X as XIcon, RefreshCw, Send, Loader2 } from "lucide-react";
 import api from "@/api";
 
 const STATUS_COLORS = {
@@ -18,24 +18,107 @@ function timeAgo(iso) {
   return `${Math.floor(s/86400)}d`;
 }
 
+function TextComposer({ lead, onClose, onSent }) {
+  const [body, setBody] = useState("");
+  const [sending, setSending] = useState(false);
+  const [err, setErr] = useState("");
+  const segments = body.length === 0 ? 0 : body.length <= 160 ? 1 : Math.ceil(body.length / 153);
+
+  const send = async () => {
+    if (!body.trim()) { setErr("Type the text first."); return; }
+    setSending(true); setErr("");
+    try {
+      const r = await api.post(`/leads/${lead.id}/text`, { body });
+      if (r.data?.ok) {
+        onSent(r.data);
+        onClose();
+      } else {
+        setErr(r.data?.note || "Twilio rejected the send.");
+      }
+    } catch (e) {
+      setErr(e?.response?.data?.detail || "Send failed.");
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <div className="mt-3 border-t border-line pt-3" data-testid={`lead-text-composer-${lead.id}`}>
+      <div className="text-[10px] uppercase tracking-widest text-ink-3 mb-1">
+        Texting <span className="text-amber2">{lead.contact}</span> · {lead.name}
+      </div>
+      <textarea
+        value={body}
+        onChange={(e) => setBody(e.target.value)}
+        placeholder="Type your reply. Plain English. They'll see it as a text from your shop number."
+        rows={3}
+        maxLength={1600}
+        className="w-full bg-bg-3 border border-line text-ink text-sm p-2 focus:outline-none focus:border-rust"
+        data-testid={`lead-text-input-${lead.id}`}
+        autoFocus
+      />
+      <div className="flex items-center justify-between mt-2 gap-2">
+        <div className="text-[10px] text-ink-3 uppercase tracking-widest">
+          {body.length} chars · {segments} segment{segments !== 1 ? "s" : ""}
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={onClose}
+            disabled={sending}
+            className="btn-ghost text-xs"
+            data-testid={`lead-text-cancel-${lead.id}`}
+          >
+            CANCEL
+          </button>
+          <button
+            onClick={send}
+            disabled={sending || !body.trim()}
+            className="btn-ghost text-xs flex items-center gap-1 border-rust text-rust"
+            data-testid={`lead-text-send-${lead.id}`}
+          >
+            {sending ? <Loader2 size={11} className="animate-spin"/> : <Send size={11}/>}
+            {sending ? "SENDING..." : "SEND TEXT"}
+          </button>
+        </div>
+      </div>
+      {err && (
+        <div className="mt-2 text-xs text-rust" data-testid={`lead-text-err-${lead.id}`}>{err}</div>
+      )}
+    </div>
+  );
+}
+
 export default function Leads() {
   const [leads, setLeads] = useState([]);
   const [busy, setBusy] = useState(false);
+  const [textingId, setTextingId] = useState(null);
 
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
     setBusy(true);
-    try { const r = await api.get("/leads"); setLeads(r.data || []); } catch {/*ignore*/}
-    finally { setBusy(false); }
-  };
-  useEffect(() => { refresh(); const t = setInterval(refresh, 30000); return () => clearInterval(t); }, []);
+    try {
+      const r = await api.get("/leads");
+      setLeads(r.data || []);
+    } catch {/*ignore*/}
+    finally {
+      setBusy(false);
+    }
+  }, []);
 
-  const setStatus = async (id, status) => {
-    await api.patch(`/leads/${id}`, { status });
+  useEffect(() => {
+    const t0 = setTimeout(refresh, 0);
+    const t = setInterval(refresh, 30000);
+    return () => { clearTimeout(t0); clearInterval(t); };
+  }, [refresh]);
+
+  const setStatus = useCallback(async (id, status) => {
+    try {
+      await api.patch(`/leads/${id}`, { status });
+    } catch {/*ignore*/}
     refresh();
-  };
+  }, [refresh]);
 
   const newCount = leads.filter(l => l.status === "new").length;
-  const isPhone = (c) => /^[+\d][\d\s\-()]{6,}$/.test(c.trim());
+  const isPhone = (c) => /^[+\d][\d\s\-()]{6,}$/.test((c || "").trim());
 
   return (
     <div className="p-4 md:p-6 max-w-4xl mx-auto" data-testid="leads-page">
@@ -78,6 +161,15 @@ export default function Leads() {
               </div>
               {l.status !== "won" && l.status !== "lost" && (
                 <div className="flex gap-2 mt-3 flex-wrap">
+                  {isPhone(l.contact) && textingId !== l.id && (
+                    <button
+                      onClick={() => setTextingId(l.id)}
+                      className="btn-ghost text-xs flex items-center gap-1 border-rust text-rust"
+                      data-testid={`lead-text-${l.id}`}
+                    >
+                      <Send size={11}/>TEXT
+                    </button>
+                  )}
                   {l.status === "new" && (
                     <button onClick={()=>setStatus(l.id, "contacted")} className="btn-ghost text-xs flex items-center gap-1 border-amber2 text-amber2" data-testid={`lead-contacted-${l.id}`}>
                       <MessageSquare size={11}/>MARK CONTACTED
@@ -90,6 +182,13 @@ export default function Leads() {
                     <XIcon size={11}/>LOST
                   </button>
                 </div>
+              )}
+              {textingId === l.id && (
+                <TextComposer
+                  lead={l}
+                  onClose={() => setTextingId(null)}
+                  onSent={refresh}
+                />
               )}
             </div>
           ))}

@@ -1920,6 +1920,65 @@ ul {{ padding-left: 22px; }}
             raise HTTPException(404, "Lead not found.")
         return {"ok": True, "status": body.status}
 
+    @router.post("/leads/{lead_id}/text")
+    async def text_lead(lead_id: str, body: Dict[str, Any], user=Depends(get_user)):
+        """Doc taps TEXT on a lead -> SMS the customer directly via Twilio.
+        Body: { body: 'message text' }. Returns ok/twilio status. Marks lead
+        as 'contacted' on success. Logs to sms_messages so it shows in the
+        SMS history alongside everything else."""
+        sid = user.get("shop_id") or DEFAULT_SHOP_ID
+        lead = await db.leads.find_one({"id": lead_id, "shop_id": sid}, {"_id": 0})
+        if not lead:
+            raise HTTPException(404, "Lead not found.")
+
+        contact = (lead.get("contact") or "").strip()
+        digits = "".join(ch for ch in contact if ch.isdigit())
+        if "@" in contact or len(digits) < 10:
+            raise HTTPException(400, f"Lead contact '{contact}' is not a phone number — cannot text.")
+        # Normalize to E.164 (assume US if no +)
+        to_phone = contact if contact.startswith("+") else ("+1" + digits[-10:])
+
+        msg = (body.get("body") or "").strip()
+        if not msg:
+            raise HTTPException(400, "body required (the SMS text)")
+        if len(msg) > 1600:
+            raise HTTPException(400, "SMS body too long (max 1600 chars)")
+
+        ok = False
+        try:
+            ok = await twilio_send_sms(to_phone, msg)
+        except Exception as e:
+            log.warning(f"text_lead twilio error: {e}")
+
+        now = datetime.now(timezone.utc).isoformat()
+        await db.sms_messages.insert_one({
+            "id": str(uuid.uuid4()),
+            "direction": "outbound",
+            "from_number": os.environ.get("TWILIO_FROM_NUMBER", ""),
+            "to_number": to_phone,
+            "body": msg,
+            "created_at": now,
+            "read": True,
+            "kind": "lead_text",
+            "lead_id": lead_id,
+            "ok": ok,
+            "sent_by": user.get("email", "owner"),
+        })
+
+        if ok:
+            await db.leads.update_one(
+                {"id": lead_id},
+                {"$set": {"status": "contacted", "doc_reply_at": now}},
+            )
+
+        return {
+            "ok": ok,
+            "to_phone": to_phone,
+            "body": msg,
+            "sent_at": now if ok else None,
+            "note": None if ok else "Twilio rejected the send — check TFV status, daily cap, or destination number.",
+        }
+
     return router
 
 

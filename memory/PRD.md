@@ -111,17 +111,20 @@ Already covered in this session:
 
 **Why:** `/app/backend/sms_routes.py` echo-forward logic only handled SMS-to-SMS threads. Most leads come via the landing-page form (email contact only) — there's never an SMS thread to forward to.
 
-**Fix shipped (Preview, awaiting Prod redeploy):**
-- New fallback chain in owner-reply handler: SMS thread → recent lead with phone → alert Doc back with full context
-- Alert SMS goes to Doc's cell within 2s if his reply doesn't reach a customer, with the customer's name + email/contact so he can reply manually from /leads or his Outlook
-- All alerts logged to `sms_messages` with `kind=owner_reply_alert` for visibility
-- Lead status auto-updates to `doc_replied` when forward succeeds
-- 3-branch smoke test passed on Preview (phone-fwd / email-only-alert / no-lead-alert)
+**Fix shipped to Preview (awaiting Prod redeploy):**
+- Patched `sms_routes.py` echo-forward fallback chain:
+  - SMS thread → forward as before
+  - No thread, phone-bearing lead in last 4h → SMS the customer + mark lead `doc_replied`
+  - No thread, email-only lead → alert Doc back with full context
+  - No thread, no recent lead → alert Doc back
+  - All alerts logged with `kind=owner_reply_alert` for SMS log visibility
+- NEW UI: `/leads` page now has a TEXT button on every phone-bearing lead → inline composer → `POST /api/leads/{id}/text` → Twilio send → auto-marks lead `contacted`. Button correctly hidden on email-only leads.
+- Smoke-tested both paths end-to-end on Preview.
 - OG R41 (id `bc82cad8`) — bug report + Darin rescue request, OG R42 (id `458a1971`) — fix shipped notice
 
 **Action items:**
-- [ ] OG to email Darin Jamison directly (darin.jamison08@gmail.com) with Doc's reply text (cannot fire from Wrench, Outlook not linked on Prod side)
-- [ ] Doc to redeploy Prod so the fix activates
+- [ ] OG to email Darin Jamison directly (darin.jamison08@gmail.com) with Doc's reply text
+- [ ] Doc redeploying — fix lands then
 - [ ] Optional follow-up: link Doc's Outlook to Prod so Wrench can email customers directly when phone is unavailable
 
 ## Shipped Mar 1, 2026
