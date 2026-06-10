@@ -14,9 +14,10 @@ Inbound webhook URL to configure in Twilio console (per phone-number Messaging c
   https://foreman.drunderhood.com/api/sms/inbound
 """
 import os
+import re
 import uuid
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Form, Request, HTTPException, Depends
@@ -65,8 +66,102 @@ def make_router(db, get_user):
                 sort=[("created_at", -1)],
             )
             if not last_cust:
-                # No customer to reply to — log + acknowledge silently
-                log.info(f"owner replied via SMS but no customer in history yet: {Body[:80]}")
+                # === NEW: lead-fallback before giving up ===
+                # No SMS thread. Try the most recent /leads entry (last 4 hours)
+                # for this shop. Doc usually replies to lead-notification SMS,
+                # not to actual SMS threads, so this is the common case.
+                default_shop = os.environ.get("DEFAULT_SHOP_ID") or "drunderhood-fortsmith"
+                four_hr_ago = (datetime.now(timezone.utc) - timedelta(hours=4)).isoformat()
+                recent_lead = await db.leads.find_one(
+                    {"shop_id": default_shop, "created_at": {"$gte": four_hr_ago}},
+                    {"_id": 0},
+                    sort=[("created_at", -1)],
+                )
+
+                lead_phone = None
+                lead_email = None
+                if recent_lead:
+                    contact = (recent_lead.get("contact") or "").strip()
+                    if "@" in contact:
+                        lead_email = contact
+                    else:
+                        # Strip everything except digits + leading +
+                        digits = re.sub(r"[^0-9]", "", contact)
+                        if len(digits) >= 10:
+                            lead_phone = ("+1" + digits[-10:]) if not contact.startswith("+") else ("+" + digits)
+
+                forwarded = False
+                if lead_phone:
+                    try:
+                        ok = await send_sms(lead_phone, Body)
+                    except Exception as e:
+                        log.warning(f"lead-fallback SMS forward failed: {e}")
+                        ok = False
+                    forwarded = bool(ok)
+                    await db.sms_messages.insert_one({
+                        "id": str(uuid.uuid4()),
+                        "direction": "outbound",
+                        "from_number": To,
+                        "to_number": lead_phone,
+                        "body": Body[:2000],
+                        "created_at": ts,
+                        "read": True,
+                        "kind": "owner_reply_forward_via_lead",
+                        "owner_reply_sid": MessageSid,
+                        "lead_id": recent_lead.get("id"),
+                        "ok": forwarded,
+                    })
+                    if recent_lead.get("id") and forwarded:
+                        await db.leads.update_one(
+                            {"id": recent_lead["id"]},
+                            {"$set": {"status": "doc_replied", "doc_reply_at": ts}},
+                        )
+
+                # Alert Doc back when we couldn't route via SMS — he MUST know
+                # his reply didn't go to the customer instead of assuming it did.
+                if not forwarded:
+                    if recent_lead and lead_email:
+                        alert = (
+                            "REPLY NOT SENT — customer has email only, no phone.\n"
+                            f"Customer: {recent_lead.get('name','?')} <{lead_email}>\n"
+                            f"Vehicle: {recent_lead.get('vehicle','-')}\n"
+                            f"Reply manually from foreman.drunderhood.com/leads or your Outlook.\n"
+                            f"Your reply text was saved."
+                        )
+                    elif recent_lead:
+                        alert = (
+                            "REPLY NOT SENT — bad/missing phone on the most recent lead.\n"
+                            f"Customer: {recent_lead.get('name','?')} ({recent_lead.get('contact','-')})\n"
+                            f"Reply manually from foreman.drunderhood.com/leads."
+                        )
+                    else:
+                        alert = (
+                            "REPLY NOT SENT — no SMS thread + no recent lead in last 4h.\n"
+                            "Your reply didn't reach a customer. Resend from foreman.drunderhood.com/leads."
+                        )
+                    try:
+                        alert_ok = await send_sms(owner_cell, alert)
+                    except Exception as e:
+                        log.warning(f"alert-back to owner failed: {e}")
+                        alert_ok = False
+                    # Log the alert so Doc sees it in his SMS history too
+                    try:
+                        await db.sms_messages.insert_one({
+                            "id": str(uuid.uuid4()),
+                            "direction": "outbound",
+                            "from_number": To,
+                            "to_number": owner_cell,
+                            "body": alert,
+                            "created_at": ts,
+                            "read": False,
+                            "kind": "owner_reply_alert",
+                            "owner_reply_sid": MessageSid,
+                            "lead_id": (recent_lead or {}).get("id"),
+                            "ok": alert_ok,
+                        })
+                    except Exception as e:
+                        log.warning(f"alert log insert failed: {e}")
+
                 await db.sms_messages.insert_one({
                     "id": str(uuid.uuid4()),
                     "direction": "inbound",
@@ -76,7 +171,9 @@ def make_router(db, get_user):
                     "body": Body[:2000],
                     "created_at": ts,
                     "read": True,
-                    "kind": "owner_reply_orphan",
+                    "kind": "owner_reply_forward_via_lead" if forwarded else "owner_reply_orphan",
+                    "lead_id": (recent_lead or {}).get("id"),
+                    "lead_contact": (recent_lead or {}).get("contact"),
                 })
                 return Response(
                     content='<?xml version="1.0" encoding="UTF-8"?><Response></Response>',

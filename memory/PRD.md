@@ -106,6 +106,24 @@ Already covered in this session:
   - **New collections**: `scheduled_runs` (run audit log)
   - Tunable via env vars: `SCHED_CRAWL_INTERVAL_SEC`, `SCHED_HARVEST_INTERVAL_SEC`, `SCHED_DIGEST_CHECK_INTERVAL_SEC`
 
+## P0 Bug discovered & fixed Jun 9, 2026 — owner-reply orphan loop
+**The bug:** Doc's owner-cell replies to lead-notification SMS were being marked `kind=owner_reply_orphan` and going nowhere. Customer never got the reply. Doc had no idea. Confirmed pattern: 3 recent replies all orphaned (6/5 14:47, 6/9 20:16, 6/9 22:36 Grand Canyon reply to Darin Jamison).
+
+**Why:** `/app/backend/sms_routes.py` echo-forward logic only handled SMS-to-SMS threads. Most leads come via the landing-page form (email contact only) — there's never an SMS thread to forward to.
+
+**Fix shipped (Preview, awaiting Prod redeploy):**
+- New fallback chain in owner-reply handler: SMS thread → recent lead with phone → alert Doc back with full context
+- Alert SMS goes to Doc's cell within 2s if his reply doesn't reach a customer, with the customer's name + email/contact so he can reply manually from /leads or his Outlook
+- All alerts logged to `sms_messages` with `kind=owner_reply_alert` for visibility
+- Lead status auto-updates to `doc_replied` when forward succeeds
+- 3-branch smoke test passed on Preview (phone-fwd / email-only-alert / no-lead-alert)
+- OG R41 (id `bc82cad8`) — bug report + Darin rescue request, OG R42 (id `458a1971`) — fix shipped notice
+
+**Action items:**
+- [ ] OG to email Darin Jamison directly (darin.jamison08@gmail.com) with Doc's reply text (cannot fire from Wrench, Outlook not linked on Prod side)
+- [ ] Doc to redeploy Prod so the fix activates
+- [ ] Optional follow-up: link Doc's Outlook to Prod so Wrench can email customers directly when phone is unavailable
+
 ## Shipped Mar 1, 2026
 - [x] **`/api/brain/operator-profile` endpoint LIVE** — One-shot operator profile dump for peer agents (Bud, OG). Returns shop_profile + operator_style + locked_memory_facts + candidate_facts + recent_chat_turns + voice_turn_highlights + recent_cases + window/counts. Time-windowed (default 7d, no count cap, max_messages safety ceiling 5000). Accepts master ingress token OR Bud's revocable peer token (`BRAIN_PEER_TOKEN_BUD`). Deployed to PROD (verified — 525 chat turns in 30d window, 9 locked facts on prod corpus).
 - [x] **Bud access letter shipped via pre-flight credential pipe** — Verify against live preview endpoint passed HTTP 200, letter delivered to Bud's inbox (id `aedf7398-4377-4aa9-8d5f-df1147afcc7e`).
