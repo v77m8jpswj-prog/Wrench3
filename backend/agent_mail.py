@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 
 import httpx
-from fastapi import APIRouter, HTTPException, Depends, Header
+from fastapi import APIRouter, HTTPException, Depends, Header, Request
 from pydantic import BaseModel, Field
 
 log = logging.getLogger("datawrench.agentmail")
@@ -316,5 +316,136 @@ def make_agentmail_router(db, get_user):
         # mark as read
         await db.agent_mail_inbox.update_one({"id": lid}, {"$set": {"read": True}})
         return doc
+
+    # ----- PIPE HEALTH: tests every leg of the agent-mail pipeline in real time -----
+    @router.get("/agent-mail/health")
+    async def pipe_health(request: Request, user=Depends(get_user)):
+        """Real-time end-to-end pipeline health. Tests:
+          - Inbound (self-test): can a properly-authed POST land in our inbox?
+          - Outbound per peer: deliverability + last successful send/receive timestamps
+        Returns a per-leg green/red status so Doc can stop guessing."""
+        result = {
+            "checked_at": _now().isoformat(),
+            "overall": "green",
+            "legs": {},
+        }
+
+        # --- Inbound self-test ---
+        inbound_token = os.environ.get("AGENT_MAIL_INBOUND_TOKEN", "").strip()
+        if not inbound_token:
+            result["legs"]["inbound"] = {
+                "status": "red",
+                "reason": "AGENT_MAIL_INBOUND_TOKEN env var missing or empty",
+            }
+            result["overall"] = "red"
+        else:
+            # Derive self URL from the actual request so preview tests preview, prod tests prod
+            self_url = os.environ.get("AGENT_MAIL_SELF_URL") or \
+                       str(request.base_url).rstrip("/") + "/api/agent-mail/inbox"
+            try:
+                async with httpx.AsyncClient(timeout=10) as c:
+                    r = await c.post(
+                        self_url,
+                        headers={"X-Agent-Token": inbound_token, "Content-Type": "application/json"},
+                        json={
+                            "from_agent": "nine",
+                            "subject": "_health_check",
+                            "body": "internal pipe health self-test",
+                            "body_format": "markdown",
+                        },
+                    )
+                if r.status_code == 200:
+                    j = r.json()
+                    # Mark the self-test letter as read so it doesn't clutter inbox
+                    if j.get("letter_id"):
+                        await db.agent_mail_inbox.update_one(
+                            {"id": j["letter_id"]}, {"$set": {"read": True, "kind": "health_check"}}
+                        )
+                    result["legs"]["inbound"] = {"status": "green", "http": 200, "reason": "self-test landed"}
+                else:
+                    result["legs"]["inbound"] = {
+                        "status": "red", "http": r.status_code,
+                        "reason": f"self-test got HTTP {r.status_code}: {r.text[:120]}",
+                    }
+            except Exception as e:
+                result["legs"]["inbound"] = {"status": "red", "reason": f"self-test exception: {e}"}
+
+        # --- Outbound per peer ---
+        peers = await db.agent_mail_peers.find({}, {"_id": 0}).to_list(20)
+        for p in peers:
+            pname = p["peer"]
+            url = p.get("inbox_url", "")
+            tok = p.get("outbound_token", "")
+            leg = {"status": "red", "inbox_url": url}
+
+            if not url or not tok:
+                leg["reason"] = "missing inbox_url or outbound_token in peer config"
+                result["overall"] = "red"
+                result["legs"][f"outbound_{pname}"] = leg
+                continue
+
+            # Reachability — bare POST without proper body, expect 4xx (proves route exists, auth works)
+            try:
+                async with httpx.AsyncClient(timeout=10) as c:
+                    r = await c.post(
+                        url,
+                        headers={"X-Agent-Token": tok, "Content-Type": "application/json"},
+                        json={
+                            "from_agent": "nine",
+                            "subject": "_health_check",
+                            "body": f"automated pipe health probe from Wrench at {_now().isoformat()}",
+                            "body_format": "markdown",
+                        },
+                    )
+                leg["http"] = r.status_code
+                if r.status_code == 200:
+                    leg["status"] = "green"
+                    leg["reason"] = "health letter delivered"
+                elif r.status_code == 401:
+                    leg["reason"] = "peer rejected our outbound_token (401) — token rotation needed"
+                elif r.status_code == 404:
+                    leg["reason"] = "peer route 404 — inbox_url is stale, update via /agent-mail/configure"
+                elif r.status_code == 422:
+                    # Peer accepts but schema rejected — usually means we sent wrong from_agent enum
+                    leg["status"] = "yellow"
+                    leg["reason"] = f"peer schema rejection (422) — pipe alive but contract mismatch: {r.text[:120]}"
+                else:
+                    leg["reason"] = f"HTTP {r.status_code}: {r.text[:120]}"
+            except Exception as e:
+                leg["reason"] = f"network error: {str(e)[:120]}"
+
+            # Last successful send from our outbox
+            last_ok = await db.agent_mail_outbox.find_one(
+                {"to_peer": pname, "peer_ack": {"$ne": None}},
+                {"_id": 0, "sent_at": 1, "subject": 1},
+                sort=[("sent_at", -1)],
+            )
+            if last_ok:
+                leg["last_successful_send_at"] = last_ok.get("sent_at")
+                leg["last_successful_subject"] = (last_ok.get("subject") or "")[:80]
+
+            # Last received from this peer (proves their outbound to us)
+            last_in = await db.agent_mail_inbox.find_one(
+                {"from_agent": pname},
+                {"_id": 0, "received_at": 1, "subject": 1},
+                sort=[("received_at", -1)],
+            )
+            if last_in:
+                leg["last_inbound_at"] = last_in.get("received_at")
+                leg["last_inbound_subject"] = (last_in.get("subject") or "")[:80]
+                # If they've sent to us in the last 24h, mark their side green too
+                try:
+                    age_h = (_now() - datetime.fromisoformat(last_in["received_at"])).total_seconds() / 3600
+                    leg["hours_since_last_inbound"] = round(age_h, 1)
+                except Exception:
+                    pass
+
+            if leg["status"] != "green":
+                result["overall"] = "red"
+            result["legs"][f"outbound_{pname}"] = leg
+
+        # Save snapshot
+        await db.pipe_health_snapshots.insert_one({**result, "_snapshot_id": str(uuid.uuid4())})
+        return result
 
     return router
