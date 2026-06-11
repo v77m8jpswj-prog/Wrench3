@@ -127,6 +127,10 @@ Already covered in this session:
 - [ ] Doc redeploying — fix lands then
 - [ ] Optional follow-up: link Doc's Outlook to Prod so Wrench can email customers directly when phone is unavailable
 
+## Shipped Jun 11, 2026
+- [x] **Twilio Voice / Voicemail backend complete** — `/app/backend/voice_routes.py` shipped. Webhooks: `/api/voice/incoming` (TwiML greeting), `/api/voice/voicemail/done`, `/api/voice/voicemail/transcription`, `/api/voice/status`. Each validates X-Twilio-Signature against multiple URL variants (handles K8s ingress host rewrites). Tested end-to-end on Preview — voicemail row + lead created + transcript saved + Doc gets SMS alert + audio player renders in /leads UI. New collections: `calls`, `voicemails`. Leads gain `kind=voicemail` + `recording_url` + `transcript` + audio player tag. Brain audit endpoint `GET /api/brain/voicemails?last=10` (bearer-protected, mirror of sms-status pattern).
+- [x] **R55 to OG** (id `21274613`) with full spec + Twilio console steps for Doc to paste Monday.
+
 ## Shipped Mar 1, 2026
 - [x] **`/api/brain/operator-profile` endpoint LIVE** — One-shot operator profile dump for peer agents (Bud, OG). Returns shop_profile + operator_style + locked_memory_facts + candidate_facts + recent_chat_turns + voice_turn_highlights + recent_cases + window/counts. Time-windowed (default 7d, no count cap, max_messages safety ceiling 5000). Accepts master ingress token OR Bud's revocable peer token (`BRAIN_PEER_TOKEN_BUD`). Deployed to PROD (verified — 525 chat turns in 30d window, 9 locked facts on prod corpus).
 - [x] **Bud access letter shipped via pre-flight credential pipe** — Verify against live preview endpoint passed HTTP 200, letter delivered to Bud's inbox (id `aedf7398-4377-4aa9-8d5f-df1147afcc7e`).

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { Phone, Mail, Truck, Clock, MessageSquare, Check, X as XIcon, RefreshCw, Send, Loader2, Copy } from "lucide-react";
+import { Phone, Mail, Truck, Clock, MessageSquare, Check, X as XIcon, RefreshCw, Send, Loader2, Copy, Voicemail } from "lucide-react";
 import api from "@/api";
 
 const STATUS_COLORS = {
@@ -255,6 +255,11 @@ export default function Leads() {
                     <span className={`text-[10px] uppercase tracking-widest font-bold border px-2 py-0.5 ${STATUS_COLORS[l.status] || STATUS_COLORS.new}`}>
                       {l.status?.toUpperCase() || "NEW"}
                     </span>
+                    {l.kind === "voicemail" && (
+                      <span className="text-[10px] uppercase tracking-widest font-bold border px-2 py-0.5 border-amber2 text-amber2 bg-amber2/10 flex items-center gap-1" data-testid={`lead-vm-badge-${l.id}`}>
+                        <Voicemail size={10}/>VOICEMAIL
+                      </span>
+                    )}
                     <span className="text-[10px] text-ink-3 uppercase tracking-widest flex items-center gap-1"><Clock size={10}/>{timeAgo(l.created_at)}</span>
                   </div>
                   <div className="text-base font-bold text-amber2 mt-1">{l.name}</div>
@@ -264,6 +269,13 @@ export default function Leads() {
                   )}
                 </div>
               </div>
+              {l.recording_url && (
+                <div className="mb-2" data-testid={`lead-vm-audio-${l.id}`}>
+                  <audio controls src={l.recording_url} className="w-full h-8" preload="none">
+                    Your browser does not support audio playback.
+                  </audio>
+                </div>
+              )}
               <div className="text-sm text-ink-2 whitespace-pre-wrap border-l-2 border-line pl-3 ml-1">
                 {l.what_they_need}
               </div>

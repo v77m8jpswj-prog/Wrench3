@@ -3355,7 +3355,7 @@ async def techs_delete(tech_id: str, owner=Depends(require_owner)):
 
 
 # ============ Brain router (RAG cases / cross-project integration) ============
-from brain import make_brain_router, embed_text as _brain_embed, case_text_blob as _brain_case_blob  # noqa: E402
+from brain import make_brain_router, embed_text as _brain_embed, case_text_blob as _brain_case_blob, get_brain_token as _brain_token_dep  # noqa: E402
 from team_chat import make_team_chat_router  # noqa: E402
 from email_mod import make_email_router, make_email_brain_router  # noqa: E402
 from scraper import make_scraper_router  # noqa: E402
@@ -3363,6 +3363,8 @@ from tune_mod import build_router as build_tune_router  # noqa: E402
 from learn_mod import make_learn_router  # noqa: E402
 from agent_mail import make_agentmail_router  # noqa: E402
 from sms_routes import make_router as make_sms_router  # noqa: E402
+from voice_routes import get_voice_router  # noqa: E402
+from twilio_mod import send_sms as _twilio_send_sms  # noqa: E402
 brain_router = make_brain_router(db, get_user)
 api.include_router(brain_router)
 team_chat_router = make_team_chat_router(db, get_user, embed_text=_brain_embed, case_text_blob=_brain_case_blob)
@@ -3381,6 +3383,8 @@ agentmail_router = make_agentmail_router(db, get_user)
 api.include_router(agentmail_router)
 sms_router = make_sms_router(db, get_user)
 api.include_router(sms_router)
+voice_router = get_voice_router(db, _twilio_send_sms, _brain_token_dep)
+app.include_router(voice_router)
 
 
 # ============ Client error reporter (called by frontend ErrorBoundary) ============
