@@ -511,6 +511,55 @@ def make_brain_router(db, get_user):
             "chunks": {"inserted": chunks_inserted, "total_now": chunk_total},
         }
 
+    @router.get("/brain/sms-status")
+    async def sms_status(
+        last: int = Query(5, ge=1, le=50, description="How many recent outbound SMS to return"),
+        shop_id: Optional[str] = None,
+        _t: str = Depends(get_brain_token),
+    ):
+        """Read-only audit feed for peer agents (OG, Bud). Returns the last N
+        outbound SMS with delivery status, Twilio SID, recipient, and any error
+        code. Auth: brain bearer token. No PII risk beyond what OG/Bud already
+        have via /operator-profile."""
+        q = {"direction": "outbound"}
+        if shop_id:
+            # sms_messages aren't shop-scoped today, but accept the param for forward compat
+            pass
+        cur = db.sms_messages.find(
+            q,
+            {
+                "_id": 0, "id": 1, "created_at": 1, "to_number": 1, "from_number": 1,
+                "body": 1, "ok": 1, "kind": 1, "twilio_sid": 1, "sid": 1,
+                "error_code": 1, "status": 1, "lead_id": 1, "sent_by": 1,
+            },
+        ).sort("created_at", -1).limit(last)
+        rows = await cur.to_list(last)
+        items = []
+        for r in rows:
+            body = (r.get("body") or "")
+            items.append({
+                "id": r.get("id"),
+                "created_at": r.get("created_at"),
+                "to": r.get("to_number"),
+                "from": r.get("from_number"),
+                "body_preview": body[:140] + ("…" if len(body) > 140 else ""),
+                "body_chars": len(body),
+                "ok": bool(r.get("ok")) if "ok" in r else None,
+                "kind": r.get("kind"),
+                "twilio_sid": r.get("twilio_sid") or r.get("sid"),
+                "error_code": r.get("error_code"),
+                "status": r.get("status"),
+                "lead_id": r.get("lead_id"),
+                "sent_by": r.get("sent_by"),
+            })
+        total_outbound = await db.sms_messages.count_documents({"direction": "outbound"})
+        return {
+            "items": items,
+            "count": len(items),
+            "total_outbound_in_log": total_outbound,
+            "queried_at": datetime.now(timezone.utc).isoformat(),
+        }
+
     # ----- Bud-driven customer SMS (draft -> confirm -> send) -----
     _SMS_DRAFT_TTL_MIN = 15  # drafts expire after 15 min un-sent
 
