@@ -2123,6 +2123,115 @@ ul {{ padding-left: 22px; }}
             "note": None if ok else "Twilio rejected the send — check TFV status, daily cap, or destination number.",
         }
 
+    # ============ UNIFIED BRAIN SEARCH ============
+    @router.get("/brain/search")
+    async def brain_search(q: str = Query(..., min_length=2), limit: int = 20, user=Depends(get_user)):
+        """One-bar search across brain_cases (semantic) + library_chunks/emails (text).
+        Returns unified ranked results with type badges so the UI can route taps."""
+        import re as _re
+        shop_id = user.get("shop_id") or DEFAULT_SHOP_ID
+        user_id = user["id"]
+        q_trim = q.strip()
+        results = []
+
+        # 1) Cases — semantic via existing embeddings
+        try:
+            q_emb = await embed_text(q_trim)
+        except Exception:
+            q_emb = []
+        if q_emb:
+            cur = db.brain_cases.find({"shop_id": shop_id}, {"_id": 0})
+            cases = await cur.to_list(20000)
+            scored = []
+            for c in cases:
+                emb = c.get("embedding") or []
+                if not emb:
+                    continue
+                sim = cosine(q_emb, emb)
+                if sim > 0.30:
+                    scored.append((sim, c))
+            scored.sort(key=lambda x: x[0], reverse=True)
+            for sim, c in scored[:5]:
+                v = c.get("vehicle") or {}
+                title = f"{v.get('year','')} {v.get('make','')} {v.get('model','')}".strip()
+                if not title or title == "  ":
+                    title = c.get("symptom", "")[:60] or "Case"
+                snippet_parts = [
+                    c.get("symptom", ""),
+                    c.get("repair_summary", "") or c.get("root_cause", ""),
+                ]
+                snippet = " · ".join(p for p in snippet_parts if p)[:240]
+                results.append({
+                    "type": "case",
+                    "score": round(float(sim), 3),
+                    "title": title,
+                    "snippet": snippet,
+                    "source": c.get("technician_name", "") or "shop",
+                    "link": "/cases",
+                    "case_id": c.get("id", ""),
+                    "created_at": c.get("created_at", ""),
+                })
+
+        # 2) Library + ingested email chunks — regex text search
+        safe_q = _re.escape(q_trim)
+        chunk_cur = db.library_chunks.find(
+            {"user_id": user_id, "text": {"$regex": safe_q, "$options": "i"}},
+            {"_id": 0}
+        ).limit(40)
+        chunks = await chunk_cur.to_list(40)
+        item_ids = list({c["item_id"] for c in chunks if c.get("item_id")})
+        items_map = {}
+        if item_ids:
+            async for it in db.library_items.find(
+                {"id": {"$in": item_ids}},
+                {"_id": 0, "id": 1, "name": 1, "kind": 1, "source_msg_id": 1, "source_label": 1}
+            ):
+                items_map[it["id"]] = it
+        # rank chunks by # of match occurrences (very cheap heuristic)
+        def _rank(c):
+            t = (c.get("text") or "").lower()
+            return t.count(q_trim.lower())
+        chunks.sort(key=_rank, reverse=True)
+        room_left = max(0, limit - len(results))
+        for c in chunks[:room_left]:
+            item = items_map.get(c.get("item_id")) or {}
+            kind = item.get("kind", "library")
+            text = c.get("text", "")
+            tl = text.lower()
+            idx = tl.find(q_trim.lower())
+            if idx < 0:
+                idx = 0
+            start = max(0, idx - 60)
+            snippet = text[start:start + 240]
+            if start > 0:
+                snippet = "…" + snippet
+            if len(text) > start + 240:
+                snippet = snippet + "…"
+            type_label = "email" if kind == "email" else "library"
+            results.append({
+                "type": type_label,
+                "score": round(min(1.0, 0.4 + 0.1 * _rank(c)), 3),
+                "title": item.get("name", "") or c.get("source", "") or "Library",
+                "snippet": snippet,
+                "source": item.get("source_label", "") or c.get("source", ""),
+                "link": "/email" if kind == "email" else "/library",
+                "item_id": item.get("id", ""),
+                "created_at": c.get("created_at", ""),
+            })
+
+        # Final sort: by score, but always show cases first if score > 0.5
+        results.sort(key=lambda r: (0 if r["type"] == "case" and r["score"] >= 0.5 else 1, -r["score"]))
+        return {
+            "q": q_trim,
+            "results": results[:limit],
+            "counts": {
+                "total": len(results),
+                "cases": sum(1 for r in results if r["type"] == "case"),
+                "library": sum(1 for r in results if r["type"] == "library"),
+                "email": sum(1 for r in results if r["type"] == "email"),
+            },
+        }
+
     return router
 
 

@@ -1,8 +1,9 @@
-import React, { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import React, { useEffect, useState, useRef } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import { useApp } from "@/AppContext";
 import {
   MessageCircle, Phone, Wrench, BarChart3, Users, Inbox, Truck, BookOpen, Brain, DollarSign, Globe,
+  Search, FileText, Mail, X,
 } from "lucide-react";
 import api from "@/api";
 
@@ -24,9 +25,36 @@ const TILES = [
 
 export default function Home() {
   const app = useApp();
+  const navigate = useNavigate();
   const activeVeh = app?.vehicles?.find?.(v => v.id === app?.activeVehicleId);
   const [learnPending, setLearnPending] = useState(null);
   const [usage, setUsage] = useState(null);
+
+  // ---------- Brain search ----------
+  const [q, setQ] = useState("");
+  const [results, setResults] = useState(null);
+  const [searching, setSearching] = useState(false);
+  const searchTimer = useRef(null);
+  const onQueryChange = (val) => {
+    setQ(val);
+    if (searchTimer.current) clearTimeout(searchTimer.current);
+    if (!val || val.trim().length < 2) { setResults(null); return; }
+    searchTimer.current = setTimeout(async () => {
+      setSearching(true);
+      try {
+        const r = await api.get("/brain/search", { params: { q: val.trim(), limit: 12 }});
+        setResults(r.data);
+      } catch { setResults({ results: [], counts: { total: 0 } }); }
+      finally { setSearching(false); }
+    }, 300);
+  };
+  const clearSearch = () => { setQ(""); setResults(null); };
+  const goResult = (r) => {
+    if (r.type === "case" && r.case_id) navigate(`/cases?id=${r.case_id}`);
+    else navigate(r.link || "/");
+  };
+  const resultIcon = (t) => t === "case" ? FileText : t === "email" ? Mail : BookOpen;
+  const resultColor = (t) => t === "case" ? "text-rust" : t === "email" ? "text-amber2" : "text-amber2";
 
   useEffect(() => {
     api.get("/learn/stats").then(r => setLearnPending(r.data?.pending || 0)).catch(() => {});
@@ -57,6 +85,72 @@ export default function Home() {
             <DollarSign size={12}/>
             ${usage.estimated_total_usd?.toFixed(2)} this month · {usage.month?.chats || 0} chats · {usage.month?.voice_sessions || 0} calls
           </Link>
+        )}
+      </div>
+
+      {/* ---------- Brain Search Bar ---------- */}
+      <div className="mb-6 max-w-3xl mx-auto" data-testid="brain-search-wrap">
+        <div className="relative">
+          <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-3 pointer-events-none"/>
+          <input
+            type="text"
+            value={q}
+            onChange={(e)=>onQueryChange(e.target.value)}
+            placeholder="ASK THE BRAIN — search cases, library, ingested emails"
+            className="w-full bg-bg-2 border-2 border-line focus:border-amber2 hover:border-amber2/60 pl-10 pr-10 py-3 text-base uppercase tracking-wider placeholder:text-ink-3 placeholder:normal-case placeholder:tracking-normal placeholder:text-sm focus:outline-none"
+            data-testid="brain-search-input"
+          />
+          {q && (
+            <button onClick={clearSearch} className="absolute right-3 top-1/2 -translate-y-1/2 text-ink-3 hover:text-amber2 p-1" data-testid="brain-search-clear">
+              <X size={16}/>
+            </button>
+          )}
+        </div>
+        {(searching || results) && (
+          <div className="mt-2 border-2 border-line bg-bg-2 max-h-[60vh] overflow-y-auto" data-testid="brain-search-results">
+            {searching && (
+              <div className="px-4 py-3 text-xs text-ink-3 uppercase tracking-widest">searching…</div>
+            )}
+            {!searching && results && results.results?.length === 0 && (
+              <div className="px-4 py-4 text-sm text-ink-3">No matches yet. Try a different word — vehicle, symptom, customer name, part #.</div>
+            )}
+            {!searching && results && results.results?.length > 0 && (
+              <>
+                <div className="px-4 py-2 bg-bg-1/50 border-b border-line text-[10px] uppercase tracking-widest text-ink-3 flex items-center gap-3">
+                  <span>{results.counts.total} match{results.counts.total===1?"":"es"}</span>
+                  {results.counts.cases > 0 && <span className="text-rust">{results.counts.cases} cases</span>}
+                  {results.counts.library > 0 && <span className="text-amber2">{results.counts.library} library</span>}
+                  {results.counts.email > 0 && <span className="text-amber2">{results.counts.email} email</span>}
+                </div>
+                <div className="divide-y divide-line">
+                  {results.results.map((r, i) => {
+                    const Icon = resultIcon(r.type);
+                    return (
+                      <button
+                        key={i}
+                        onClick={()=>goResult(r)}
+                        className="w-full text-left px-4 py-3 hover:bg-bg-1 flex items-start gap-3 group"
+                        data-testid={`brain-search-result-${i}`}
+                      >
+                        <div className={`shrink-0 mt-0.5 ${resultColor(r.type)}`}>
+                          <Icon size={16}/>
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className={`text-[10px] uppercase tracking-widest font-bold px-1.5 py-0.5 border ${r.type==="case"?"border-rust/50 text-rust":"border-amber2/50 text-amber2"}`}>{r.type}</span>
+                            <span className="text-sm text-ink truncate group-hover:text-amber2">{r.title}</span>
+                          </div>
+                          <div className="text-xs text-ink-2 mt-1 line-clamp-2">{r.snippet}</div>
+                          {r.source && <div className="text-[10px] text-ink-3 mt-1 truncate">{r.source}</div>}
+                        </div>
+                        <div className="shrink-0 text-[10px] text-ink-3 self-center opacity-50 group-hover:opacity-100">→</div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </div>
         )}
       </div>
 
