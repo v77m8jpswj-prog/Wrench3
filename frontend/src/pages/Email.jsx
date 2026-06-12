@@ -325,8 +325,8 @@ export default function Email() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
-        {/* Inbox list */}
-        <div className="md:col-span-5 lg:col-span-4 border border-line bg-bg-2">
+        {/* Inbox list — hidden on mobile when an email is selected */}
+        <div className={`md:col-span-5 lg:col-span-4 border border-line bg-bg-2 ${selected ? "hidden md:block" : ""}`}>
           {loadingList ? (
             <div className="p-6 text-center text-ink-3 text-sm">Loading...</div>
           ) : msgs.length === 0 ? (
@@ -352,12 +352,18 @@ export default function Email() {
           )}
         </div>
 
-        {/* Reading pane */}
-        <div className="md:col-span-7 lg:col-span-8 border border-line bg-bg-2 min-h-[70vh]">
+        {/* Reading pane — hidden on mobile when nothing is selected */}
+        <div className={`md:col-span-7 lg:col-span-8 border border-line bg-bg-2 min-h-[70vh] ${!selected ? "hidden md:block" : ""}`}>
           {!selected ? (
             <div className="p-8 text-center text-ink-3 text-sm">Tap a message on the left.</div>
           ) : (
-            <div className="flex flex-col h-full max-h-[70vh]">
+            <div className="flex flex-col h-full max-h-[80vh]">
+              {/* Mobile-only back button */}
+              <div className="md:hidden border-b border-line">
+                <button onClick={()=>setSelected(null)} className="w-full text-left px-3 py-2 text-xs uppercase tracking-widest text-amber2 hover:bg-amber2/10 flex items-center gap-2" data-testid="email-back-to-inbox">
+                  ← BACK TO INBOX
+                </button>
+              </div>
               <div className="p-3 md:p-4 border-b border-line">
                 <div className="text-sm md:text-base font-bold mb-1 break-words">{selected.subject || "(no subject)"}</div>
                 <div className="text-[11px] text-ink-3 mb-2">
