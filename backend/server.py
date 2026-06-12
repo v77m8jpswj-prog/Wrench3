@@ -103,6 +103,7 @@ class TechUpdateReq(BaseModel):
     name: Optional[str] = None
     role: Optional[Literal["owner", "tech"]] = None
     password: Optional[str] = None
+    phone: Optional[str] = None
 
 
 # ============ Auth helpers ============
@@ -3340,6 +3341,7 @@ async def techs_update(tech_id: str, body: TechUpdateReq, owner=Depends(require_
     if body.name is not None: patch["name"] = body.name
     if body.role is not None: patch["role"] = body.role
     if body.password: patch["password"] = hash_pw(body.password)
+    if body.phone is not None: patch["phone"] = body.phone.strip()
     if patch:
         await db.users.update_one({"id": tech_id}, {"$set": patch})
     updated = await db.users.find_one({"id": tech_id}, {"_id": 0, "password": 0})
