@@ -458,21 +458,27 @@ def make_email_router(db, get_user):
                      json={"message": msg, "saveToSentItems": body.save_to_sent})
         return {"ok": True, "sent": True}
 
-    @router.post("/email/messages/{mid}/ingest")
-    async def ingest_email(mid: str, user=Depends(get_user)):
-        """Pull email body + any links inside into Wrench's brain (library).
-        One tap → email body becomes a library chunk, every URL in the body
-        is fetched and ingested as additional chunks."""
+    async def _ingest_message_for_account(user_id: str, acct: Dict[str, Any], mid: str) -> Dict[str, Any]:
+        """Pull a single message (by Graph id) into library_chunks. Used by both
+        the manual INGEST endpoint and the background AUTO-INGEST loop.
+        Dedupe by source_msg_id — skip if we've already ingested this message."""
         import re as _re
         import httpx as _httpx
         from bs4 import BeautifulSoup as _BS
-        acct = await _get_account(user)
+
+        # Dedupe — already ingested?
+        existing = await db.library_items.find_one(
+            {"user_id": user_id, "source_msg_id": mid},
+            {"id": 1}
+        )
+        if existing:
+            return {"ok": True, "skipped": "already_ingested", "item_id": existing.get("id"), "subject": "", "email_chars": 0, "links_found": 0, "links_ingested": 0, "links": []}
+
         msg = await _graph("GET", f"/me/messages/{mid}", acct["access_token"])
         subject = msg.get("subject", "(no subject)")
         sender = (msg.get("from", {}) or {}).get("emailAddress", {}).get("address", "")
         body_obj = msg.get("body", {}) or {}
         body_html = body_obj.get("content", "")
-        # strip HTML to text + clean zero-width junk + collapse whitespace
         try:
             text = _BS(body_html, "html.parser").get_text(" ", strip=True)
         except Exception:
@@ -483,19 +489,18 @@ def make_email_router(db, get_user):
         item_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
         await db.library_items.insert_one({
-            "id": item_id, "user_id": user["id"], "name": f"[Email] {subject}",
+            "id": item_id, "user_id": user_id, "name": f"[Email] {subject}",
             "kind": "email", "size": len(text), "status": "ready",
             "chunk_count": 1, "source": "outlook-ingest",
-            "source_label": sender, "created_at": now,
+            "source_label": sender, "source_msg_id": mid, "created_at": now,
         })
         await db.library_chunks.insert_one({
-            "id": str(uuid.uuid4()), "user_id": user["id"], "item_id": item_id,
+            "id": str(uuid.uuid4()), "user_id": user_id, "item_id": item_id,
             "source": f"Email from {sender}: {subject}", "text": text[:50000],
             "created_at": now,
         })
 
         urls = list(set(_re.findall(r"https?://[^\s<>\"']+", body_html)))
-        # Filter out tracking garbage + binary file extensions (images, PDFs, etc.)
         bad_substr = ["unsubscribe","mailto:","tracking","click.","beacon","pixel"]
         bad_ext = (".png",".jpg",".jpeg",".gif",".webp",".svg",".ico",".bmp",
                    ".pdf",".zip",".dmg",".exe",".mp4",".mp3",".css",".js",".woff",".ttf")
@@ -514,19 +519,16 @@ def make_email_router(db, get_user):
                     r = await c.get(u, headers={"User-Agent": "WrenchBot/1.0"})
                     if r.status_code != 200:
                         continue
-                    # Only ingest text/html responses — skip binary even if URL didn't tell us
                     ctype = (r.headers.get("content-type") or "").lower()
                     if not ("text/html" in ctype or "text/plain" in ctype or "application/xhtml" in ctype):
                         continue
                     ptext = _BS(r.text, "html.parser").get_text(" ", strip=True)
-                    # Collapse whitespace + strip zero-width junk common in marketing email
                     ptext = _re.sub(r"[\u200b-\u200f\u202a-\u202e\u2060\ufeff\xa0]+", " ", ptext)
                     ptext = _re.sub(r"\s+", " ", ptext).strip()[:50000]
                     if not ptext or len(ptext) < 100:
                         continue
-                    chunk_id = str(uuid.uuid4())
                     await db.library_chunks.insert_one({
-                        "id": chunk_id, "user_id": user["id"], "item_id": item_id,
+                        "id": str(uuid.uuid4()), "user_id": user_id, "item_id": item_id,
                         "source": f"Link from email '{subject}': {u}",
                         "text": ptext, "created_at": now,
                     })
@@ -535,10 +537,123 @@ def make_email_router(db, get_user):
                     pass
         await db.library_items.update_one({"id": item_id}, {"$set": {"chunk_count": 1 + len(fetched)}})
         return {
-            "ok": True, "item_id": item_id, "subject": subject,
+            "ok": True, "item_id": item_id, "subject": subject, "sender": sender,
             "email_chars": len(text), "links_found": len(urls),
             "links_ingested": len(fetched), "links": fetched,
         }
+
+    @router.post("/email/messages/{mid}/ingest")
+    async def ingest_email(mid: str, user=Depends(get_user)):
+        """Pull email body + any links inside into Wrench's brain (library)."""
+        acct = await _get_account(user)
+        return await _ingest_message_for_account(user["id"], acct, mid)
+
+    # ----- Auto-ingest rules (pattern-matched background ingest) -----
+    class IngestRuleReq(BaseModel):
+        sender_pattern: Optional[str] = ""   # substring on from.emailAddress.address (case-insensitive)
+        subject_pattern: Optional[str] = ""  # substring on subject (case-insensitive)
+        label: Optional[str] = ""            # human label like "AutoLeap ROs"
+
+    @router.get("/email/ingest-rules")
+    async def list_ingest_rules(user=Depends(get_user)):
+        sid = user.get("shop_id") or DEFAULT_SHOP_ID
+        cur = db.email_ingest_rules.find({"user_id": user["id"], "shop_id": sid}, {"_id": 0}).sort("created_at", -1)
+        rules = await cur.to_list(200)
+        return {"rules": rules}
+
+    @router.post("/email/ingest-rules")
+    async def create_ingest_rule(body: IngestRuleReq, user=Depends(get_user)):
+        sender = (body.sender_pattern or "").strip().lower()
+        subject = (body.subject_pattern or "").strip().lower()
+        if not sender and not subject:
+            raise HTTPException(400, "Need at least a sender_pattern or subject_pattern.")
+        sid = user.get("shop_id") or DEFAULT_SHOP_ID
+        rule_id = uuid.uuid4().hex
+        doc = {
+            "id": rule_id,
+            "user_id": user["id"],
+            "shop_id": sid,
+            "sender_pattern": sender,
+            "subject_pattern": subject,
+            "label": (body.label or "").strip() or (f"From: {sender}" if sender else f"Subject: {subject}"),
+            "enabled": True,
+            "created_at": _now().isoformat(),
+            "last_run_at": None,
+            "ingest_count": 0,
+        }
+        await db.email_ingest_rules.insert_one(doc)
+        doc.pop("_id", None)
+        return doc
+
+    @router.patch("/email/ingest-rules/{rule_id}/toggle")
+    async def toggle_ingest_rule(rule_id: str, user=Depends(get_user)):
+        rule = await db.email_ingest_rules.find_one({"id": rule_id, "user_id": user["id"]})
+        if not rule:
+            raise HTTPException(404, "Rule not found.")
+        new_state = not bool(rule.get("enabled", True))
+        await db.email_ingest_rules.update_one({"id": rule_id}, {"$set": {"enabled": new_state}})
+        return {"ok": True, "enabled": new_state}
+
+    @router.delete("/email/ingest-rules/{rule_id}")
+    async def delete_ingest_rule(rule_id: str, user=Depends(get_user)):
+        r = await db.email_ingest_rules.delete_one({"id": rule_id, "user_id": user["id"]})
+        if r.deleted_count == 0:
+            raise HTTPException(404, "Rule not found.")
+        return {"ok": True, "deleted": True}
+
+    async def auto_ingest_run_once() -> Dict[str, Any]:
+        """One pass across ALL users' enabled rules. Called by scheduler loop."""
+        report = {"rules_checked": 0, "messages_ingested": 0, "errors": 0}
+        rules_cur = db.email_ingest_rules.find({"enabled": True}, {"_id": 0})
+        rules = await rules_cur.to_list(1000)
+        # Group by user to avoid hitting Graph multiple times per user
+        by_user: Dict[str, list] = {}
+        for r in rules:
+            by_user.setdefault(r["user_id"], []).append(r)
+        for user_id, user_rules in by_user.items():
+            try:
+                acct = await db.email_accounts.find_one({"user_id": user_id, "provider": "microsoft"})
+                if not acct:
+                    continue
+                acct = await _refresh_if_needed(acct)
+                # Pull 50 most recent messages from inbox
+                data = await _graph("GET", "/me/mailFolders/inbox/messages", acct["access_token"],
+                                    params={"$top": 50, "$orderby": "receivedDateTime DESC",
+                                            "$select": "id,subject,from,receivedDateTime"})
+                msgs = data.get("value", [])
+                for rule in user_rules:
+                    sp = (rule.get("sender_pattern") or "").lower()
+                    sup = (rule.get("subject_pattern") or "").lower()
+                    matched = 0
+                    for m in msgs:
+                        sender = ((m.get("from") or {}).get("emailAddress") or {}).get("address", "").lower()
+                        subj = (m.get("subject") or "").lower()
+                        if sp and sp not in sender:
+                            continue
+                        if sup and sup not in subj:
+                            continue
+                        # Match — try to ingest (will dedupe internally via source_msg_id)
+                        try:
+                            res = await _ingest_message_for_account(user_id, acct, m["id"])
+                            if not res.get("skipped"):
+                                matched += 1
+                                report["messages_ingested"] += 1
+                        except Exception:
+                            report["errors"] += 1
+                            log.exception(f"auto-ingest message {m.get('id')} failed")
+                    await db.email_ingest_rules.update_one(
+                        {"id": rule["id"]},
+                        {"$set": {"last_run_at": _now().isoformat()},
+                         "$inc": {"ingest_count": matched}}
+                    )
+                    report["rules_checked"] += 1
+            except Exception:
+                report["errors"] += 1
+                log.exception(f"auto-ingest user {user_id} failed")
+        return report
+
+    # Expose the runner so the scheduler can call it
+    router.auto_ingest_run_once = auto_ingest_run_once  # type: ignore[attr-defined]
 
 
     # ----- Search -----

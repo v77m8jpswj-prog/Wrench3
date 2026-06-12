@@ -3522,7 +3522,7 @@ async def startup_migrate():
     # Fire up the background scheduler: daily crawler + hourly harvester + weekly digest
     try:
         from scheduler import start_scheduler
-        start_scheduler(db)
+        start_scheduler(db, email_router=email_router)
     except Exception as e:
         log.exception(f"scheduler start failed: {e}")
 

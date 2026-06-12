@@ -39,6 +39,7 @@ log = logging.getLogger("datawrench.scheduler")
 CRAWL_INTERVAL_SEC = int(os.environ.get("SCHED_CRAWL_INTERVAL_SEC", str(24 * 3600)))
 HARVEST_INTERVAL_SEC = int(os.environ.get("SCHED_HARVEST_INTERVAL_SEC", str(3600)))
 DIGEST_CHECK_INTERVAL_SEC = int(os.environ.get("SCHED_DIGEST_CHECK_INTERVAL_SEC", str(3600)))
+AUTO_INGEST_INTERVAL_SEC = int(os.environ.get("SCHED_AUTO_INGEST_INTERVAL_SEC", str(300)))
 # Weekly digest fires on Sunday at this UTC hour (21 UTC = 4pm CST winter / 3pm summer)
 DIGEST_DAY_UTC = 6  # Monday=0 ... Sunday=6
 DIGEST_HOUR_UTC = 21
@@ -415,7 +416,7 @@ async def _digest_loop(db):
 _started = False
 
 
-def start_scheduler(db):
+def start_scheduler(db, email_router=None):
     """Call from server.py startup. Idempotent across uvicorn hot-reloads."""
     global _started
     if _started:
@@ -425,4 +426,24 @@ def start_scheduler(db):
     asyncio.create_task(_crawler_loop(db))
     asyncio.create_task(_harvest_loop(db))
     asyncio.create_task(_digest_loop(db))
-    log.info("background scheduler started: crawler + harvester + digest loops")
+    if email_router is not None and hasattr(email_router, "auto_ingest_run_once"):
+        asyncio.create_task(_auto_ingest_loop(db, email_router))
+        log.info("background scheduler started: crawler + harvester + digest + auto-ingest loops")
+    else:
+        log.info("background scheduler started: crawler + harvester + digest loops")
+
+
+async def _auto_ingest_loop(db, email_router):
+    log.info(f"auto_ingest_loop started (interval={AUTO_INGEST_INTERVAL_SEC}s)")
+    # Wait 60s after boot so reloads settle
+    await asyncio.sleep(60)
+    while True:
+        try:
+            summary = await email_router.auto_ingest_run_once()
+            if summary.get("messages_ingested", 0) > 0 or summary.get("errors", 0) > 0:
+                log.info(f"auto-ingest pass: {summary}")
+            await _record_run(db, "auto_ingest", "ok", summary)
+        except Exception as e:
+            log.exception(f"auto_ingest_loop iteration crashed: {e}")
+            await _record_run(db, "auto_ingest", "error", {"error": str(e)[:300]})
+        await asyncio.sleep(AUTO_INGEST_INTERVAL_SEC)

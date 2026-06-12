@@ -158,7 +158,8 @@ Already covered in this session:
 
 ## Pending / open items after overnight session
 - [x] **Outlook OAuth redirect_uri drift between preview/prod** — FIXED Jun 12, 2026. `email_mod.py` now derives redirect URI from inbound request host (via `x-forwarded-host`) at runtime instead of reading `MS_REDIRECT_URI` env var. State row stashes the chosen URI so token exchange matches. Works on prod + preview with zero env config.
-- [x] **EMAIL → BRAIN ingest button** — SHIPPED Jun 12, 2026. `POST /api/email/messages/{mid}/ingest` pulls email body + every URL inside as separate library_chunks. INGEST button between REPLY and ARCHIVE on `/email` reading pane. Fixed missing `import uuid` that would've crashed prior agent's stub.
+- [x] **EMAIL → BRAIN ingest button** — SHIPPED Jun 12, 2026. `POST /api/email/messages/{mid}/ingest` pulls email body + every URL inside as separate library_chunks. INGEST button between REPLY and ARCHIVE on `/email` reading pane. Fixed missing `import uuid` that would've crashed prior agent's stub. Audit pass added content-type + binary-ext filter + zero-width char stripper.
+- [x] **AUTO-INGEST RULES + background loop** — SHIPPED Jun 12, 2026. New collection `email_ingest_rules` ({sender_pattern, subject_pattern, enabled, ingest_count}). CRUD endpoints `/api/email/ingest-rules`. Background loop in scheduler.py runs every 5 min (`SCHED_AUTO_INGEST_INTERVAL_SEC` env), pattern-matches inbox messages, dedupes via `library_items.source_msg_id`. One-tap "AUTO" button in reading pane creates a sender rule. "AUTO (n)" panel in top bar lists/toggles/deletes rules. End-to-end verified — 2 matches ingested first pass, 0 on second (dedupe works).
 - [ ] Twilio toll-free TFV — pending review (Twilio side, ETA 1-3 days from 5/27 submission)
 - [ ] AutoLeap Email Parser (Outlook RO emails → brain cases) — needs Doc to set iCloud → Outlook forward rule
 - [ ] Wrench BUILDS mode (self-serve feature deploy)

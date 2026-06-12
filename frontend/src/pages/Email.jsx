@@ -128,6 +128,37 @@ export default function Email() {
     } finally { setIngesting(null); }
   };
 
+  // ---------- AUTO-INGEST RULES ----------
+  const [rules, setRules] = useState([]);
+  const [showRules, setShowRules] = useState(false);
+  const refreshRules = async () => {
+    if (!status?.connected) return;
+    try { const r = await api.get("/email/ingest-rules"); setRules(r.data?.rules || []); } catch {/*ignore*/}
+  };
+  useEffect(() => { if (status?.connected) refreshRules(); /* eslint-disable-next-line */ }, [status?.connected]);
+
+  const autoIngestSender = async (m) => {
+    const sender = m.from?.emailAddress?.address || "";
+    if (!sender) return;
+    if (!window.confirm(`Auto-ingest all future emails from ${sender}?`)) return;
+    try {
+      await api.post("/email/ingest-rules", { sender_pattern: sender, label: `From: ${sender}` });
+      setFlash(`AUTO-INGEST RULE ADDED — ${sender}`);
+      setTimeout(()=>setFlash(""), 2500);
+      refreshRules();
+    } catch (e) { setErr(e?.response?.data?.detail || "Couldn't add rule"); }
+  };
+
+  const toggleRule = async (id) => {
+    try { await api.patch(`/email/ingest-rules/${id}/toggle`); refreshRules(); }
+    catch (e) { setErr(e?.response?.data?.detail || "Toggle failed"); }
+  };
+  const deleteRule = async (id) => {
+    if (!window.confirm("Delete this auto-ingest rule?")) return;
+    try { await api.delete(`/email/ingest-rules/${id}`); refreshRules(); }
+    catch (e) { setErr(e?.response?.data?.detail || "Delete failed"); }
+  };
+
   // -------------- Render --------------
   if (!status) {
     return <div className="p-6 text-ink-3 text-sm">Loading email status...</div>;
@@ -198,10 +229,52 @@ export default function Email() {
           </div>
         </div>
         <div className="flex gap-2 flex-wrap">
+          <button onClick={()=>{setShowRules(s=>!s); refreshRules();}} className={`btn-ghost text-xs flex items-center gap-1 ${rules.filter(r=>r.enabled).length>0?"border-amber2 text-amber2":""}`} data-testid="email-rules-toggle">
+            <BrainCircuit size={12}/>AUTO ({rules.filter(r=>r.enabled).length})
+          </button>
           <button onClick={refreshList} className="btn-ghost text-xs flex items-center gap-1" data-testid="email-refresh"><RefreshCw size={12}/>REFRESH</button>
           <button onClick={()=>setComposing(true)} className="btn-rust text-sm flex items-center gap-2" data-testid="email-compose"><Plus size={14}/>COMPOSE</button>
         </div>
       </div>
+
+      {showRules && (
+        <div className="mb-3 border border-amber2/40 bg-amber2/5" data-testid="auto-ingest-panel">
+          <div className="px-3 py-2 bg-amber2/10 border-b border-amber2/30 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <BrainCircuit size={14} className="text-amber2"/>
+              <div className="text-xs uppercase tracking-widest font-bold text-amber2">AUTO-INGEST RULES — wrench reads these on arrival</div>
+            </div>
+            <button onClick={()=>setShowRules(false)} className="text-ink-3 hover:text-ink p-1" data-testid="auto-ingest-close"><X size={14}/></button>
+          </div>
+          <div className="p-3">
+            {rules.length === 0 ? (
+              <div className="text-xs text-ink-3">
+                No rules yet. Open an email and tap <span className="text-amber2 font-bold">AUTO</span> to auto-ingest everything from that sender. Checks inbox every 5 min.
+              </div>
+            ) : (
+              <div className="divide-y divide-amber2/20">
+                {rules.map(r => (
+                  <div key={r.id} className="py-2 flex items-center gap-2" data-testid={`auto-rule-${r.id}`}>
+                    <span className={`text-[10px] uppercase tracking-widest px-1.5 py-0.5 border ${r.enabled?"border-ok text-ok":"border-ink-3 text-ink-3"}`}>
+                      {r.enabled?"ON":"OFF"}
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm truncate">{r.label || (r.sender_pattern || r.subject_pattern)}</div>
+                      <div className="text-[10px] text-ink-3 truncate">
+                        {r.sender_pattern && <>from: <span className="text-amber2">{r.sender_pattern}</span>{r.subject_pattern && " · "}</>}
+                        {r.subject_pattern && <>subj: <span className="text-amber2">{r.subject_pattern}</span></>}
+                        {r.ingest_count > 0 && <span className="text-ok ml-2">{r.ingest_count} ingested</span>}
+                      </div>
+                    </div>
+                    <button onClick={()=>toggleRule(r.id)} className="text-xs px-2 py-1 text-ink-2 hover:text-amber2" data-testid={`auto-rule-toggle-${r.id}`}>{r.enabled?"PAUSE":"RESUME"}</button>
+                    <button onClick={()=>deleteRule(r.id)} className="text-ink-3 hover:text-danger p-1" data-testid={`auto-rule-del-${r.id}`}><Trash2 size={14}/></button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {flash && <div className="mb-3 border border-ok bg-ok/10 text-ok text-xs uppercase tracking-widest p-2" data-testid="email-flash">{flash}</div>}
       {err && <div className="mb-3 border border-danger bg-danger/10 text-danger text-sm p-2" data-testid="email-err">{err}</div>}
@@ -294,6 +367,9 @@ export default function Email() {
                   <button onClick={()=>setReplying(true)} className="btn-rust text-xs flex items-center gap-1 px-3 py-1.5" data-testid="email-reply-btn"><Reply size={12}/>REPLY</button>
                   <button onClick={()=>ingest(selected)} disabled={ingesting===selected.id} className="btn-ghost text-xs flex items-center gap-1 px-3 py-1.5 border-amber2 text-amber2 hover:bg-amber2/10 disabled:opacity-50" data-testid="email-ingest-btn">
                     <BrainCircuit size={12}/>{ingesting===selected.id ? "INGESTING..." : "INGEST"}
+                  </button>
+                  <button onClick={()=>autoIngestSender(selected)} className="btn-ghost text-xs flex items-center gap-1 px-3 py-1.5 border-amber2/60 text-amber2/80 hover:bg-amber2/10" data-testid="email-auto-ingest-btn" title="Always ingest from this sender">
+                    <BrainCircuit size={12}/>AUTO
                   </button>
                   <button onClick={()=>archive(selected)} className="btn-ghost text-xs flex items-center gap-1 px-3 py-1.5" data-testid="email-archive-btn"><Archive size={12}/>ARCHIVE</button>
                 </div>
