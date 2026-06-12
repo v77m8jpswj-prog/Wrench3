@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Mail, Inbox, Send, Search, Archive, Reply, Bot, RefreshCw, X, AlertTriangle, CheckCircle2, Plus, Trash2, Edit3 } from "lucide-react";
+import { Mail, Inbox, Send, Search, Archive, Reply, Bot, RefreshCw, X, AlertTriangle, CheckCircle2, Plus, Trash2, Edit3, BrainCircuit } from "lucide-react";
 import api from "@/api";
 
 function timeAgo(iso) {
@@ -111,6 +111,21 @@ export default function Email() {
       if (selected?.id === m.id) setSelected(null);
       setFlash("Archived"); setTimeout(()=>setFlash(""), 1500);
     } catch (e) { setErr(e?.response?.data?.detail || "Move failed"); }
+  };
+
+  const [ingesting, setIngesting] = useState(null); // message id being ingested
+  const ingest = async (m) => {
+    if (ingesting) return;
+    setIngesting(m.id); setErr("");
+    try {
+      const r = await api.post(`/email/messages/${m.id}/ingest`);
+      const links = r.data?.links_ingested || 0;
+      const chars = r.data?.email_chars || 0;
+      setFlash(`INGESTED — ${chars} chars + ${links} link${links===1?"":"s"} into brain`);
+      setTimeout(()=>setFlash(""), 3000);
+    } catch (e) {
+      setErr(e?.response?.data?.detail || "Ingest failed");
+    } finally { setIngesting(null); }
   };
 
   // -------------- Render --------------
@@ -277,6 +292,9 @@ export default function Email() {
                 </div>
                 <div className="flex gap-2 flex-wrap">
                   <button onClick={()=>setReplying(true)} className="btn-rust text-xs flex items-center gap-1 px-3 py-1.5" data-testid="email-reply-btn"><Reply size={12}/>REPLY</button>
+                  <button onClick={()=>ingest(selected)} disabled={ingesting===selected.id} className="btn-ghost text-xs flex items-center gap-1 px-3 py-1.5 border-amber2 text-amber2 hover:bg-amber2/10 disabled:opacity-50" data-testid="email-ingest-btn">
+                    <BrainCircuit size={12}/>{ingesting===selected.id ? "INGESTING..." : "INGEST"}
+                  </button>
                   <button onClick={()=>archive(selected)} className="btn-ghost text-xs flex items-center gap-1 px-3 py-1.5" data-testid="email-archive-btn"><Archive size={12}/>ARCHIVE</button>
                 </div>
               </div>

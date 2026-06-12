@@ -27,6 +27,7 @@ import base64
 import hashlib
 import secrets
 import logging
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, List
 from urllib.parse import urlencode
@@ -471,11 +472,13 @@ def make_email_router(db, get_user):
         sender = (msg.get("from", {}) or {}).get("emailAddress", {}).get("address", "")
         body_obj = msg.get("body", {}) or {}
         body_html = body_obj.get("content", "")
-        # strip HTML to text
+        # strip HTML to text + clean zero-width junk + collapse whitespace
         try:
             text = _BS(body_html, "html.parser").get_text(" ", strip=True)
         except Exception:
             text = body_html
+        text = _re.sub(r"[\u200b-\u200f\u202a-\u202e\u2060\ufeff\xa0]+", " ", text)
+        text = _re.sub(r"\s+", " ", text).strip()
 
         item_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
@@ -492,8 +495,18 @@ def make_email_router(db, get_user):
         })
 
         urls = list(set(_re.findall(r"https?://[^\s<>\"']+", body_html)))
-        # Filter out common tracking/unsubscribe garbage
-        urls = [u for u in urls if not any(b in u.lower() for b in ["unsubscribe","mailto:","tracking","click.","beacon"])][:10]
+        # Filter out tracking garbage + binary file extensions (images, PDFs, etc.)
+        bad_substr = ["unsubscribe","mailto:","tracking","click.","beacon","pixel"]
+        bad_ext = (".png",".jpg",".jpeg",".gif",".webp",".svg",".ico",".bmp",
+                   ".pdf",".zip",".dmg",".exe",".mp4",".mp3",".css",".js",".woff",".ttf")
+        def _ok(u):
+            ul = u.lower().split("?")[0].split("#")[0]
+            if any(b in u.lower() for b in bad_substr):
+                return False
+            if ul.endswith(bad_ext):
+                return False
+            return True
+        urls = [u for u in urls if _ok(u)][:10]
         fetched = []
         async with _httpx.AsyncClient(timeout=15, follow_redirects=True) as c:
             for u in urls:
@@ -501,7 +514,14 @@ def make_email_router(db, get_user):
                     r = await c.get(u, headers={"User-Agent": "WrenchBot/1.0"})
                     if r.status_code != 200:
                         continue
-                    ptext = _BS(r.text, "html.parser").get_text(" ", strip=True)[:50000]
+                    # Only ingest text/html responses — skip binary even if URL didn't tell us
+                    ctype = (r.headers.get("content-type") or "").lower()
+                    if not ("text/html" in ctype or "text/plain" in ctype or "application/xhtml" in ctype):
+                        continue
+                    ptext = _BS(r.text, "html.parser").get_text(" ", strip=True)
+                    # Collapse whitespace + strip zero-width junk common in marketing email
+                    ptext = _re.sub(r"[\u200b-\u200f\u202a-\u202e\u2060\ufeff\xa0]+", " ", ptext)
+                    ptext = _re.sub(r"\s+", " ", ptext).strip()[:50000]
                     if not ptext or len(ptext) < 100:
                         continue
                     chunk_id = str(uuid.uuid4())

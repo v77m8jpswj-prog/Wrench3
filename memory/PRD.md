@@ -157,16 +157,19 @@ Already covered in this session:
    (brain_cases already in sync — 22/22.)
 
 ## Pending / open items after overnight session
+- [x] **Outlook OAuth redirect_uri drift between preview/prod** — FIXED Jun 12, 2026. `email_mod.py` now derives redirect URI from inbound request host (via `x-forwarded-host`) at runtime instead of reading `MS_REDIRECT_URI` env var. State row stashes the chosen URI so token exchange matches. Works on prod + preview with zero env config.
+- [x] **EMAIL → BRAIN ingest button** — SHIPPED Jun 12, 2026. `POST /api/email/messages/{mid}/ingest` pulls email body + every URL inside as separate library_chunks. INGEST button between REPLY and ARCHIVE on `/email` reading pane. Fixed missing `import uuid` that would've crashed prior agent's stub.
 - [ ] Twilio toll-free TFV — pending review (Twilio side, ETA 1-3 days from 5/27 submission)
-- [ ] AutoLeap Email Parser (Outlook RO emails → brain cases)
+- [ ] AutoLeap Email Parser (Outlook RO emails → brain cases) — needs Doc to set iCloud → Outlook forward rule
 - [ ] Wrench BUILDS mode (self-serve feature deploy)
 - [ ] DB Preview→Prod migration script (library_chunks, cases, vault)
-- [ ] Outlook 365 token refresh / re-login bug
+- [ ] Outlook 365 token refresh / re-login bug (silent auth drops)
 - [ ] `/api/brain/urgent-event` endpoint (Bud P0 push, lower priority than morning briefing)
 - [ ] `/api/voice/session/{id}/inject` (mid-session prompt patch — defer until peer agent requests it)
 - [ ] Add `agent_voice_tokens` per-peer collection (revocable individual tokens instead of shared `AGENT_MAIL_INBOUND_TOKEN`)
 - [ ] Surface morning briefing in WRENCH chat retrieval pass (wire after Bud starts posting real briefings)
 - [ ] Push prod deploy to expose `UPLOAD ZIP` button + ADD TECH button on `foreman.drunderhood.com`
+- [ ] Refactor `/app/backend/server.py` (>3500 lines) into `/app/backend/routes/` modules
 
 ## Partner agent (OG / Dr. Underhood Live Assist)
 - Letters round 4, 6, 8 acknowledged. Round 8 documents: case_ids_already_seen + Foreman Mail contract.
