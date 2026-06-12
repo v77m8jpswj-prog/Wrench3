@@ -99,6 +99,23 @@ def _challenge(verifier: str) -> str:
     return _b64url(hashlib.sha256(verifier.encode()).digest())
 
 
+def _derive_base_url(request: Request) -> str:
+    """Build the public base URL from the inbound request, honoring proxy headers.
+    Works for both preview and prod without depending on a fragile env var.
+    """
+    # k8s ingress / cloudflare style forwarding
+    proto = request.headers.get("x-forwarded-proto") or request.url.scheme or "https"
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc
+    # take only the first host if multiple
+    host = host.split(",")[0].strip()
+    return f"{proto}://{host}".rstrip("/")
+
+
+def _derive_redirect_uri(request: Request) -> str:
+    base = _derive_base_url(request)
+    return f"{base}/api/email/oauth/callback"
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -252,27 +269,32 @@ def make_email_router(db, get_user):
 
     # ----- Status -----
     @router.get("/email/status")
-    async def email_status(user=Depends(get_user)):
+    async def email_status(request: Request, user=Depends(get_user)):
         sid = user.get("shop_id") or DEFAULT_SHOP_ID
         acct = await db.email_accounts.find_one({"user_id": user["id"], "shop_id": sid, "provider": "microsoft"})
         return {
             "connected": bool(acct),
             "account_email": (acct or {}).get("account_email", ""),
             "connected_at": (acct or {}).get("created_at", ""),
-            "configured": bool(MS_CLIENT_ID and MS_CLIENT_SECRET and MS_REDIRECT_URI),
+            "configured": bool(MS_CLIENT_ID and MS_CLIENT_SECRET),
+            "redirect_uri": _derive_redirect_uri(request),
         }
 
     # ----- OAuth start -----
     @router.get("/email/oauth/start")
-    async def oauth_start(user=Depends(get_user)):
-        if not (MS_CLIENT_ID and MS_REDIRECT_URI):
-            raise HTTPException(503, "Email integration not configured yet. Tell Doc to set MS_CLIENT_ID and MS_REDIRECT_URI in backend env.")
+    async def oauth_start(request: Request, user=Depends(get_user)):
+        if not MS_CLIENT_ID:
+            raise HTTPException(503, "Email integration not configured yet. Tell Doc to set MS_CLIENT_ID in backend env.")
         sid = user.get("shop_id") or DEFAULT_SHOP_ID
         state = secrets.token_urlsafe(32)
         verifier = _gen_verifier()
+        redirect_uri = _derive_redirect_uri(request)
+        base_url = _derive_base_url(request)
         await db.email_oauth_states.insert_one({
             "state": state,
             "code_verifier": verifier,
+            "redirect_uri": redirect_uri,
+            "base_url": base_url,
             "user_id": user["id"],
             "shop_id": sid,
             "created_at": _now().isoformat(),
@@ -281,7 +303,7 @@ def make_email_router(db, get_user):
         params = {
             "client_id": MS_CLIENT_ID,
             "response_type": "code",
-            "redirect_uri": MS_REDIRECT_URI,
+            "redirect_uri": redirect_uri,
             "response_mode": "query",
             "scope": MS_SCOPES,
             "state": state,
@@ -293,23 +315,27 @@ def make_email_router(db, get_user):
 
     # ----- OAuth callback (Microsoft redirects here) -----
     @router.get("/email/oauth/callback")
-    async def oauth_callback(code: Optional[str] = None, state: Optional[str] = None,
+    async def oauth_callback(request: Request, code: Optional[str] = None, state: Optional[str] = None,
                              error: Optional[str] = None, error_description: Optional[str] = None):
-        # Best-effort: figure out where to redirect Doc when this is done
-        front = FRONTEND_BASE_URL or "/"
+        # Best-effort: figure out where to redirect Doc when this is done.
+        # Prefer the base url stashed at oauth_start so we land on the SAME env (prod/preview).
+        st = None
+        if state:
+            st = await db.email_oauth_states.find_one_and_delete({"state": state})
+        front = (st or {}).get("base_url") or _derive_base_url(request) or FRONTEND_BASE_URL or "/"
         if error:
             return RedirectResponse(url=f"{front}/email?status=error&msg={error}")
         if not code or not state:
             return RedirectResponse(url=f"{front}/email?status=error&msg=missing_code")
-        st = await db.email_oauth_states.find_one_and_delete({"state": state})
         if not st:
             return RedirectResponse(url=f"{front}/email?status=error&msg=bad_state")
+        redirect_uri = st.get("redirect_uri") or _derive_redirect_uri(request)
         data = {
             "client_id": MS_CLIENT_ID,
             "client_secret": MS_CLIENT_SECRET,
             "grant_type": "authorization_code",
             "code": code,
-            "redirect_uri": MS_REDIRECT_URI,
+            "redirect_uri": redirect_uri,
             "code_verifier": st["code_verifier"],
             "scope": MS_SCOPES,
         }
