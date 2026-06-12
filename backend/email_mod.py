@@ -431,6 +431,70 @@ def make_email_router(db, get_user):
                      json={"message": msg, "saveToSentItems": body.save_to_sent})
         return {"ok": True, "sent": True}
 
+    @router.post("/email/messages/{mid}/ingest")
+    async def ingest_email(mid: str, user=Depends(get_user)):
+        """Pull email body + any links inside into Wrench's brain (library).
+        One tap → email body becomes a library chunk, every URL in the body
+        is fetched and ingested as additional chunks."""
+        import re as _re
+        import httpx as _httpx
+        from bs4 import BeautifulSoup as _BS
+        acct = await _get_account(user)
+        msg = await _graph("GET", f"/me/messages/{mid}", acct["access_token"])
+        subject = msg.get("subject", "(no subject)")
+        sender = (msg.get("from", {}) or {}).get("emailAddress", {}).get("address", "")
+        body_obj = msg.get("body", {}) or {}
+        body_html = body_obj.get("content", "")
+        # strip HTML to text
+        try:
+            text = _BS(body_html, "html.parser").get_text(" ", strip=True)
+        except Exception:
+            text = body_html
+
+        item_id = str(uuid.uuid4())
+        now = datetime.now(timezone.utc).isoformat()
+        await db.library_items.insert_one({
+            "id": item_id, "user_id": user["id"], "name": f"[Email] {subject}",
+            "kind": "email", "size": len(text), "status": "ready",
+            "chunk_count": 1, "source": "outlook-ingest",
+            "source_label": sender, "created_at": now,
+        })
+        await db.library_chunks.insert_one({
+            "id": str(uuid.uuid4()), "user_id": user["id"], "item_id": item_id,
+            "source": f"Email from {sender}: {subject}", "text": text[:50000],
+            "created_at": now,
+        })
+
+        urls = list(set(_re.findall(r"https?://[^\s<>\"']+", body_html)))
+        # Filter out common tracking/unsubscribe garbage
+        urls = [u for u in urls if not any(b in u.lower() for b in ["unsubscribe","mailto:","tracking","click.","beacon"])][:10]
+        fetched = []
+        async with _httpx.AsyncClient(timeout=15, follow_redirects=True) as c:
+            for u in urls:
+                try:
+                    r = await c.get(u, headers={"User-Agent": "WrenchBot/1.0"})
+                    if r.status_code != 200:
+                        continue
+                    ptext = _BS(r.text, "html.parser").get_text(" ", strip=True)[:50000]
+                    if not ptext or len(ptext) < 100:
+                        continue
+                    chunk_id = str(uuid.uuid4())
+                    await db.library_chunks.insert_one({
+                        "id": chunk_id, "user_id": user["id"], "item_id": item_id,
+                        "source": f"Link from email '{subject}': {u}",
+                        "text": ptext, "created_at": now,
+                    })
+                    fetched.append(u)
+                except Exception:
+                    pass
+        await db.library_items.update_one({"id": item_id}, {"$set": {"chunk_count": 1 + len(fetched)}})
+        return {
+            "ok": True, "item_id": item_id, "subject": subject,
+            "email_chars": len(text), "links_found": len(urls),
+            "links_ingested": len(fetched), "links": fetched,
+        }
+
+
     # ----- Search -----
     @router.get("/email/search")
     async def search_messages(q: str = Query(..., min_length=1), top: int = 25, user=Depends(get_user)):
