@@ -13,6 +13,9 @@ import os
 import io
 import json
 import math
+import time as _time
+import hashlib as _hashlib
+import secrets as _secrets
 import uuid
 import base64
 import logging
@@ -41,6 +44,36 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 # Comma-separated allowlist of origins permitted to call /api/brain/*
 # (in addition to bearer-token auth — defense in depth). Empty = allow any.
 BRAIN_ALLOWED_ORIGINS = [o.strip() for o in os.environ.get("BRAIN_ALLOWED_ORIGINS", "").split(",") if o.strip()]
+
+
+# ----- DB-backed peer-token cache -----
+# Lets us issue/revoke peer tokens from inside the app without touching env vars.
+# Updated every 30s by get_brain_token() on demand.
+class _BrainTokenCache:
+    db = None
+    hashes: set = set()
+    last_refresh: float = 0.0
+    refresh_interval: float = 30.0
+
+_brain_token_cache = _BrainTokenCache()
+
+
+async def _refresh_db_peer_tokens(force: bool = False):
+    """Refresh the cache of enabled DB-stored peer token hashes."""
+    if _brain_token_cache.db is None:
+        return
+    now = _time.time()
+    if not force and (now - _brain_token_cache.last_refresh) < _brain_token_cache.refresh_interval:
+        return
+    try:
+        cur = _brain_token_cache.db.brain_peer_tokens.find(
+            {"enabled": True}, {"token_sha256": 1, "_id": 0}
+        )
+        docs = await cur.to_list(500)
+        _brain_token_cache.hashes = {d["token_sha256"] for d in docs if d.get("token_sha256")}
+        _brain_token_cache.last_refresh = now
+    except Exception as e:
+        log.exception(f"failed to refresh DB peer-token cache: {e}")
 
 
 # ============ Models ============
@@ -265,17 +298,24 @@ def get_brain_token(authorization: Optional[str] = Header(None)) -> str:
     The bearer token IS the security boundary here. Browser-side CSRF is not
     a concern because no browser can obtain the token in the first place.
     For documentation purposes the allowlist of partner origins is still kept
-    in BRAIN_ALLOWED_ORIGINS but it is informational only."""
-    if not BRAIN_TOKEN:
-        raise HTTPException(503, "Brain not configured (missing BRAIN_INGRESS_TOKEN)")
+    in BRAIN_ALLOWED_ORIGINS but it is informational only.
+
+    Accepts (in order of cheapness):
+      1. The master BRAIN_INGRESS_TOKEN env var
+      2. Any BRAIN_PEER_TOKEN_* env var (legacy)
+      3. Any token issued via /api/peer-tokens (DB-backed, revocable from UI)
+    """
+    # Note: we want to keep this sync-callable because some legacy code paths
+    # construct it directly. So we wrap async work below using a small helper.
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(401, "Missing brain bearer token")
     presented = authorization[7:].strip()
-    if presented == BRAIN_TOKEN:
+
+    # 1) master env token
+    if BRAIN_TOKEN and presented == BRAIN_TOKEN:
         return BRAIN_TOKEN
-    # Also accept any peer-scoped brain token (revocable per-agent tokens)
-    # stored in env as BRAIN_PEER_TOKENS=peer1:abc,peer2:def
-    # OR as individual envs BRAIN_PEER_TOKEN_<NAME>=<value> (preferred for secrets)
+
+    # 2) Legacy env peer tokens
     peer_tokens_blob = os.environ.get("BRAIN_PEER_TOKENS", "")
     if peer_tokens_blob:
         for pair in peer_tokens_blob.split(","):
@@ -286,12 +326,37 @@ def get_brain_token(authorization: Optional[str] = Header(None)) -> str:
     for env_key, env_val in os.environ.items():
         if env_key.startswith("BRAIN_PEER_TOKEN_") and env_val and presented == env_val.strip():
             return presented
+
+    # 3) DB-backed peer tokens (refreshed lazily; check via async helper)
+    h = _hashlib.sha256(presented.encode()).hexdigest()
+    if h in _brain_token_cache.hashes:
+        return presented
+
+    # On miss, the cache might be stale — schedule a refresh for next request
+    # and try one synchronous lookup against the DB. This keeps the first
+    # request after a token creation working without waiting for the 30s cache window.
+    if _brain_token_cache.db is not None:
+        try:
+            # We cannot await here cleanly because the function is declared sync.
+            # The pragmatic compromise: kick off a refresh in the running loop
+            # so subsequent requests pick it up. The token-creation endpoint
+            # also force-refreshes the cache immediately.
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(_refresh_db_peer_tokens(force=True))
+        except Exception:
+            pass
+
+    if not BRAIN_TOKEN and not _brain_token_cache.hashes:
+        raise HTTPException(503, "Brain not configured (no tokens available)")
     raise HTTPException(401, "Invalid brain bearer token")
 
 
 # ============ Router factory (called from server.py with db) ============
 def make_brain_router(db, get_user):
     """Create the /api/brain/* and /api/cases/* router bound to this db."""
+    # Wire the token cache to this db so DB-backed peer tokens work
+    _brain_token_cache.db = db
     router = APIRouter()
 
     # ----- External brain endpoints (bearer token) -----
@@ -2292,6 +2357,63 @@ ul {{ padding-left: 22px; }}
             "open_count": len(open_leads),
             "open_leads": open_leads,
         }
+
+    # ============ PEER TOKENS — Doc-managed, DB-backed, revocable ============
+    # Lets Doc issue/revoke peer-agent tokens from inside the foreman UI without
+    # ever having to touch emergent environment-variable settings.
+
+    class PeerTokenCreate(BaseModel):
+        peer_name: str = Field(..., min_length=1, max_length=64)
+        label: Optional[str] = ""
+
+    @router.get("/peer-tokens")
+    async def list_peer_tokens(user=Depends(get_user)):
+        cur = db.brain_peer_tokens.find({"user_id": user["id"]}, {"_id": 0, "token_sha256": 0}).sort("created_at", -1)
+        rows = await cur.to_list(200)
+        return {"tokens": rows}
+
+    @router.post("/peer-tokens")
+    async def create_peer_token(body: PeerTokenCreate, user=Depends(get_user)):
+        """Generate a brand-new peer token. Returns the plaintext value ONCE —
+        only the hash is stored. Doc must copy + paste it now or rotate later."""
+        plain = _secrets.token_urlsafe(32)
+        h = _hashlib.sha256(plain.encode()).hexdigest()
+        rec = {
+            "id": uuid.uuid4().hex,
+            "user_id": user["id"],
+            "peer_name": body.peer_name.strip(),
+            "label": (body.label or "").strip() or body.peer_name.strip(),
+            "token_sha256": h,
+            "token_preview": plain[:6] + "…" + plain[-4:],
+            "enabled": True,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "last_used_at": None,
+        }
+        await db.brain_peer_tokens.insert_one(rec)
+        # Force the cache to pick this up immediately so the new token works on first try
+        await _refresh_db_peer_tokens(force=True)
+        rec.pop("_id", None)
+        # Token plaintext is returned ONCE here; never again.
+        rec["token"] = plain
+        return rec
+
+    @router.patch("/peer-tokens/{token_id}/toggle")
+    async def toggle_peer_token(token_id: str, user=Depends(get_user)):
+        rec = await db.brain_peer_tokens.find_one({"id": token_id, "user_id": user["id"]})
+        if not rec:
+            raise HTTPException(404, "Token not found.")
+        new_state = not bool(rec.get("enabled", True))
+        await db.brain_peer_tokens.update_one({"id": token_id}, {"$set": {"enabled": new_state}})
+        await _refresh_db_peer_tokens(force=True)
+        return {"ok": True, "enabled": new_state}
+
+    @router.delete("/peer-tokens/{token_id}")
+    async def delete_peer_token(token_id: str, user=Depends(get_user)):
+        r = await db.brain_peer_tokens.delete_one({"id": token_id, "user_id": user["id"]})
+        if r.deleted_count == 0:
+            raise HTTPException(404, "Token not found.")
+        await _refresh_db_peer_tokens(force=True)
+        return {"ok": True, "deleted": True}
 
     return router
 

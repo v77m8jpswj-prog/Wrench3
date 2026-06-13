@@ -6,6 +6,7 @@ import {
   Search, FileText, Mail, X,
 } from "lucide-react";
 import api from "@/api";
+import PeerTokens from "@/components/PeerTokens";
 
 // Clean home page — first thing Doc sees after login.
 // Logo prominent, big tiles routing to the daily-use sections. No marketing fluff.
@@ -87,6 +88,9 @@ export default function Home() {
           </Link>
         )}
       </div>
+
+      {/* ---------- Peer Agent Tokens (Bud / OG) ---------- */}
+      <PeerTokens />
 
       {/* ---------- Brain Search Bar ---------- */}
       <div className="mb-6 max-w-3xl mx-auto" data-testid="brain-search-wrap">
