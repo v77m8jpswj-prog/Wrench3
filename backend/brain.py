@@ -2232,6 +2232,67 @@ ul {{ padding-left: 22px; }}
             },
         }
 
+    # ============ PEER-SCOPED ENDPOINTS (for Bud / personal assistant) ============
+    # These are the ONLY endpoints Bud should hit. Lean, read-only, customer-lookup
+    # focused. Cuts the firehose down to what a personal assistant actually needs
+    # when a personal email mentions someone or a vehicle.
+
+    @router.get("/brain/peer/lookup")
+    async def peer_lookup_customer(
+        q: str = Query(..., min_length=2, description="Name, phone, vehicle, or partial match"),
+        _t: str = Depends(get_brain_token),
+    ):
+        """Look up a person/vehicle across leads + cases. Returns brief context
+        so Bud can answer 'is this person a customer? have we worked on their car?'
+        without leaking the full DB."""
+        import re as _re
+        safe = _re.escape(q.strip())
+        rx = {"$regex": safe, "$options": "i"}
+
+        # Leads (intake + active work)
+        lead_cur = db.leads.find(
+            {"$or": [{"name": rx}, {"contact": rx}, {"vehicle": rx}, {"what_they_need": rx}]},
+            {"_id": 0, "id": 1, "name": 1, "contact": 1, "vehicle": 1, "status": 1, "source": 1, "what_they_need": 1, "created_at": 1}
+        ).sort("created_at", -1).limit(10)
+        leads = await lead_cur.to_list(10)
+
+        # Cases (closed ROs)
+        case_cur = db.brain_cases.find(
+            {"$or": [
+                {"symptom": rx},
+                {"repair_summary": rx},
+                {"vehicle.make": rx},
+                {"vehicle.model": rx},
+                {"vehicle.vin": rx},
+                {"technician_name": rx},
+            ]},
+            {"_id": 0, "id": 1, "symptom": 1, "repair_summary": 1, "vehicle": 1, "outcome": 1, "created_at": 1, "technician_name": 1}
+        ).sort("created_at", -1).limit(5)
+        cases = await case_cur.to_list(5)
+
+        return {
+            "q": q,
+            "is_known": bool(leads or cases),
+            "leads": leads,
+            "closed_cases": cases,
+            "counts": {"leads": len(leads), "cases": len(cases)},
+        }
+
+    @router.get("/brain/peer/open-work")
+    async def peer_open_work(_t: str = Depends(get_brain_token)):
+        """What's currently in the shop / on the dance card. So Bud can say
+        'the GTO is in the shop right now' if a personal email mentions it."""
+        # Anything not closed/won/dead is "open"
+        open_cur = db.leads.find(
+            {"status": {"$nin": ["won", "lost", "dead", "closed", "archived"]}},
+            {"_id": 0, "id": 1, "name": 1, "contact": 1, "vehicle": 1, "status": 1, "what_they_need": 1, "created_at": 1}
+        ).sort("created_at", -1).limit(20)
+        open_leads = await open_cur.to_list(20)
+        return {
+            "open_count": len(open_leads),
+            "open_leads": open_leads,
+        }
+
     return router
 
 
