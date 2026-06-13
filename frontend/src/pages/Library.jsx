@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from "react";
-import { Upload, Trash2, FileText, FileSpreadsheet, BookOpen, RefreshCw, Link as LinkIcon, ExternalLink, Loader, ClipboardPaste, FileArchive } from "lucide-react";
+import { Upload, Trash2, FileText, FileSpreadsheet, BookOpen, RefreshCw, Link as LinkIcon, ExternalLink, Loader, ClipboardPaste, FileArchive, Brain } from "lucide-react";
 import api from "@/api";
 
 export default function Library() {
@@ -15,7 +15,13 @@ export default function Library() {
   const [pasteBusy, setPasteBusy] = useState(false);
   const [pasteMsg, setPasteMsg] = useState("");
   const [zipBusy, setZipBusy] = useState(false);
-  const [zipBatch, setZipBatch] = useState(null); // { batch_id, total, done, failed, skipped, status }
+  const [zipBatch, setZipBatch] = useState(null);
+  // ---- TEACH WRENCH state ----
+  const [teachOpen, setTeachOpen] = useState(false);
+  const [teachTopic, setTeachTopic] = useState("");
+  const [teachBusy, setTeachBusy] = useState(false);
+  const [teachResult, setTeachResult] = useState(null);
+  const [teachErr, setTeachErr] = useState("");
   const fileRef = useRef(null);
   const zipRef = useRef(null);
 
@@ -124,6 +130,20 @@ export default function Library() {
     return () => clearInterval(interval);
   }, [zipBatch?.batch_id, zipBatch?.status]);
 
+  const teach = async () => {
+    const topic = teachTopic.trim();
+    if (!topic) return;
+    setTeachBusy(true); setTeachErr(""); setTeachResult(null);
+    try {
+      const r = await api.post("/library/teach", { topic }, { timeout: 180000 });
+      setTeachResult(r.data);
+      setTeachTopic("");
+      refresh();
+    } catch (e) {
+      setTeachErr(e?.response?.data?.detail || e.message || "Teach failed");
+    } finally { setTeachBusy(false); }
+  };
+
   return (
     <div className="p-6" data-testid="library-page">
       <div className="flex items-end justify-between mb-4 border-b border-line pb-4">
@@ -184,6 +204,65 @@ export default function Library() {
           NOTE ON .HPT: HP TUNERS' BINARY FORMAT IS PROPRIETARY · WRENCH STORES THE FILE + EXTRACTS METADATA (VIN, OS, CALIBRATION ID).<br/>
           FOR TABLE EDITS, USE THE <span className="text-rust">CHARTS</span> TAB — SCREENSHOT OR PASTE THE SPECIFIC TABLE.
         </div>
+      </div>
+
+      <div className="panel mb-6 p-4 border-l-4 border-rust" data-testid="teach-wrench">
+        <button onClick={()=>setTeachOpen(o=>!o)} className="flex items-center gap-2 w-full text-left" data-testid="teach-toggle">
+          <Brain size={16} className="text-rust"/>
+          <div className="heading text-base flex-1">TEACH WRENCH FROM THE WEB</div>
+          <div className="text-[10px] text-ink-3 uppercase tracking-widest">{teachOpen ? "HIDE" : "OPEN"}</div>
+        </button>
+        {teachOpen && (
+          <div className="mt-3">
+            <p className="text-xs text-ink-2 mb-3">
+              Tell Wrench what you want him to learn — in plain words, like you'd tell a mechanic friend. He'll find the right manuals, manufacturer docs, and forum threads and pull them into the brain. Takes 30-90 seconds.
+            </p>
+            <textarea
+              value={teachTopic}
+              onChange={(e)=>setTeachTopic(e.target.value)}
+              placeholder="EXAMPLE: My 2021 Road Glide M8 114 has a big sucker air cleaner, catless head pipe, and Redline 480 cam. I'm running a Dynojet PV4 tuner. Learn how to tune this combo."
+              rows={4}
+              className="w-full bg-bg-1 border border-line focus:border-rust px-3 py-2 text-sm focus:outline-none resize-y"
+              data-testid="teach-topic-input"
+            />
+            <div className="flex items-center gap-2 mt-2">
+              <button onClick={teach} disabled={teachBusy || !teachTopic.trim()} className="btn-rust px-4 py-2 text-sm flex items-center gap-2 disabled:opacity-50" data-testid="teach-submit">
+                {teachBusy ? <Loader size={14} className="animate-spin"/> : <Brain size={14}/>}
+                {teachBusy ? "WRENCH IS READING..." : "GO LEARN IT"}
+              </button>
+              {teachBusy && <span className="text-[10px] text-ink-3 animate-blink">finding manuals + crawling pages…</span>}
+            </div>
+
+            {teachErr && <div className="mt-3 text-xs text-danger" data-testid="teach-err">ERR: {teachErr}</div>}
+
+            {teachResult && (
+              <div className="mt-4 border-2 border-rust/40 bg-rust/5 p-3" data-testid="teach-result">
+                <div className="text-sm font-bold text-rust mb-1">LEARNED: {teachResult.title}</div>
+                <div className="text-[11px] text-ink-2 mb-2">
+                  {teachResult.chunks_stored} chunks · {(teachResult.chars_stored || 0).toLocaleString()} chars stored
+                </div>
+                {teachResult.urls_fetched?.length > 0 && (
+                  <div className="text-[10px] text-ok mb-1 uppercase tracking-widest">PAGES READ:</div>
+                )}
+                {(teachResult.urls_fetched || []).map((u,i) => (
+                  <div key={i} className="text-[10px] text-ink-2 truncate">• {u}</div>
+                ))}
+                {teachResult.urls_skipped?.length > 0 && (
+                  <div className="text-[10px] text-ink-3 mt-2 uppercase tracking-widest">SKIPPED ({teachResult.urls_skipped.length} — bot-blocked or 404):</div>
+                )}
+                {teachResult.cheat_sheet && (
+                  <details className="mt-3">
+                    <summary className="text-[11px] text-amber2 uppercase tracking-widest cursor-pointer">Wrench's cheat-sheet (click to view)</summary>
+                    <pre className="text-[11px] text-ink-2 whitespace-pre-wrap mt-2 bg-bg-1 p-2 max-h-64 overflow-y-auto">{teachResult.cheat_sheet}</pre>
+                  </details>
+                )}
+                <div className="mt-3 text-[10px] text-ink-3">
+                  Now ask Wrench about this in the BRAIN SEARCH on the home page, or talk to him in /chat — he'll cite this.
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="panel mb-6 p-4 border-l-4 border-amber2" data-testid="url-feeder">

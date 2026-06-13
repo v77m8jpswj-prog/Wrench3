@@ -2420,6 +2420,161 @@ async def lib_delete(item_id: str, user=Depends(get_user)):
     return {"ok": True}
 
 
+class TeachReq(BaseModel):
+    topic: str = Field(..., min_length=3, max_length=2000)
+    urls: Optional[List[str]] = None  # optional manual URLs to also crawl
+
+
+@api.post("/library/teach")
+async def lib_teach(body: TeachReq, user=Depends(get_user)):
+    """Tell Wrench to go learn a topic.
+
+    Two-step flow:
+      1) Ask Claude to propose 5-8 specific URLs for this topic (real manuals,
+         manufacturer docs, well-known forums) and write a distilled cheat-sheet
+         based on its own training data.
+      2) Crawl every URL (Claude's + any Doc supplied), stash text in library_chunks
+         under a single library_item tagged with the topic. The cheat-sheet also
+         lands as its own chunk for instant retrieval.
+    """
+    import re as _re
+    import httpx as _httpx
+    from bs4 import BeautifulSoup as _BS
+    from emergentintegrations.llm.chat import LlmChat, UserMessage
+
+    topic = body.topic.strip()
+    extra_urls = [u.strip() for u in (body.urls or []) if u.strip()]
+    user_id = user["id"]
+
+    # Step 1 — let Claude name the topic, propose URLs, and write a cheat-sheet
+    sys_prompt = (
+        "You are Wrench, an expert automotive mechanic and tuner planning a research "
+        "session. Given a topic from Doc (your shop owner), respond with VALID JSON ONLY "
+        "(no markdown, no preamble) matching this schema exactly:\n"
+        "{\n"
+        '  "title": "<one short title, 60 chars or less>",\n'
+        '  "urls": ["<url1>","<url2>", ...],\n'
+        '  "cheat_sheet": "<distilled multi-paragraph cheat sheet of what you already know about this topic, plain text>"\n'
+        "}\n"
+        "Rules:\n"
+        "- Propose 4-8 SPECIFIC real URLs (manufacturer product/install pages, "
+        "official PDFs, well-known forum threads, fuelmoto/dynojet university articles, etc.). "
+        "Prefer authoritative sources over random blogs.\n"
+        "- The cheat_sheet should be the practical, no-bullshit summary you would tell a "
+        "mechanic friend who is about to do this job. Include specific numbers, AFR targets, "
+        "torque values, model years, common pitfalls — whatever applies. Do NOT use markdown "
+        "or asterisks. Plain text only.\n"
+        "- If the topic is vague, narrow it to the most likely intent based on Doc's shop "
+        "(performance Harley + automotive tuning) and proceed."
+    )
+    chat = LlmChat(
+        api_key=os.environ.get("EMERGENT_LLM_KEY", ""),
+        session_id=f"teach-{uuid.uuid4().hex[:8]}",
+        system_message=sys_prompt,
+    ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+    try:
+        plan_raw = await chat.send_message(UserMessage(text=f"TOPIC FROM DOC:\n{topic}"))
+    except Exception as e:
+        raise HTTPException(500, f"Wrench couldn't plan that: {e}")
+
+    # Extract JSON (the model sometimes wraps it; be lenient)
+    plan_raw = (plan_raw or "").strip()
+    m = _re.search(r"\{.*\}", plan_raw, _re.DOTALL)
+    if not m:
+        raise HTTPException(500, "Wrench's plan came back unreadable. Try rephrasing the topic.")
+    try:
+        plan = json.loads(m.group(0))
+    except Exception as e:
+        raise HTTPException(500, f"Wrench's plan wasn't valid JSON: {e}")
+
+    title = (plan.get("title") or topic)[:80]
+    suggested_urls = [u for u in (plan.get("urls") or []) if isinstance(u, str) and u.startswith("http")]
+    cheat_sheet = (plan.get("cheat_sheet") or "").strip()
+
+    # Step 2 — crawl every URL (dedupe), stash text in library_chunks
+    all_urls = list(dict.fromkeys(suggested_urls + extra_urls))[:12]
+
+    item_id = uuid.uuid4().hex
+    now = datetime.now(timezone.utc).isoformat()
+    await db.library_items.insert_one({
+        "id": item_id, "user_id": user_id,
+        "name": f"[Teach] {title}",
+        "kind": "teach", "size": 0, "status": "ready",
+        "chunk_count": 0, "source": "wrench-teach",
+        "source_label": topic[:120],
+        "created_at": now,
+    })
+
+    chunks_added = 0
+    total_chars = 0
+    fetched = []
+    skipped = []
+
+    # Always store the cheat sheet first (works even if no URLs crawl)
+    if cheat_sheet:
+        await db.library_chunks.insert_one({
+            "id": uuid.uuid4().hex,
+            "user_id": user_id,
+            "item_id": item_id,
+            "source": "Wrench's cheat-sheet (from training)",
+            "text": cheat_sheet[:50000],
+            "created_at": now,
+        })
+        chunks_added += 1
+        total_chars += len(cheat_sheet)
+
+    UA = "Mozilla/5.0 (compatible; WrenchBot/1.0)"
+    async with _httpx.AsyncClient(timeout=20, follow_redirects=True, headers={"User-Agent": UA}) as c:
+        for u in all_urls:
+            try:
+                r = await c.get(u)
+                if r.status_code != 200:
+                    skipped.append({"url": u, "reason": f"http {r.status_code}"})
+                    continue
+                ctype = (r.headers.get("content-type") or "").lower()
+                if not any(t in ctype for t in ["text/html", "text/plain", "application/xhtml"]):
+                    skipped.append({"url": u, "reason": "non-text content"})
+                    continue
+                soup = _BS(r.text, "html.parser")
+                for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
+                    tag.decompose()
+                text = soup.get_text(" ", strip=True)
+                text = _re.sub(r"[\u200b-\u200f\u202a-\u202e\u2060\ufeff\xa0]+", " ", text)
+                text = _re.sub(r"\s+", " ", text).strip()[:50000]
+                if len(text) < 200:
+                    skipped.append({"url": u, "reason": f"too thin ({len(text)} chars)"})
+                    continue
+                await db.library_chunks.insert_one({
+                    "id": uuid.uuid4().hex,
+                    "user_id": user_id,
+                    "item_id": item_id,
+                    "source": u,
+                    "text": text,
+                    "created_at": now,
+                })
+                chunks_added += 1
+                total_chars += len(text)
+                fetched.append(u)
+            except Exception as e:
+                skipped.append({"url": u, "reason": str(e)[:120]})
+
+    await db.library_items.update_one(
+        {"id": item_id},
+        {"$set": {"chunk_count": chunks_added, "size": total_chars}}
+    )
+
+    return {
+        "ok": True,
+        "item_id": item_id,
+        "title": title,
+        "chunks_stored": chunks_added,
+        "chars_stored": total_chars,
+        "urls_fetched": fetched,
+        "urls_skipped": skipped,
+        "cheat_sheet": cheat_sheet,
+    }
+
+
 # ============ Vehicles ============
 @api.get("/vin/decode/{vin}")
 async def vin_decode(vin: str, user=Depends(get_user)):
