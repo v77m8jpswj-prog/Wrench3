@@ -548,6 +548,50 @@ def make_email_router(db, get_user):
         acct = await _get_account(user)
         return await _ingest_message_for_account(user["id"], acct, mid)
 
+    @router.post("/email/messages/{mid}/summarize")
+    async def summarize_email(mid: str, user=Depends(get_user)):
+        """Wrench reads the email and spits back a 3-line gist. No corporate
+        fluff — what it is, what they want, what to do."""
+        import re as _re
+        from bs4 import BeautifulSoup as _BS
+        acct = await _get_account(user)
+        msg = await _graph("GET", f"/me/messages/{mid}", acct["access_token"])
+        subject = msg.get("subject", "(no subject)")
+        sender = (msg.get("from", {}) or {}).get("emailAddress", {}).get("address", "")
+        body_html = (msg.get("body", {}) or {}).get("content", "")
+        try:
+            text = _BS(body_html, "html.parser").get_text(" ", strip=True)
+        except Exception:
+            text = body_html
+        text = _re.sub(r"[\u200b-\u200f\u202a-\u202e\u2060\ufeff\xa0]+", " ", text)
+        text = _re.sub(r"\s+", " ", text).strip()[:8000]
+        if not text:
+            return {"summary": "(empty email body — nothing to summarize)"}
+
+        sys_prompt = (
+            "You are Wrench, a gruff old-school mechanic giving Doc a quick read on an email. "
+            "Return exactly 3 short lines, no markdown, no asterisks, no preamble:\n"
+            "Line 1: WHAT IT IS - one sentence, what kind of email this is.\n"
+            "Line 2: WHAT THEY WANT - what action they are asking for.\n"
+            "Line 3: WHAT TO DO - one short verb-led suggestion for Doc. "
+            "If nothing needs doing, say 'nothing - junk/info only.'\n"
+            "Plain text only. No greetings, no signoffs, no apologies. Be terse."
+        )
+        from emergentintegrations.llm.chat import LlmChat, UserMessage
+        chat = LlmChat(
+            api_key=EMERGENT_LLM_KEY,
+            session_id=f"summary-{mid[:8]}",
+            system_message=sys_prompt,
+        ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+        try:
+            summary = await chat.send_message(UserMessage(
+                text=f"From: {sender}\nSubject: {subject}\n\n{text}"
+            ))
+        except Exception as e:
+            raise HTTPException(500, f"Wrench couldn't read that one: {e}")
+        summary = _re.sub(r"\*+", "", summary or "").strip()
+        return {"message_id": mid, "subject": subject, "sender": sender, "summary": summary}
+
     # ----- Auto-ingest rules (pattern-matched background ingest) -----
     class IngestRuleReq(BaseModel):
         sender_pattern: Optional[str] = ""   # substring on from.emailAddress.address (case-insensitive)

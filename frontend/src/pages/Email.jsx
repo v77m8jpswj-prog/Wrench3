@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Mail, Inbox, Send, Search, Archive, Reply, Bot, RefreshCw, X, AlertTriangle, CheckCircle2, Plus, Trash2, Edit3, BrainCircuit } from "lucide-react";
+import { Mail, Inbox, Send, Search, Archive, Reply, Bot, RefreshCw, X, AlertTriangle, CheckCircle2, Plus, Trash2, Edit3, BrainCircuit, Zap } from "lucide-react";
 import api from "@/api";
 
 function timeAgo(iso) {
