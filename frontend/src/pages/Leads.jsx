@@ -228,7 +228,13 @@ export default function Leads() {
   }, [refresh]);
 
   const newCount = leads.filter(l => l.status === "new").length;
-  const isPhone = (c) => /^[+\d][\d\s\-()]{6,}$/.test((c || "").trim());
+  // Phone if 7+ digits and no '@' (handles "(479)221-0417", "479-221-0417", "4792210417", "+1 479 221 0417")
+  const isPhone = (c) => {
+    const s = (c || "").trim();
+    if (!s || s.includes("@")) return false;
+    const digits = s.replace(/\D/g, "");
+    return digits.length >= 7;
+  };
 
   return (
     <div className="p-4 md:p-6 max-w-4xl mx-auto" data-testid="leads-page">
