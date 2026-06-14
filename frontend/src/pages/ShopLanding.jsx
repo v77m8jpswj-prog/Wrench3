@@ -244,42 +244,24 @@ export default function ShopLanding() {
           <p className="text-base md:text-lg text-ink-2 mb-6 max-w-2xl mx-auto">
             Pop your camera at the QR code, get the shop in your pocket. Quote requests, hours, address, directions — one tap.
           </p>
-          <div className="flex flex-col md:flex-row items-center justify-center gap-6 mt-4" data-testid="qr-codes-row">
-            {/* QR #1 — Customer Quote */}
-            <div className="inline-block border-4 border-amber2 px-3 py-3 bg-white" data-testid="qr-code-quote">
+          <div className="flex justify-center mt-4" data-testid="qr-codes-row">
+            <a
+              href="https://apps.apple.com/us/app/dr-underhood/id6765977965"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block max-w-2xl w-full"
+              data-testid="qr-promo-card-link"
+            >
               <img
-                src={`https://api.qrserver.com/v1/create-qr-code/?size=320x320&margin=0&qzone=1&color=000000&bgcolor=ffffff&format=png&data=${encodeURIComponent("https://foreman.drunderhood.com/quote")}`}
-                alt="Scan to get a quote"
-                width="320"
-                height="320"
-                className="block"
-                data-testid="qr-code-quote-img"
+                src="https://customer-assets.emergentagent.com/job_dialogue-bot-9/artifacts/ckygz69x_7B5AD215-538B-40C0-BB42-3647435DB236.png"
+                alt="Put the car on the phone — Dr Underhood Live Assist — Apple App Store + Google Play"
+                className="block w-full h-auto border-4 border-rust"
+                data-testid="qr-promo-card"
               />
-              <div className="text-center mt-2 text-[11px] uppercase tracking-widest text-rust font-bold">
-                GET A QUOTE
-              </div>
-              <div className="text-center text-[9px] uppercase tracking-widest text-ink-3">
-                foreman.drunderhood.com/quote
-              </div>
-            </div>
-
-            {/* QR #2 — Install the iOS App from the App Store */}
-            <div className="inline-block border-4 border-amber2 px-3 py-3 bg-white" data-testid="qr-code-app">
-              <img
-                src={`https://api.qrserver.com/v1/create-qr-code/?size=320x320&margin=0&qzone=1&color=000000&bgcolor=ffffff&format=png&data=${encodeURIComponent("https://apps.apple.com/us/app/dr-underhood/id6765977965")}`}
-                alt="Scan to install the Dr Underhood iOS app"
-                width="320"
-                height="320"
-                className="block"
-                data-testid="qr-code-app-img"
-              />
-              <div className="text-center mt-2 text-[11px] uppercase tracking-widest text-rust font-bold">
-                INSTALL THE APP
-              </div>
-              <div className="text-center text-[9px] uppercase tracking-widest text-ink-3">
-                App Store · iPhone
-              </div>
-            </div>
+            </a>
+          </div>
+          <div className="text-center mt-3 text-[11px] uppercase tracking-widest text-ink-3">
+            Apple users: scan left QR · Android users: scan right QR
           </div>
         </div>
       </div>
