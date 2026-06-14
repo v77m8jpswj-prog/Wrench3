@@ -176,24 +176,31 @@ function EmailComposer({ lead, onClose, onSent }) {
 
 function ContactDisplay({ contact, isPhone }) {
   const [copied, setCopied] = useState(false);
-  const copy = async () => {
-    try { await navigator.clipboard.writeText(contact); setCopied(true); setTimeout(() => setCopied(false), 1500); }
+  const copy = async (e) => {
+    e?.preventDefault?.();
+    e?.stopPropagation?.();
+    try { await navigator.clipboard.writeText(contact); setCopied(true); setTimeout(() => setCopied(false), 1800); }
     catch {/*ignore*/}
   };
-  if (isPhone) {
-    return (
-      <a href={`tel:${contact}`} className="text-sm text-ink hover:text-rust flex items-center gap-1.5">
-        <Phone size={12}/>{contact}
-      </a>
-    );
-  }
-  // For email: NO mailto. Show + copy-to-clipboard button.
   return (
-    <button onClick={copy} className="text-sm text-ink hover:text-rust flex items-center gap-1.5" data-testid="lead-copy-email">
-      <Mail size={12}/>{contact}
-      <Copy size={10} className="opacity-50"/>
-      {copied && <span className="text-[10px] text-ok ml-1">COPIED</span>}
-    </button>
+    <div className="flex items-center gap-2 mt-1 flex-wrap">
+      {isPhone ? (
+        <a href={`tel:${contact}`} className="text-base font-mono text-ink hover:text-rust flex items-center gap-1.5" data-testid="lead-contact-phone">
+          <Phone size={14} className="text-rust"/>{contact}
+        </a>
+      ) : (
+        <span className="text-base font-mono text-ink flex items-center gap-1.5 break-all" data-testid="lead-contact-email">
+          <Mail size={14} className="text-amber2"/>{contact}
+        </span>
+      )}
+      <button
+        onClick={copy}
+        className={`text-[11px] uppercase tracking-widest font-bold px-2 py-1 border ${copied ? "border-ok text-ok" : "border-amber2 text-amber2 hover:bg-amber2 hover:text-black"}`}
+        data-testid="lead-contact-copy"
+      >
+        {copied ? "COPIED" : (<><Copy size={11} className="inline mr-1"/>COPY</>)}
+      </button>
+    </div>
   );
 }
 
