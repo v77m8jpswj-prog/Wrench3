@@ -244,9 +244,18 @@ export default function ShopLanding() {
           <p className="text-base md:text-lg text-ink-2 mb-6 max-w-2xl mx-auto">
             Pop your camera at the QR code, get the shop in your pocket. Quote requests, hours, address, directions — one tap.
           </p>
-          <div className="inline-block border-4 border-dashed border-amber2/40 px-6 py-8 bg-bg-1" data-testid="qr-placeholder">
-            <div className="text-[10px] uppercase tracking-widest text-amber2 font-bold mb-2">QR CODE</div>
-            <div className="text-ink-3 text-sm italic">Coming soon — Doc &amp; OG wiring it up</div>
+          <div className="inline-block border-4 border-amber2 px-3 py-3 bg-white" data-testid="qr-code">
+            <img
+              src={`https://api.qrserver.com/v1/create-qr-code/?size=380x380&margin=0&qzone=1&color=000000&bgcolor=ffffff&format=png&data=${encodeURIComponent("https://foreman.drunderhood.com/quote")}`}
+              alt="Scan to get a quote from Dr Underhood"
+              width="380"
+              height="380"
+              className="block"
+              data-testid="qr-code-img"
+            />
+            <div className="text-center mt-2 text-[10px] uppercase tracking-widest text-rust font-bold">
+              foreman.drunderhood.com/quote
+            </div>
           </div>
         </div>
       </div>
