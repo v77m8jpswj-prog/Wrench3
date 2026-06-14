@@ -244,17 +244,41 @@ export default function ShopLanding() {
           <p className="text-base md:text-lg text-ink-2 mb-6 max-w-2xl mx-auto">
             Pop your camera at the QR code, get the shop in your pocket. Quote requests, hours, address, directions — one tap.
           </p>
-          <div className="inline-block border-4 border-amber2 px-3 py-3 bg-white" data-testid="qr-code">
-            <img
-              src={`https://api.qrserver.com/v1/create-qr-code/?size=380x380&margin=0&qzone=1&color=000000&bgcolor=ffffff&format=png&data=${encodeURIComponent("https://foreman.drunderhood.com/quote")}`}
-              alt="Scan to get a quote from Dr Underhood"
-              width="380"
-              height="380"
-              className="block"
-              data-testid="qr-code-img"
-            />
-            <div className="text-center mt-2 text-[10px] uppercase tracking-widest text-rust font-bold">
-              foreman.drunderhood.com/quote
+          <div className="flex flex-col md:flex-row items-center justify-center gap-6 mt-4" data-testid="qr-codes-row">
+            {/* QR #1 — Customer Quote */}
+            <div className="inline-block border-4 border-amber2 px-3 py-3 bg-white" data-testid="qr-code-quote">
+              <img
+                src={`https://api.qrserver.com/v1/create-qr-code/?size=320x320&margin=0&qzone=1&color=000000&bgcolor=ffffff&format=png&data=${encodeURIComponent("https://foreman.drunderhood.com/quote")}`}
+                alt="Scan to get a quote"
+                width="320"
+                height="320"
+                className="block"
+                data-testid="qr-code-quote-img"
+              />
+              <div className="text-center mt-2 text-[11px] uppercase tracking-widest text-rust font-bold">
+                GET A QUOTE
+              </div>
+              <div className="text-center text-[9px] uppercase tracking-widest text-ink-3">
+                foreman.drunderhood.com/quote
+              </div>
+            </div>
+
+            {/* QR #2 — Open Main App (shop dashboard / employees / Doc himself) */}
+            <div className="inline-block border-4 border-amber2 px-3 py-3 bg-white" data-testid="qr-code-app">
+              <img
+                src={`https://api.qrserver.com/v1/create-qr-code/?size=320x320&margin=0&qzone=1&color=000000&bgcolor=ffffff&format=png&data=${encodeURIComponent("https://foreman.drunderhood.com")}`}
+                alt="Scan to open the shop app"
+                width="320"
+                height="320"
+                className="block"
+                data-testid="qr-code-app-img"
+              />
+              <div className="text-center mt-2 text-[11px] uppercase tracking-widest text-rust font-bold">
+                OPEN SHOP APP
+              </div>
+              <div className="text-center text-[9px] uppercase tracking-widest text-ink-3">
+                foreman.drunderhood.com
+              </div>
             </div>
           </div>
         </div>
