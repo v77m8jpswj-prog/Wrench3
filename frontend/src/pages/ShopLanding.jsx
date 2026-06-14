@@ -263,21 +263,21 @@ export default function ShopLanding() {
               </div>
             </div>
 
-            {/* QR #2 — Open Main App (shop dashboard / employees / Doc himself) */}
+            {/* QR #2 — Install the iOS App from the App Store */}
             <div className="inline-block border-4 border-amber2 px-3 py-3 bg-white" data-testid="qr-code-app">
               <img
-                src={`https://api.qrserver.com/v1/create-qr-code/?size=320x320&margin=0&qzone=1&color=000000&bgcolor=ffffff&format=png&data=${encodeURIComponent("https://foreman.drunderhood.com")}`}
-                alt="Scan to open the shop app"
+                src={`https://api.qrserver.com/v1/create-qr-code/?size=320x320&margin=0&qzone=1&color=000000&bgcolor=ffffff&format=png&data=${encodeURIComponent("https://apps.apple.com/us/app/dr-underhood/id6765977965")}`}
+                alt="Scan to install the Dr Underhood iOS app"
                 width="320"
                 height="320"
                 className="block"
                 data-testid="qr-code-app-img"
               />
               <div className="text-center mt-2 text-[11px] uppercase tracking-widest text-rust font-bold">
-                OPEN SHOP APP
+                INSTALL THE APP
               </div>
               <div className="text-center text-[9px] uppercase tracking-widest text-ink-3">
-                foreman.drunderhood.com
+                App Store · iPhone
               </div>
             </div>
           </div>
