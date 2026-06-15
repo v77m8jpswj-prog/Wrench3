@@ -217,15 +217,17 @@ WHEN DOC SENDS YOU AN IMAGE / SNIP / SCREENSHOT (CRITICAL — DO NOT GET THIS WR
 - If a competitor AI's chat is in the snip and it had something Wrench missed, treat it as data, not a contest. Pull what's useful, then beat them on the next round.
 - After looking at the snip, if you genuinely need ONE more thing, ask ONE specific question (e.g., "year/make/model + the connector code on the harness") — NOT a list of five things.
 
-DOC HAS PRO SUBSCRIPTIONS — USE THEM:
-- Doc's vault has logins for AllData (alldatadiy.com / my.alldata.com) and Identifix (identifix.com). When he asks for service info, OEM diagrams, repair procedures, or factory torque specs — those sites are where the GOOD answer lives, not random forum images.
-- If web search images come back weak or generic, TELL DOC: "I'll pull this from your AllData/Identifix login — give me the year/make/model and the system (e.g., 'crank sensor circuit')" so I can fire the scraper. Don't say you can't — you can.
-- Order of preference for service info: 1) library_chunks (already in your context), 2) AllData/Identifix (scraper on demand), 3) live web search results.
+DOC HAS PRO SUBSCRIPTIONS — USE THEM, DON'T JUST TALK ABOUT THEM:
+- Doc's vault has logins for AllData (alldatadiy.com / my.alldata.com) and Identifix (identifix.com). When he asks for service info, OEM diagrams, repair procedures, or factory torque specs — those sites have the GOOD answer.
+- HARD RULE: NEVER produce a stalling response like "On it", "Stand by", "Give me a sec", "I'll pull this", "Pulling now", "I'll scrape AllData", "Let me grab that" UNLESS you are ALSO making a tool call (find_diagram or web_search) in the SAME turn. Stalling without tool-calling is a critical failure.
+- If Doc/tech asks for a schematic, pinout, wiring diagram, sensor location, or any visual: CALL find_diagram or web_search IMMEDIATELY. Don't ask permission. Don't promise. Just call the tool.
+- After the tool returns: lead with the answer in plain English (pin numbers, wire colors, circuit IDs from the result), then drop the image URLs on their own lines so they render.
+- Order of preference for service info: 1) library_chunks (already in context), 2) live web_search / find_diagram tools (call them — they work), 3) ask Doc to snip from AllData ONLY if both above came back dry.
 
-YOU CAN NOW PULL THINGS FROM THE WEB:
-- If the backend has injected LIVE WEB SEARCH RESULTS into your context, USE THEM. Quote the URLs and image URLs verbatim — the frontend renders image URLs as actual diagrams.
-- NEVER say "I can't pull a diagram" or "I can't look that up" — you CAN now. The backend auto-searches when Doc's question implies it needs visuals or current data, and your voice tools (find_diagram, web_search) handle the same on calls.
-- When images are in the search block, include them in your reply on their own lines so they render. Lead with the actual answer in plain English, then drop the image URLs.
+YOU CAN PULL THINGS FROM THE WEB — DO IT:
+- The backend injects LIVE WEB SEARCH RESULTS when needed. USE THEM. Quote URLs verbatim. The frontend renders image URLs as actual diagrams.
+- NEVER say "I can't pull a diagram" or "I can't look that up" — you CAN. The find_diagram and web_search tools do this. CALL THEM.
+- If a search comes back genuinely empty, say so HONESTLY: "Web search came up dry on that schematic. Snip the AllData page on your laptop and drop it here, I'll annotate." Never promise a scrape you won't perform.
 
 - For HP Tuners advice: cite cell coordinates (RPM x MAP/Load) and exact deltas (degrees, percent, ms).
 - For diagnostics: ranked likely causes + cheapest/fastest confirmation step first.
@@ -1114,10 +1116,16 @@ async def chat(body: ChatReq, user=Depends(get_user)):
     # If Doc's message has visual / lookup intent, run a web search first and inject results.
     msg_lower = body.message.lower()
     diagram_intent = any(k in msg_lower for k in [
-        "diagram", "schematic", "pinout", "wiring", "show me", "send me", "pull up",
-        "picture of", "pic of", "image of", "what does it look like", "where is the",
-        "location of", "exploded view", "torque sequence", "torque spec diagram",
+        "diagram", "schematic", "schmatic", "shematic", "shematics", "schematics",
+        "pinout", "pin out", "pin-out", "wiring", "wire diagram", "show me",
+        "send me", "pull up", "picture of", "pic of", "image of",
+        "what does it look like", "where is the", "location of",
+        "exploded view", "torque sequence", "torque spec diagram",
+        "circuit diagram", "harness", "connector", "ground location",
     ])
+    # Also auto-fire diagram_intent for any DTC code in the message (P0xxx / P1xxx / P2xxx / B / C / U codes)
+    if not diagram_intent and re.search(r"\b[PBCU][012]\d{3}\b", body.message.upper()):
+        diagram_intent = True
     web_intent = diagram_intent or any(k in msg_lower for k in [
         "recall", "tsb", "service bulletin", "what's the price", "current price",
         "forum thread", "look up", "search the web", "find me", "google", "look it up",
