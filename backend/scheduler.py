@@ -471,11 +471,11 @@ async def _run_morning_digest_pass(db) -> Dict[str, Any]:
             waiting_leads = await db.leads.count_documents({"status": {"$nin": ["won", "lost", "dead", "closed", "archived"]}})
             urgent_emails = 0
             try:
-                # Heuristic: scan recent ingested email chunks for urgent keywords
-                recent = db.library_chunks.find({"user_id": u.get("id"), "created_at": {"$gt": cutoff_24h}}, {"text": 1, "_id": 0})
-                async for c in recent:
-                    if URGENT_RX.search(c.get("text", "")):
-                        urgent_emails += 1
+                # Count UNDELIVERED urgent emails from overnight (queued during quiet hours)
+                urgent_emails = await db.urgent_emails.count_documents({
+                    "user_id": u.get("id"), "delivered": False,
+                    "detected_at": {"$gt": cutoff_24h},
+                })
             except Exception:
                 pass
             agent_letters = await db.agent_mail_inbox.count_documents({"created_at": {"$gt": cutoff_24h}, "read": {"$ne": True}})

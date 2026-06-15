@@ -537,6 +537,37 @@ def make_email_router(db, get_user):
                     pass
         await db.library_items.update_one({"id": item_id}, {"$set": {"chunk_count": 1 + len(fetched)}})
 
+        # ---- URGENT detector + business-hours ping ----
+        urgent_rx = _re.compile(r"\b(won'?t start|wont start|stuck|stranded|towed|emergency|urgent|asap|right away|broke down|broken down|breakdown|critical|smoking|on fire|leaking (fuel|gas|coolant)|flatbed)\b", _re.I)
+        is_urgent = bool(urgent_rx.search(subject) or urgent_rx.search(text[:4000]))
+        if is_urgent:
+            try:
+                urgent_id = str(uuid.uuid4())
+                from datetime import datetime as _dt
+                hour_utc = _dt.utcnow().hour
+                in_window = (hour_utc >= 11) or (hour_utc < 3)  # 6am-10pm Central
+                delivered = False
+                if in_window:
+                    owner = await db.users.find_one({"role": "owner", "phone": {"$exists": True, "$nin": [None, ""]}})
+                    if owner and owner.get("phone"):
+                        try:
+                            from sms_routes import twilio_send_sms
+                            await twilio_send_sms(
+                                owner["phone"],
+                                f"URGENT EMAIL - {sender[:30]} - {subject[:80]} - foreman.drunderhood.com/email"
+                            )
+                            delivered = True
+                        except Exception:
+                            log.exception("urgent SMS ping failed")
+                await db.urgent_emails.insert_one({
+                    "id": urgent_id, "user_id": user_id, "item_id": item_id,
+                    "subject": subject, "sender": sender,
+                    "detected_at": now, "delivered": delivered,
+                    "delivered_at": now if delivered else None,
+                })
+            except Exception:
+                log.exception("urgent detection failed")
+
         # ---- Auto-summarize: Claude writes a 3-line gist + stashes it as its own chunk ----
         # Pinned at the top of search results because the source line starts with "GIST:"
         summary_text = ""
