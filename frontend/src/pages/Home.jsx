@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import api from "@/api";
 import PeerTokens from "@/components/PeerTokens";
+import RecentActivity from "@/components/RecentActivity";
 
 // Clean home page — first thing Doc sees after login.
 // Logo prominent, big tiles routing to the daily-use sections. No marketing fluff.
@@ -88,6 +89,9 @@ export default function Home() {
           </Link>
         )}
       </div>
+
+      {/* ---------- Recent Activity Widget ---------- */}
+      <RecentActivity />
 
       {/* ---------- Peer Agent Tokens (Bud / OG) ---------- */}
       <PeerTokens />

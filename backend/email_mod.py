@@ -536,10 +536,51 @@ def make_email_router(db, get_user):
                 except Exception:
                     pass
         await db.library_items.update_one({"id": item_id}, {"$set": {"chunk_count": 1 + len(fetched)}})
+
+        # ---- Auto-summarize: Claude writes a 3-line gist + stashes it as its own chunk ----
+        # Pinned at the top of search results because the source line starts with "GIST:"
+        summary_text = ""
+        if text and len(text) > 200 and EMERGENT_LLM_KEY:
+            try:
+                from emergentintegrations.llm.chat import LlmChat, UserMessage
+                sys_prompt = (
+                    "You are Wrench, a gruff old-school mechanic giving Doc a quick read on an email. "
+                    "Return exactly 3 short lines, no markdown, no asterisks, no preamble:\n"
+                    "Line 1: WHAT IT IS - one sentence.\n"
+                    "Line 2: WHAT THEY WANT - one sentence.\n"
+                    "Line 3: WHAT TO DO - one short verb-led suggestion or 'nothing - junk/info only.'\n"
+                    "Plain text only. Be terse."
+                )
+                chat = LlmChat(
+                    api_key=EMERGENT_LLM_KEY,
+                    session_id=f"ingest-summary-{item_id[:8]}",
+                    system_message=sys_prompt,
+                ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+                summary_text = await chat.send_message(UserMessage(
+                    text=f"From: {sender}\nSubject: {subject}\n\n{text[:8000]}"
+                ))
+                summary_text = _re.sub(r"\*+", "", (summary_text or "")).strip()
+                if summary_text:
+                    await db.library_chunks.insert_one({
+                        "id": str(uuid.uuid4()),
+                        "user_id": user_id,
+                        "item_id": item_id,
+                        "source": f"GIST: {subject}",
+                        "text": f"Wrench's 3-line gist of email from {sender} — subject: {subject}\n\n{summary_text}",
+                        "created_at": now,
+                    })
+                    await db.library_items.update_one(
+                        {"id": item_id},
+                        {"$set": {"summary": summary_text, "chunk_count": 1 + len(fetched) + 1}}
+                    )
+            except Exception:
+                log.exception(f"auto-summarize on ingest failed for item {item_id}")
+
         return {
             "ok": True, "item_id": item_id, "subject": subject, "sender": sender,
             "email_chars": len(text), "links_found": len(urls),
             "links_ingested": len(fetched), "links": fetched,
+            "summary": summary_text,
         }
 
     @router.post("/email/messages/{mid}/ingest")

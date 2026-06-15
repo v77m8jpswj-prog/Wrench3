@@ -2420,6 +2420,24 @@ async def lib_delete(item_id: str, user=Depends(get_user)):
     return {"ok": True}
 
 
+@api.get("/dashboard/recent")
+async def dashboard_recent(user=Depends(get_user)):
+    """Recent activity feed for the home page widget. Latest 5 leads + 5 SMS + 3 ingested emails."""
+    shop_id = user.get("shop_id") or "drunderhood-fortsmith"
+    leads = await db.leads.find(
+        {"shop_id": shop_id} if await db.leads.count_documents({"shop_id": shop_id}) else {},
+        {"_id": 0, "id": 1, "name": 1, "contact": 1, "vehicle": 1, "status": 1, "what_they_need": 1, "created_at": 1, "source": 1}
+    ).sort("created_at", -1).limit(5).to_list(5)
+    sms = await db.sms_messages.find(
+        {}, {"_id": 0, "id": 1, "direction": 1, "from_number": 1, "to_number": 1, "phone": 1, "body": 1, "created_at": 1, "kind": 1}
+    ).sort("created_at", -1).limit(5).to_list(5)
+    emails = await db.library_items.find(
+        {"user_id": user["id"], "kind": "email"},
+        {"_id": 0, "id": 1, "name": 1, "source_label": 1, "summary": 1, "created_at": 1}
+    ).sort("created_at", -1).limit(3).to_list(3)
+    return {"leads": leads, "sms": sms, "ingested_emails": emails}
+
+
 class TeachReq(BaseModel):
     topic: str = Field(..., min_length=3, max_length=2000)
     urls: Optional[List[str]] = None  # optional manual URLs to also crawl
