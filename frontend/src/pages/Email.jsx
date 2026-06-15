@@ -348,21 +348,31 @@ export default function Email() {
             <div className="p-6 text-center text-ink-3 text-sm">No messages.</div>
           ) : (
             <div className="divide-y divide-line max-h-[70vh] overflow-auto">
-              {msgs.map(m => (
-                <div
-                  key={m.id}
-                  onClick={()=>openMessage(m)}
-                  className={`px-3 py-2 cursor-pointer hover:bg-bg-1 ${selected?.id===m.id?"bg-bg-1 border-l-2 border-l-rust":""} ${!m.isRead?"font-bold":""}`}
-                  data-testid={`email-msg-${m.id}`}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="text-xs text-amber2 truncate min-w-0 flex-1">{m.from?.emailAddress?.address || "(unknown)"}</div>
-                    <div className="text-[10px] text-ink-3 shrink-0">{timeAgo(m.receivedDateTime)}</div>
-                  </div>
-                  <div className="text-sm truncate">{m.subject || "(no subject)"}</div>
-                  <div className="text-[11px] text-ink-3 truncate">{m.bodyPreview || ""}</div>
-                </div>
-              ))}
+              {(() => {
+                const URGENT_RX = /\b(won['’]?t start|will not start|wont start|stuck|stranded|towed|emergency|urgent|asap|right away|need.{0,15}today|broke down|broken down|breakdown|critical|smoking|on fire|leaking (fuel|gas|coolant)|flatbed)\b/i;
+                return msgs.map(m => {
+                  const haystack = `${m.subject || ""} ${m.bodyPreview || ""}`;
+                  const urgent = URGENT_RX.test(haystack);
+                  return (
+                    <div
+                      key={m.id}
+                      onClick={()=>openMessage(m)}
+                      className={`px-3 py-2 cursor-pointer hover:bg-bg-1 ${selected?.id===m.id?"bg-bg-1 border-l-2 border-l-rust":""} ${!m.isRead?"font-bold":""} ${urgent?"border-l-4 border-l-danger bg-danger/5":""}`}
+                      data-testid={`email-msg-${m.id}`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="text-xs text-amber2 truncate min-w-0 flex-1 flex items-center gap-1.5">
+                          {urgent && <span className="shrink-0 text-[9px] uppercase tracking-widest font-black px-1.5 py-0.5 bg-danger text-bg-1" data-testid="email-urgent-badge">URGENT</span>}
+                          <span className="truncate">{m.from?.emailAddress?.address || "(unknown)"}</span>
+                        </div>
+                        <div className="text-[10px] text-ink-3 shrink-0">{timeAgo(m.receivedDateTime)}</div>
+                      </div>
+                      <div className="text-sm truncate">{m.subject || "(no subject)"}</div>
+                      <div className="text-[11px] text-ink-3 truncate">{m.bodyPreview || ""}</div>
+                    </div>
+                  );
+                });
+              })()}
             </div>
           )}
         </div>

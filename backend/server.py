@@ -2420,6 +2420,27 @@ async def lib_delete(item_id: str, user=Depends(get_user)):
     return {"ok": True}
 
 
+class CellReq(BaseModel):
+    phone: str = Field(..., min_length=10, max_length=20)
+
+
+@api.post("/settings/cell")
+async def set_owner_cell(body: CellReq, user=Depends(get_user)):
+    """Save the owner's cell phone — used as the destination for the daily AM digest SMS."""
+    phone = (body.phone or "").strip()
+    digits = "".join(c for c in phone if c.isdigit() or c == "+")
+    if not digits.startswith("+"):
+        digits = "+1" + digits.lstrip("+1")
+    await db.users.update_one({"id": user["id"]}, {"$set": {"phone": digits}})
+    return {"ok": True, "phone": digits}
+
+
+@api.get("/settings/cell")
+async def get_owner_cell(user=Depends(get_user)):
+    u = await db.users.find_one({"id": user["id"]}, {"_id": 0, "phone": 1})
+    return {"phone": (u or {}).get("phone", "")}
+
+
 @api.get("/dashboard/recent")
 async def dashboard_recent(user=Depends(get_user)):
     """Recent activity feed for the home page widget. Latest 5 leads + 5 SMS + 3 ingested emails."""

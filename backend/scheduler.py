@@ -29,6 +29,7 @@ import os
 import asyncio
 import logging
 import uuid
+import re as _re
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any
 
@@ -426,11 +427,12 @@ def start_scheduler(db, email_router=None):
     asyncio.create_task(_crawler_loop(db))
     asyncio.create_task(_harvest_loop(db))
     asyncio.create_task(_digest_loop(db))
+    asyncio.create_task(_morning_digest_loop(db))
     if email_router is not None and hasattr(email_router, "auto_ingest_run_once"):
         asyncio.create_task(_auto_ingest_loop(db, email_router))
-        log.info("background scheduler started: crawler + harvester + digest + auto-ingest loops")
+        log.info("background scheduler started: crawler + harvester + digest + morning + auto-ingest")
     else:
-        log.info("background scheduler started: crawler + harvester + digest loops")
+        log.info("background scheduler started: crawler + harvester + digest + morning")
 
 
 async def _auto_ingest_loop(db, email_router):
@@ -447,3 +449,76 @@ async def _auto_ingest_loop(db, email_router):
             log.exception(f"auto_ingest_loop iteration crashed: {e}")
             await _record_run(db, "auto_ingest", "error", {"error": str(e)[:300]})
         await asyncio.sleep(AUTO_INGEST_INTERVAL_SEC)
+
+
+# ---------------- Morning Digest (SMS to owner) ----------------
+MORNING_DIGEST_HOUR_UTC = int(os.environ.get("MORNING_DIGEST_HOUR_UTC", "11"))  # 6am Central
+URGENT_RX = _re.compile(r"\b(won'?t start|wont start|stuck|stranded|towed|emergency|urgent|asap|right away|broke down|broken down|breakdown|critical|smoking|on fire|leaking (fuel|gas|coolant)|flatbed)\b", _re.I)
+
+
+async def _run_morning_digest_pass(db) -> Dict[str, Any]:
+    """Build + SMS the morning digest to every shop owner with a phone on file."""
+    from sms_routes import twilio_send_sms  # local import to avoid cycle at module load
+    summary = {"sent": 0, "skipped": 0, "errors": 0}
+    owners = await db.users.find({"role": "owner", "phone": {"$exists": True, "$nin": [None, ""]}}, {"_id": 0}).to_list(20)
+    cutoff_24h = (_now() - timedelta(hours=24)).isoformat()
+    for u in owners:
+        try:
+            cell = (u.get("phone") or "").strip()
+            sid = u.get("shop_id") or os.environ.get("DEFAULT_SHOP_ID", "drunderhood-fortsmith")
+            # Counts
+            new_leads = await db.leads.count_documents({"created_at": {"$gt": cutoff_24h}})
+            waiting_leads = await db.leads.count_documents({"status": {"$nin": ["won", "lost", "dead", "closed", "archived"]}})
+            urgent_emails = 0
+            try:
+                # Heuristic: scan recent ingested email chunks for urgent keywords
+                recent = db.library_chunks.find({"user_id": u.get("id"), "created_at": {"$gt": cutoff_24h}}, {"text": 1, "_id": 0})
+                async for c in recent:
+                    if URGENT_RX.search(c.get("text", "")):
+                        urgent_emails += 1
+            except Exception:
+                pass
+            agent_letters = await db.agent_mail_inbox.count_documents({"created_at": {"$gt": cutoff_24h}, "read": {"$ne": True}})
+            voicemails = await db.voicemails.count_documents({"created_at": {"$gt": cutoff_24h}}) if "voicemails" in await db.list_collection_names() else 0
+
+            parts = ["WRENCH AM:"]
+            if new_leads: parts.append(f"{new_leads} new lead{'s' if new_leads != 1 else ''}")
+            if waiting_leads: parts.append(f"{waiting_leads} open")
+            if urgent_emails: parts.append(f"{urgent_emails} urgent email{'s' if urgent_emails != 1 else ''}")
+            if voicemails: parts.append(f"{voicemails} voicemail{'s' if voicemails != 1 else ''}")
+            if agent_letters: parts.append(f"{agent_letters} agent letter{'s' if agent_letters != 1 else ''}")
+            if len(parts) == 1:
+                parts.append("quiet night")
+            body = " · ".join(parts) + ". foreman.drunderhood.com"
+
+            ok = await twilio_send_sms(cell, body)
+            if ok:
+                summary["sent"] += 1
+            else:
+                summary["errors"] += 1
+        except Exception as e:
+            log.exception(f"morning digest for owner {u.get('email')} failed: {e}")
+            summary["errors"] += 1
+    return summary
+
+
+async def _morning_digest_loop(db):
+    """Fires once per day at MORNING_DIGEST_HOUR_UTC (default 11 UTC = 6am Central)."""
+    log.info(f"morning_digest_loop started (target hour={MORNING_DIGEST_HOUR_UTC} UTC)")
+    while True:
+        try:
+            now = _now()
+            if now.hour == MORNING_DIGEST_HOUR_UTC:
+                day_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+                already = await db.scheduled_runs.find_one({
+                    "kind": "morning_digest", "status": "ok",
+                    "ran_at": {"$gt": day_start},
+                })
+                if not already:
+                    summary = await _run_morning_digest_pass(db)
+                    await _record_run(db, "morning_digest", "ok", summary)
+                    log.info(f"morning digest pass complete: {summary}")
+        except Exception as e:
+            log.exception(f"morning_digest_loop iteration crashed: {e}")
+            await _record_run(db, "morning_digest", "error", {"error": str(e)[:300]})
+        await asyncio.sleep(900)  # check every 15 min
