@@ -52,9 +52,29 @@ async def send_sms(to: str, body: str) -> bool:
 
 
 async def notify_owner(body: str) -> bool:
-    """Convenience: text the shop owner's cell (from TWILIO_OWNER_CELL env)."""
+    """Convenience: text the shop owner's cell.
+
+    Resolution order:
+      1. TWILIO_OWNER_CELL env (legacy)
+      2. users.phone field on the first owner-role user (set via /api/settings/cell)
+    """
     cell = os.environ.get("TWILIO_OWNER_CELL", "").strip()
     if not _truthy(cell):
-        log.info("TWILIO_OWNER_CELL not set — skipping owner SMS")
+        # Fall back to DB user record so Doc doesn't need to fight env vars
+        try:
+            from motor.motor_asyncio import AsyncIOMotorClient
+            mongo_url = os.environ.get("MONGO_URL", "")
+            db_name = os.environ.get("DB_NAME", "")
+            if mongo_url and db_name:
+                cli = AsyncIOMotorClient(mongo_url)
+                _db = cli[db_name]
+                owner = await _db.users.find_one({"role": "owner", "phone": {"$exists": True, "$nin": [None, ""]}}, {"phone": 1})
+                cli.close()
+                if owner and owner.get("phone"):
+                    cell = owner["phone"].strip()
+        except Exception as e:
+            log.warning(f"notify_owner db fallback failed: {e}")
+    if not _truthy(cell):
+        log.info("notify_owner: no owner cell available (env or db) — skipping SMS")
         return False
     return await send_sms(cell, body)

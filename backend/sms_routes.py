@@ -51,12 +51,29 @@ def make_router(db, get_user):
         message. This prevents the loop where Doc's reply pings him back."""
         ts = datetime.now(timezone.utc).isoformat()
 
+        # Owner-reply detection: check env var first (legacy), then users.phone in DB
         owner_cell = (os.environ.get("TWILIO_OWNER_CELL", "") or "").strip()
 
         def _norm(n: str) -> str:
             return "".join(ch for ch in (n or "") if ch.isdigit())
 
-        is_owner_reply = bool(owner_cell) and _norm(From) and _norm(From) == _norm(owner_cell)
+        from_norm = _norm(From)
+        is_owner_reply = False
+        matched_owner = None
+        if owner_cell and from_norm and from_norm == _norm(owner_cell):
+            is_owner_reply = True
+        else:
+            # Fall back to users.phone for owners (set via /api/settings/cell)
+            owners = db.users.find(
+                {"role": "owner", "phone": {"$exists": True, "$nin": [None, ""]}},
+                {"_id": 0, "id": 1, "phone": 1, "email": 1},
+            )
+            async for u in owners:
+                if _norm(u.get("phone", "")) == from_norm and from_norm:
+                    is_owner_reply = True
+                    matched_owner = u
+                    owner_cell = u.get("phone") or owner_cell
+                    break
 
         if is_owner_reply:
             # Find the most recent inbound from a non-owner number (the customer)
