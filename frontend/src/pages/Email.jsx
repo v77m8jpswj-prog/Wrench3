@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Mail, Inbox, Send, Search, Archive, Reply, Bot, RefreshCw, X, AlertTriangle, CheckCircle2, Plus, Trash2, Edit3, BrainCircuit, Zap } from "lucide-react";
+import { Mail, Inbox, Send, Search, Archive, Reply, Bot, RefreshCw, X, AlertTriangle, CheckCircle2, Plus, Trash2, Edit3, BrainCircuit, Zap, Sparkles } from "lucide-react";
 import api from "@/api";
 
 function timeAgo(iso) {
@@ -126,6 +126,21 @@ export default function Email() {
     } catch (e) {
       setErr(e?.response?.data?.detail || "Ingest failed");
     } finally { setIngesting(null); }
+  };
+
+  // ---- SUMMARIZE: 3-line gist from Claude ----
+  const [summary, setSummary] = useState(null); // { mid, text }
+  const [summarizing, setSummarizing] = useState(null);
+  const summarize = async (m) => {
+    if (summarizing) return;
+    if (summary?.mid === m.id) { setSummary(null); return; } // toggle off
+    setSummarizing(m.id); setErr(""); setSummary(null);
+    try {
+      const r = await api.post(`/email/messages/${m.id}/summarize`, {}, { timeout: 60000 });
+      setSummary({ mid: m.id, text: r.data?.summary || "(no summary returned)" });
+    } catch (e) {
+      setErr(e?.response?.data?.detail || "Summarize failed");
+    } finally { setSummarizing(null); }
   };
 
   // ---------- AUTO-INGEST RULES ----------
@@ -374,6 +389,9 @@ export default function Email() {
                   <button onClick={()=>ingest(selected)} disabled={ingesting===selected.id} className="btn-ghost text-xs flex items-center gap-1 px-3 py-1.5 border-amber2 text-amber2 hover:bg-amber2/10 disabled:opacity-50" data-testid="email-ingest-btn">
                     <BrainCircuit size={12}/>{ingesting===selected.id ? "INGESTING..." : "INGEST"}
                   </button>
+                  <button onClick={()=>summarize(selected)} disabled={summarizing===selected.id} className="btn-ghost text-xs flex items-center gap-1 px-3 py-1.5 border-rust text-rust hover:bg-rust/10 disabled:opacity-50" data-testid="email-summarize-btn" title="3-line gist of this email">
+                    <Sparkles size={12}/>{summarizing===selected.id ? "READING..." : (summary?.mid===selected.id ? "HIDE GIST" : "SUMMARIZE")}
+                  </button>
                   <button onClick={()=>autoIngestSender(selected)} className="btn-ghost text-xs flex items-center gap-1 px-3 py-1.5 border-amber2/60 text-amber2/80 hover:bg-amber2/10" data-testid="email-auto-ingest-btn" title="Always ingest from this sender">
                     <BrainCircuit size={12}/>AUTO
                   </button>
@@ -381,6 +399,17 @@ export default function Email() {
                 </div>
               </div>
               <div className="flex-1 overflow-auto p-3 md:p-4">
+                {summary?.mid === selected.id && summary?.text && (
+                  <div className="mb-3 border-2 border-rust/60 bg-rust/10 p-3" data-testid="email-summary-panel">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-1.5 text-rust font-bold text-xs uppercase tracking-widest">
+                        <Sparkles size={12}/>WRENCH'S GIST
+                      </div>
+                      <button onClick={()=>setSummary(null)} className="text-ink-3 hover:text-ink" data-testid="email-summary-close"><X size={14}/></button>
+                    </div>
+                    <pre className="text-xs text-ink whitespace-pre-wrap font-sans leading-relaxed" data-testid="email-summary-text">{summary.text}</pre>
+                  </div>
+                )}
                 <div
                   className="text-sm prose prose-invert max-w-none email-body"
                   dangerouslySetInnerHTML={{__html: (selected.body?.content || "")}}
