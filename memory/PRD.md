@@ -1,4 +1,11 @@
-# Data Wrench — PRD (as of Feb 26, 2026)
+# Data Wrench — PRD (as of Mar 1, 2026)
+
+## Latest fix (Mar 1, 2026) — Twilio Voice Webhook fax-sound bug RESOLVED
+- Bug: `/api/voice/incoming` returned empty `<Response></Response>` on Twilio signature failure → callers heard "fax sound" (dead air)
+- Root cause: kubernetes ingress rewrites Host header → signature URL mismatch with what Twilio signed (foreman.drunderhood.com)
+- Fix: (a) signature failure now logs warning and STILL returns full greeting+record TwiML, (b) callback URLs built from `PUBLIC_BASE_URL` env (defaults to `https://foreman.drunderhood.com`), (c) public_base added as signature candidate
+- Tested: 10/10 pytest cases pass in `/app/backend/tests/test_voice_routes.py`
+- Doc to deploy to prod + call 855-771-1264 to confirm greeting plays
 
 > **NEW AGENTS: READ `/app/memory/OPERATOR_PROFILE.md` FIRST** before responding to Doc. It captures his communication style, pet peeves, brand standards, and recurring environment gotchas. Cuts re-learning to zero.
 
