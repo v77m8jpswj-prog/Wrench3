@@ -210,7 +210,7 @@ def get_voice_router(db, send_sms, get_brain_token):
         d = dict(form)
         sig_ok = await _verify_twilio(request, d)
         if not sig_ok:
-            log.warning("voicemail/transcription signature check failed — processing anyway")
+            log.warning("voicemail/transcription signature check failed — processing anyway, but suppressing owner SMS to prevent webhook abuse")
 
         call_sid = d.get("CallSid", "")
         transcript = (d.get("TranscriptionText") or "").strip()
@@ -250,12 +250,17 @@ def get_voice_router(db, send_sms, get_brain_token):
             }},
         )
 
-        # Text Doc on his cell — 1 SMS, transcript truncated
-        if owner_cell:
+        # Text Doc on his cell — 1 SMS, transcript truncated.
+        # Only fires when the Twilio signature was valid — prevents unsigned/test
+        # webhook posts from spamming the owner's phone.
+        if owner_cell and sig_ok:
             preview = (transcript[:120] + "...") if len(transcript) > 120 else (transcript or "(no transcript — listen)")
+            # Point at our backend proxy, NOT raw api.twilio.com (which requires
+            # HTTP Basic Auth and triggers a sign-in prompt in iOS Safari).
+            listen_url = f"{public_base}/api/voicemails/{vm['id']}/audio"
             sms_body = (
                 f"VM from {from_num or 'unknown'}: {preview}\n"
-                f"Listen: {vm.get('recording_url') or '(audio unavailable)'}"
+                f"Listen: {listen_url}"
             )
             try:
                 await send_sms(owner_cell, sms_body)
@@ -319,5 +324,47 @@ def get_voice_router(db, send_sms, get_brain_token):
     async def list_voicemails(limit: int = Query(50, ge=1, le=200)):
         cur = db.voicemails.find({}, {"_id": 0}).sort("created_at", -1).limit(limit)
         return await cur.to_list(limit)
+
+    # ----------------------------------------------------------------
+    # 7) Audio proxy — fetch the Twilio recording with our credentials
+    #    and stream it back to the caller's browser. This lets Doc tap
+    #    "Listen:" in the SMS without iOS Safari prompting him to sign
+    #    in to api.twilio.com (which is what was happening before — the
+    #    raw Twilio recording URLs require HTTP Basic Auth).
+    # ----------------------------------------------------------------
+    import httpx as _httpx  # local import keeps top of file tidy
+
+    @router.get("/voicemails/{vm_id}/audio")
+    async def voicemail_audio(vm_id: str):
+        vm = await db.voicemails.find_one({"id": vm_id}, {"_id": 0})
+        if not vm:
+            raise HTTPException(404, "voicemail not found")
+        rec_url = vm.get("recording_url") or ""
+        if not rec_url:
+            raise HTTPException(404, "no recording on file")
+
+        sid = os.environ.get("TWILIO_ACCOUNT_SID", "")
+        tok = os.environ.get("TWILIO_AUTH_TOKEN", "")
+        if not sid or not tok:
+            raise HTTPException(500, "twilio credentials not configured")
+
+        try:
+            async with _httpx.AsyncClient(timeout=20.0, follow_redirects=True) as cli:
+                r = await cli.get(rec_url, auth=(sid, tok))
+            if r.status_code != 200:
+                log.warning(f"voicemail_audio: twilio returned {r.status_code} for vm={vm_id}")
+                raise HTTPException(502, f"twilio returned {r.status_code}")
+            return Response(
+                content=r.content,
+                media_type=r.headers.get("content-type", "audio/mpeg"),
+                headers={
+                    "Content-Disposition": f'inline; filename="vm-{vm_id}.mp3"',
+                    "Cache-Control": "private, max-age=3600",
+                    "Accept-Ranges": "bytes",
+                },
+            )
+        except _httpx.HTTPError as e:
+            log.warning(f"voicemail_audio fetch failed for vm={vm_id}: {e}")
+            raise HTTPException(502, "failed to fetch recording from twilio")
 
     return router

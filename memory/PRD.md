@@ -1,6 +1,15 @@
 # Data Wrench — PRD (as of Mar 1, 2026)
 
-## Latest fix (Mar 1, 2026) — Twilio Voice Webhook fax-sound bug RESOLVED
+## Latest fix (Mar 1, 2026 - afternoon) — Voicemail SMS audio link broken + test-spam lockdown
+- Bug Doc reported: "I can't sign in" — turned out to be iOS Safari prompting for HTTP Basic Auth to api.twilio.com because the voicemail SMS "Listen:" link pointed at the raw Twilio recording URL (which requires Account SID + Auth Token to play).
+- Compounding issue: my testing agent had posted unsigned-but-accepted fake transcription webhooks → triggered a real test SMS to Doc's phone with bogus recording URLs.
+- Fixes:
+  1. New `/api/voicemails/{id}/audio` backend proxy — fetches the Twilio recording server-side using Twilio Basic Auth, streams mp3 back to caller. No sign-in prompt.
+  2. SMS body now sends `foreman.drunderhood.com/api/voicemails/{id}/audio` instead of raw api.twilio.com URL.
+  3. Voicemail/transcription endpoint now suppresses owner SMS when signature check fails (was processing+texting on failure → testing agent could spam Doc).
+  4. Purged 2 test voicemails, 6 test calls, 1 test lead from db.
+
+## Latest fix (Mar 1, 2026 - morning) — Twilio Voice Webhook fax-sound bug RESOLVED
 - Bug: `/api/voice/incoming` returned empty `<Response></Response>` on Twilio signature failure → callers heard "fax sound" (dead air)
 - Root cause: kubernetes ingress rewrites Host header → signature URL mismatch with what Twilio signed (foreman.drunderhood.com)
 - Fix: (a) signature failure now logs warning and STILL returns full greeting+record TwiML, (b) callback URLs built from `PUBLIC_BASE_URL` env (defaults to `https://foreman.drunderhood.com`), (c) public_base added as signature candidate
