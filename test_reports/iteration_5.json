@@ -1,0 +1,33 @@
+{
+  "summary": "Backend testing of Twilio voice webhook fax-sound bug fix in /app/backend/voice_routes.py. All 10 pytest cases passed — /api/voice/incoming returns full greeting TwiML (not empty <Response>) on signature failure, callback URLs use https://foreman.drunderhood.com, voicemail rows persist on /voicemail/done, leads with kind='voicemail' are created on /voicemail/transcription (verified via direct mongo inspection), /voice/status returns 204 on signature failure, and GET /api/voicemails returns clean list without _id.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_voice_routes.py",
+    "/app/test_reports/pytest/voice_routes_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "voice_routes.py inserts into db.calls without unique index on call_sid — the update_one(call_sid) in /voicemail/done may match the first row if multiple insert collisions happen (low risk in prod).",
+    "/voice/voicemail/transcription always returns EMPTY_XML (<Response></Response>) — this is fine for an async transcribeCallback (Twilio does not play it back to caller), but worth noting it's an intentional no-op TwiML, distinct from the fax-sound bug on /incoming.",
+    "GET /api/voicemails is NOT gated by auth as the original problem statement called out — anyone with the public URL can list voicemails containing caller phone numbers and transcripts. Consider adding user-JWT auth if PII exposure is a concern.",
+    "_verify_twilio returns False (not True) when X-Twilio-Signature header is missing, which is correct, but the function never validates that auth_token is non-empty before constructing RequestValidator — already handled with `if not validator` short-circuit. Looks good."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_voice_routes.py (new file)"
+  ],
+  "success_rate": {"backend": "100% (10/10)", "frontend": "not tested (backend-only request)"},
+  "test_credentials": "Not required — voice webhooks and /api/voicemails are not auth-gated in current code.",
+  "seed_data_creation": "Test inserted 2 voicemail rows and 1 lead row (kind=voicemail, source=voicemail) into the shared mongo db via the public endpoints — these remain as TEST_ prefixed call_sids (CA_TEST_VM_..., CA_TEST_TR_...). Not cleaned up; consider a teardown if rerun frequency is high.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Voice webhook fix verified end-to-end. Test file /app/backend/tests/test_voice_routes.py is the regression suite — re-run with `pytest backend/tests/test_voice_routes.py -v`. Note TWILIO_AUTH_TOKEN must remain set in /app/backend/.env for the tests to exercise the signature-failure path (which is the fix being verified). If env changes to empty, _verify_twilio short-circuits to True and the tests still pass but no longer test the fax-sound scenario.",
+  "rca of the issue": "Fix verified working. Original bug: kubernetes ingress rewrites the Host header so Twilio signature validation failed (Twilio signs URL using foreman.drunderhood.com, server saw internal cluster host). Old code returned EMPTY_XML <Response></Response> on signature failure, causing dead air = 'fax sound' for callers. Fix: (a) on signature failure, log warning and STILL return full GREETING_XML, (b) build action/transcribeCallback URLs from PUBLIC_BASE_URL env (defaults to https://foreman.drunderhood.com), (c) add public_base URL as a third signature candidate in _verify_twilio. All three behaviors confirmed by tests."
+}

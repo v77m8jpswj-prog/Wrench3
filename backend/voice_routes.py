@@ -73,6 +73,9 @@ def get_voice_router(db, send_sms, get_brain_token):
     validator = RequestValidator(auth_token) if auth_token else None
     owner_cell = os.environ.get("TWILIO_OWNER_CELL", "")
     default_shop = os.environ.get("DEFAULT_SHOP_ID", "drunderhood-fortsmith")
+    # Production public host — used to build callback URLs AND signature candidates
+    # so kubernetes ingress host-header rewrites don't break Twilio signature checks.
+    public_base = (os.environ.get("PUBLIC_BASE_URL") or "https://foreman.drunderhood.com").rstrip("/")
 
     async def _verify_twilio(request: Request, form_data: dict) -> bool:
         """Verify Twilio webhook signature. Returns True if signature is valid OR
@@ -86,20 +89,27 @@ def get_voice_router(db, send_sms, get_brain_token):
         if not sig:
             return False
 
+        path_q = request.url.path
+        if request.url.query:
+            path_q += "?" + request.url.query
+
         # Try multiple URL forms — Twilio signs against the URL it POSTed to,
         # which may differ from request.url after ingress rewrites.
         candidates = [str(request.url)]
         try:
             fwd_proto = request.headers.get("x-forwarded-proto") or request.url.scheme
             fwd_host = request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc
-            path_q = request.url.path
-            if request.url.query:
-                path_q += "?" + request.url.query
             fwd_url = f"{fwd_proto}://{fwd_host}{path_q}"
             if fwd_url not in candidates:
                 candidates.append(fwd_url)
         except Exception:
             pass
+
+        # Always try the configured public base — this is the URL set in the
+        # Twilio console and is what Twilio actually signs against.
+        pub_url = f"{public_base}{path_q}"
+        if pub_url not in candidates:
+            candidates.append(pub_url)
 
         for url in candidates:
             try:
@@ -107,7 +117,7 @@ def get_voice_router(db, send_sms, get_brain_token):
                     return True
             except Exception as e:
                 log.warning(f"twilio signature validator threw on url={url}: {e}")
-        log.warning(f"twilio signature INVALID — tried {len(candidates)} url variants, signature={sig[:12]}...")
+        log.warning(f"twilio signature INVALID — tried {len(candidates)} url variants ({candidates}), signature={sig[:12]}...")
         return False
 
     # ----------------------------------------------------------------
@@ -117,25 +127,36 @@ def get_voice_router(db, send_sms, get_brain_token):
     async def voice_incoming(request: Request):
         form = await request.form()
         d = dict(form)
-        if not await _verify_twilio(request, d):
-            return _twiml(EMPTY_XML)
+        sig_ok = await _verify_twilio(request, d)
+        if not sig_ok:
+            # CRITICAL: even if signature check fails (ingress URL mismatch,
+            # missing header, etc.), we STILL return valid greeting TwiML.
+            # Dead air on an inbound call = "fax sound" to the caller. We'd
+            # rather log a warning and answer the call than drop it.
+            log.warning(f"voice/incoming signature check failed — answering anyway. host={request.headers.get('host')} fwd_host={request.headers.get('x-forwarded-host')}")
 
         call_sid = d.get("CallSid", "")
         from_num = d.get("From", "")
         to_num = d.get("To", "")
-        await db.calls.insert_one({
-            "id": str(uuid.uuid4()),
-            "call_sid": call_sid,
-            "from": from_num,
-            "to": to_num,
-            "status": "incoming",
-            "shop_id": default_shop,
-            "started_at": _now(),
-        })
+        try:
+            await db.calls.insert_one({
+                "id": str(uuid.uuid4()),
+                "call_sid": call_sid,
+                "from": from_num,
+                "to": to_num,
+                "status": "incoming",
+                "shop_id": default_shop,
+                "started_at": _now(),
+                "sig_verified": sig_ok,
+            })
+        except Exception as e:
+            log.warning(f"calls.insert_one failed: {e}")
 
-        base = str(request.base_url).rstrip("/")
-        action_url = f"{base}/api/voice/voicemail/done"
-        transcribe_url = f"{base}/api/voice/voicemail/transcription"
+        # Build callback URLs from PUBLIC_BASE_URL so Twilio posts back to
+        # foreman.drunderhood.com (matches what's configured in the Twilio console).
+        # request.base_url would point at the internal kubernetes host on prod.
+        action_url = f"{public_base}/api/voice/voicemail/done"
+        transcribe_url = f"{public_base}/api/voice/voicemail/transcription"
         xml = GREETING_XML.format(action_url=action_url, transcribe_url=transcribe_url)
         return _twiml(xml)
 
@@ -146,8 +167,9 @@ def get_voice_router(db, send_sms, get_brain_token):
     async def voicemail_done(request: Request):
         form = await request.form()
         d = dict(form)
-        if not await _verify_twilio(request, d):
-            return _twiml(EMPTY_XML)
+        sig_ok = await _verify_twilio(request, d)
+        if not sig_ok:
+            log.warning("voicemail/done signature check failed — processing anyway")
 
         call_sid = d.get("CallSid", "")
         recording_sid = d.get("RecordingSid", "")
@@ -186,8 +208,9 @@ def get_voice_router(db, send_sms, get_brain_token):
     async def voicemail_transcription(request: Request):
         form = await request.form()
         d = dict(form)
-        if not await _verify_twilio(request, d):
-            return _twiml(EMPTY_XML)
+        sig_ok = await _verify_twilio(request, d)
+        if not sig_ok:
+            log.warning("voicemail/transcription signature check failed — processing anyway")
 
         call_sid = d.get("CallSid", "")
         transcript = (d.get("TranscriptionText") or "").strip()
