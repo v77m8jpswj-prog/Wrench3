@@ -11,7 +11,34 @@ import { Send, Paperclip, Truck, Copy, Check, RefreshCw, ClipboardPaste, AlertTr
 // tables with one-tap COPY back into HP Tuners.
 // ───────────────────────────────────────────────────────────────────────────────
 
-const TUNE_SESSION_KEY = "dw_tune_session";
+const TUNE_SESSION_KEY_PREFIX = "dw_tune_session_";
+
+// Resize/compress an image File before upload so it doesn't hit Cloudflare's
+// 100s timeout on the vision endpoint. HP Tuners screenshots come off Doc's
+// phone at 8-12 MB — gpt vision takes forever on that. Resized to 1920px long
+// edge / JPEG 0.82 they're usually <800 KB and the text is still readable.
+async function compressImage(file) {
+  // Skip if it's already small or not a still image
+  if (!file || !file.type?.startsWith("image/") || file.size < 800 * 1024) return file;
+  try {
+    const bitmap = await createImageBitmap(file);
+    const MAX = 1920;
+    const longEdge = Math.max(bitmap.width, bitmap.height);
+    const scale = longEdge > MAX ? MAX / longEdge : 1;
+    const w = Math.round(bitmap.width * scale);
+    const h = Math.round(bitmap.height * scale);
+    const canvas = document.createElement("canvas");
+    canvas.width = w; canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(bitmap, 0, 0, w, h);
+    const blob = await new Promise(res => canvas.toBlob(res, "image/jpeg", 0.82));
+    if (!blob) return file;
+    return new File([blob], (file.name || "snip").replace(/\.\w+$/, "") + ".jpg", { type: "image/jpeg" });
+  } catch (e) {
+    console.warn("[tune] image compress failed, sending original:", e);
+    return file;
+  }
+}
 
 export default function Tune() {
   const app = useApp();
@@ -24,7 +51,14 @@ export default function Tune() {
   const [osList, setOsList] = useState([]);
 
   const [messages, setMessages] = useState([]);
-  const [sessionId, setSessionId] = useState(() => localStorage.getItem(TUNE_SESSION_KEY) || null);
+  // Session is scoped to the active vehicle so switching trucks doesn't drag
+  // the prior vehicle's conversation into Wrench's context window.
+  const [sessionId, setSessionId] = useState(() => {
+    const vid = (typeof window !== "undefined" && window.localStorage)
+      ? localStorage.getItem("dw_active_vehicle") || ""
+      : "";
+    return vid ? localStorage.getItem(TUNE_SESSION_KEY_PREFIX + vid) : null;
+  });
   const [input, setInput] = useState("");
   const [pendingImage, setPendingImage] = useState(null); // {file, preview}
   const [busy, setBusy] = useState(false);
@@ -40,9 +74,15 @@ export default function Tune() {
   // Load OS list once
   useEffect(() => { api.get("/tune/os-list").then(r => setOsList(r.data || [])).catch(()=>{}); }, []);
 
-  // Load tune session for the active vehicle
+  // Load tune session for the active vehicle AND swap the chat session_id
+  // to the one cached for THIS vehicle (or null → backend creates a fresh one).
+  // This is what fixes "switched vehicles and Wrench was still answering
+  // from the last truck" — every vehicle now has its own chat thread.
   useEffect(() => {
-    if (!activeVehicleId) { setSession(null); return; }
+    if (!activeVehicleId) { setSession(null); setMessages([]); setSessionId(null); return; }
+    const cached = localStorage.getItem(TUNE_SESSION_KEY_PREFIX + activeVehicleId);
+    setSessionId(cached || null);
+    if (!cached) setMessages([]);
     (async () => {
       try {
         const r = await api.get(`/tune/session/${activeVehicleId}`);
@@ -53,17 +93,22 @@ export default function Tune() {
     })();
   }, [activeVehicleId]);
 
-  // Persist + restore tune chat session
+  // Persist + restore tune chat session, keyed by the active vehicle so
+  // switching trucks never bleeds prior context into Wrench.
   useEffect(() => {
+    if (!activeVehicleId) return;
+    const key = TUNE_SESSION_KEY_PREFIX + activeVehicleId;
     if (sessionId) {
-      localStorage.setItem(TUNE_SESSION_KEY, sessionId);
+      localStorage.setItem(key, sessionId);
       // Restore messages for this session
       api.get(`/chat/sessions/${sessionId}`).then(r => {
         const msgs = r.data?.messages || [];
         if (msgs.length) setMessages(msgs);
       }).catch(()=>{});
+    } else {
+      localStorage.removeItem(key);
     }
-  }, [sessionId]);
+  }, [sessionId, activeVehicleId]);
 
   // Auto-scroll only when user is already near the bottom — and ONLY the message
   // container, not the window (scrollIntoView would yank the whole page).
@@ -79,7 +124,7 @@ export default function Tune() {
   // Pin window to top on mount so landing on /tune doesn't auto-scroll the page
   useEffect(() => { window.scrollTo(0, 0); }, []);
 
-  // Page-level paste: text → input, image → pending attachment
+  // Page-level paste: text → input, image → pending attachment (compressed)
   useEffect(() => {
     const onPaste = (e) => {
       // If user is in the textarea typing, let text paste behave normally
@@ -90,8 +135,10 @@ export default function Tune() {
         if (it.type && it.type.startsWith("image/")) {
           const blob = it.getAsFile();
           if (blob) {
-            setPendingImage({ file: blob, preview: URL.createObjectURL(blob) });
             e.preventDefault();
+            compressImage(blob).then(file => {
+              setPendingImage({ file, preview: URL.createObjectURL(file) });
+            });
             return;
           }
         }
@@ -109,8 +156,9 @@ export default function Tune() {
     return () => window.removeEventListener("paste", onPaste);
   }, []);
 
-  const handleFile = (file) => {
-    setPendingImage({ file, preview: URL.createObjectURL(file) });
+  const handleFile = async (file) => {
+    const compressed = await compressImage(file);
+    setPendingImage({ file: compressed, preview: URL.createObjectURL(compressed) });
   };
 
   const send = async () => {
@@ -164,7 +212,7 @@ export default function Tune() {
 
   const newSession = () => {
     setMessages([]); setSessionId(null); setInput(""); setPendingImage(null);
-    localStorage.removeItem(TUNE_SESSION_KEY);
+    if (activeVehicleId) localStorage.removeItem(TUNE_SESSION_KEY_PREFIX + activeVehicleId);
   };
 
   // ─── No active vehicle gate ────────────────────────────────────────────────────

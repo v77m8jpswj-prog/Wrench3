@@ -1,20 +1,22 @@
 # Data Wrench — PRD (as of Mar 1, 2026)
 
-## Latest fix (Mar 1, 2026 - afternoon) — Voicemail SMS audio link broken + test-spam lockdown
-- Bug Doc reported: "I can't sign in" — turned out to be iOS Safari prompting for HTTP Basic Auth to api.twilio.com because the voicemail SMS "Listen:" link pointed at the raw Twilio recording URL (which requires Account SID + Auth Token to play).
-- Compounding issue: my testing agent had posted unsigned-but-accepted fake transcription webhooks → triggered a real test SMS to Doc's phone with bogus recording URLs.
-- Fixes:
-  1. New `/api/voicemails/{id}/audio` backend proxy — fetches the Twilio recording server-side using Twilio Basic Auth, streams mp3 back to caller. No sign-in prompt.
-  2. SMS body now sends `foreman.drunderhood.com/api/voicemails/{id}/audio` instead of raw api.twilio.com URL.
-  3. Voicemail/transcription endpoint now suppresses owner SMS when signature check fails (was processing+texting on failure → testing agent could spam Doc).
-  4. Purged 2 test voicemails, 6 test calls, 1 test lead from db.
+## Latest fix (Mar 1, 2026 - evening) — Tune mode 3-bug pass
+- BUG: Switching active vehicle in Tune kept dragging the prior vehicle's chat context into Wrench's responses. Root cause: chat session_id was stored in a single global `dw_tune_session` localStorage key — same id reused across vehicles, backend loaded old history.
+  FIX: keyed the localStorage cache by vehicle id (`dw_tune_session_<vehicleId>`). On vehicle change, swap to the cached session for that vehicle (or null → backend creates fresh). Messages no longer bleed across trucks.
+- BUG: "Won't take screenshots" — vision endpoint hitting Cloudflare 524 (100s timeout) because HP Tuners phone screenshots are 8-12 MB and gpt-5.2 vision chews on them too long.
+  FIX: client-side image compression in `Tune.jsx` — canvas resize to 1920px long edge, JPEG quality 0.82. ~8MB PNG → ~600KB JPEG. Vision response now well under Cloudflare's timeout.
+- BUG: Wrench labeling Doc's own raw HP Tuners pastes as "SOURCE: EXTERNAL — UNVERIFIED" and refusing to act on them.
+  FIX: tightened the EXTERNAL OUTPUT GUARD in `build_system_prompt` — now only triggers on obvious LLM emissions (markdown bold, "Here is the adjusted table:" preambles, /hpt-fix output). Raw HP Tuners CSV/grid pastes treated as canonical.
 
-## Latest fix (Mar 1, 2026 - morning) — Twilio Voice Webhook fax-sound bug RESOLVED
-- Bug: `/api/voice/incoming` returned empty `<Response></Response>` on Twilio signature failure → callers heard "fax sound" (dead air)
-- Root cause: kubernetes ingress rewrites Host header → signature URL mismatch with what Twilio signed (foreman.drunderhood.com)
-- Fix: (a) signature failure now logs warning and STILL returns full greeting+record TwiML, (b) callback URLs built from `PUBLIC_BASE_URL` env (defaults to `https://foreman.drunderhood.com`), (c) public_base added as signature candidate
+## Mar 1, 2026 - afternoon — Voicemail SMS audio link fixed + test-spam lockdown
+- iOS Safari "sign in to api.twilio.com" prompt fixed via new `GET /api/voicemails/{id}/audio` proxy
+- Voicemail SMS now links to `foreman.drunderhood.com/api/voicemails/{id}/audio`
+- `/voicemail/transcription` suppresses owner SMS when signature check fails (prevents test-spam)
+
+## Mar 1, 2026 - morning — Twilio Voice Webhook fax-sound bug RESOLVED
+- `/api/voice/incoming` returns full greeting TwiML even on signature failure
+- Callback URLs built from `PUBLIC_BASE_URL` (defaults to `https://foreman.drunderhood.com`)
 - Tested: 10/10 pytest cases pass in `/app/backend/tests/test_voice_routes.py`
-- Doc to deploy to prod + call 855-771-1264 to confirm greeting plays
 
 > **NEW AGENTS: READ `/app/memory/OPERATOR_PROFILE.md` FIRST** before responding to Doc. It captures his communication style, pet peeves, brand standards, and recurring environment gotchas. Cuts re-learning to zero.
 

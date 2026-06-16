@@ -1103,13 +1103,16 @@ async def chat(body: ChatReq, user=Depends(get_user)):
             "    full corrected table in the locked format.\n"
             "  - Skip narrative. Skip pleasantries. PATH → cursor coords → table → what changed → next.\n"
             "  - Strip the '[TUNE]' tag from your reasoning — just treat it as 'tune mode is on'.\n"
-            "  - EXTERNAL OUTPUT GUARD: If Doc forwards a chart/snip that was clearly emitted by another\n"
-            "    tool (anything not in your Doc's-locked-format from /tune — typically older /hpt-fix\n"
-            "    output, generic LLM chat output, or a third-party tool), DO NOT silently treat it as\n"
-            "    canonical. In your reply, lead with a single line:\n"
+            "  - EXTERNAL OUTPUT GUARD (NARROW — DO NOT FALSE-POSITIVE ON DOC'S OWN PASTES):\n"
+            "    Only trigger this guard when the input is OBVIOUSLY an LLM/tool-emitted summary —\n"
+            "    e.g. it contains markdown bold (**), AI preamble like 'Here is the adjusted table:',\n"
+            "    'I've increased...', 'Based on your data...', explanatory prose mixed into the table,\n"
+            "    or it's the older /hpt-fix locked format pasted back in. RAW pastes from HP Tuners —\n"
+            "    bare CSV-like rows of numbers, plain row/col headers, the in-app chart grid copy —\n"
+            "    ARE NOT external. Treat those as canonical Doc input.\n"
+            "    When you DO detect a true external emission, lead the reply with:\n"
             "        SOURCE: EXTERNAL — UNVERIFIED\n"
-            "    Then state what you're seeing, ask Doc to confirm before you trust the numbers, and\n"
-            "    DO NOT auto-log it to tune_log as if it's a Wrench-blessed edit.\n"
+            "    Then ask Doc to confirm before trusting the numbers. Otherwise, NEVER print that line.\n"
         )
 
     # --- Auto web-search trigger ---
