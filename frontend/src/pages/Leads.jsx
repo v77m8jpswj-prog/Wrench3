@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { Phone, Mail, Truck, Clock, MessageSquare, Check, X as XIcon, RefreshCw, Send, Loader2, Copy, Voicemail } from "lucide-react";
 import api from "@/api";
 
@@ -209,6 +210,9 @@ export default function Leads() {
   const [busy, setBusy] = useState(false);
   const [textingId, setTextingId] = useState(null);
   const [emailingId, setEmailingId] = useState(null);
+  const [search, setSearch] = useSearchParams();
+  // /leads?phone=+14794345852 narrows to one customer (clicked from SMS Inbox)
+  const phoneFilter = (search.get("phone") || "").trim();
 
   const refresh = useCallback(async () => {
     setBusy(true);
@@ -242,6 +246,13 @@ export default function Leads() {
     const digits = s.replace(/\D/g, "");
     return digits.length >= 7;
   };
+  // Last-10 digits match — handles "+14794345852" vs "4794345852" vs "(479) 434-5852"
+  const digitsOnly = (s) => (s || "").replace(/\D/g, "").slice(-10);
+  const filterDigits = phoneFilter ? digitsOnly(phoneFilter) : "";
+  const visibleLeads = useMemo(() => (
+    filterDigits ? leads.filter(l => isPhone(l.contact) && digitsOnly(l.contact) === filterDigits) : leads
+  ), [leads, filterDigits]);
+  const clearPhoneFilter = () => { const ns = new URLSearchParams(search); ns.delete("phone"); setSearch(ns, { replace: true }); };
 
   return (
     <div className="p-4 md:p-6 max-w-4xl mx-auto" data-testid="leads-page">
@@ -253,14 +264,21 @@ export default function Leads() {
         <button onClick={refresh} disabled={busy} className="btn-ghost flex items-center gap-1 text-xs"><RefreshCw size={12} className={busy?"animate-spin":""}/>REFRESH</button>
       </div>
 
-      {leads.length === 0 ? (
+      {phoneFilter && (
+        <div className="mb-3 border border-amber2 bg-amber2/10 text-amber2 px-3 py-2 text-[11px] uppercase tracking-widest flex items-center justify-between gap-2" data-testid="leads-phone-filter-banner">
+          <span>FILTERED TO {phoneFilter} ({visibleLeads.length} {visibleLeads.length === 1 ? "LEAD" : "LEADS"})</span>
+          <button onClick={clearPhoneFilter} className="border border-amber2 px-2 py-0.5 hover:bg-amber2 hover:text-black" data-testid="leads-phone-filter-clear">SHOW ALL</button>
+        </div>
+      )}
+
+      {visibleLeads.length === 0 ? (
         <div className="panel p-6 text-center text-ink-3 text-sm">
-          No leads yet.<br/>
+          {phoneFilter ? (<>No leads from <span className="font-mono text-amber2">{phoneFilter}</span> yet.</>) : (<>No leads yet.</>)}<br/>
           <span className="text-[11px] uppercase tracking-widest">Share your landing page URL to get the phone ringing.</span>
         </div>
       ) : (
         <div className="space-y-2">
-          {leads.map(l => (
+          {visibleLeads.map(l => (
             <div key={l.id} className="panel p-3 md:p-4" data-testid={`lead-${l.id}`}>
               <div className="flex items-start justify-between gap-2 mb-2">
                 <div className="flex-1 min-w-0">
@@ -302,6 +320,15 @@ export default function Leads() {
                     >
                       <Send size={11}/>TEXT
                     </button>
+                  )}
+                  {isPhone(l.contact) && (
+                    <Link
+                      to={`/sms?phone=${encodeURIComponent(l.contact)}`}
+                      className="btn-ghost text-xs flex items-center gap-1 border-amber2 text-amber2 hover:bg-amber2 hover:text-black"
+                      data-testid={`lead-view-sms-${l.id}`}
+                    >
+                      <MessageSquare size={11}/>SMS THREAD
+                    </Link>
                   )}
                   {!isPhone(l.contact) && emailingId !== l.id && (
                     <button

@@ -1,6 +1,13 @@
 # Data Wrench — PRD (as of Mar 1, 2026)
 
-## Latest fix (Mar 1, 2026 - evening) — Tune mode 3-bug pass
+## Mar 1, 2026 - late afternoon — /sms ↔ /leads bridge SHIPPED
+- `/leads?phone=<number>` and `/sms?phone=<number>` are now filtered views; each shows a yellow banner with the active phone + SHOW ALL clear button.
+- Lead cards with a phone contact have a new "SMS THREAD" button → jumps to that customer's SMS history.
+- Every SMS row has a "VIEW LEAD" link → jumps to that customer's lead card.
+- Last-10-digits match means "+14794345852", "(479) 434-5852", and "4794345852" all collapse to the same thread.
+- Resolves Doc's "I don't know why leads and SMS are separate" confusion.
+
+## Mar 1, 2026 - evening — Tune mode 3-bug pass
 - BUG: Switching active vehicle in Tune kept dragging the prior vehicle's chat context into Wrench's responses. Root cause: chat session_id was stored in a single global `dw_tune_session` localStorage key — same id reused across vehicles, backend loaded old history.
   FIX: keyed the localStorage cache by vehicle id (`dw_tune_session_<vehicleId>`). On vehicle change, swap to the cached session for that vehicle (or null → backend creates fresh). Messages no longer bleed across trucks.
 - BUG: "Won't take screenshots" — vision endpoint hitting Cloudflare 524 (100s timeout) because HP Tuners phone screenshots are 8-12 MB and gpt-5.2 vision chews on them too long.

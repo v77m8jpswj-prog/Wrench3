@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import api from "@/api";
-import { MessageSquare, Send, RefreshCw, CheckCheck } from "lucide-react";
+import { MessageSquare, Send, RefreshCw, CheckCheck, User } from "lucide-react";
 
 export default function SmsInbox() {
   const [rows, setRows] = useState([]);
@@ -9,6 +10,11 @@ export default function SmsInbox() {
   const [sending, setSending] = useState(false);
   const [toast, setToast] = useState("");
   const [testing, setTesting] = useState(false);
+  const [search, setSearch] = useSearchParams();
+  const phoneFilter = (search.get("phone") || "").trim();
+  // Last-10-digits match so "+14794345852" and "(479) 434-5852" line up
+  const digitsOnly = (s) => (s || "").replace(/\D/g, "").slice(-10);
+  const filterDigits = phoneFilter ? digitsOnly(phoneFilter) : "";
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -21,6 +27,17 @@ export default function SmsInbox() {
       setLoading(false);
     }
   }, []);
+
+  // (Composer auto-fill from ?phone= was tried but conflicts with strict
+  // React hook rules. Doc can just click REPLY on any inbound row instead.)
+
+  const visibleRows = useMemo(() => (
+    filterDigits
+      ? rows.filter(r => digitsOnly(r.from_number) === filterDigits || digitsOnly(r.to_number) === filterDigits)
+      : rows
+  ), [rows, filterDigits]);
+
+  const clearPhoneFilter = () => { const ns = new URLSearchParams(search); ns.delete("phone"); setSearch(ns, { replace: true }); };
 
   useEffect(() => { load(); }, [load]);
 
@@ -112,11 +129,21 @@ export default function SmsInbox() {
 
       {toast && <div className="mb-3 border border-amber2 text-amber2 px-3 py-2 text-xs uppercase tracking-widest" data-testid="sms-toast">{toast}</div>}
 
+      {phoneFilter && (
+        <div className="mb-3 border border-amber2 bg-amber2/10 text-amber2 px-3 py-2 text-[11px] uppercase tracking-widest flex items-center justify-between gap-2" data-testid="sms-phone-filter-banner">
+          <span>FILTERED TO {phoneFilter} ({visibleRows.length} {visibleRows.length === 1 ? "MSG" : "MSGS"})</span>
+          <div className="flex items-center gap-2">
+            <Link to={`/leads?phone=${encodeURIComponent(phoneFilter)}`} className="border border-amber2 px-2 py-0.5 hover:bg-amber2 hover:text-black" data-testid="sms-filter-view-lead">VIEW LEAD</Link>
+            <button onClick={clearPhoneFilter} className="border border-amber2 px-2 py-0.5 hover:bg-amber2 hover:text-black" data-testid="sms-filter-clear">SHOW ALL</button>
+          </div>
+        </div>
+      )}
+
       <div className="border border-line bg-bg-1">
-        <div className="px-3 py-2 border-b border-line text-[10px] uppercase tracking-widest text-ink-3">RECENT MESSAGES ({rows.length})</div>
-        {rows.length === 0 ? (
+        <div className="px-3 py-2 border-b border-line text-[10px] uppercase tracking-widest text-ink-3">RECENT MESSAGES ({visibleRows.length})</div>
+        {visibleRows.length === 0 ? (
           <div className="p-6 text-center text-ink-3 text-sm">No SMS yet. When a customer texts your toll-free, it'll land here.</div>
-        ) : rows.map(r => (
+        ) : visibleRows.map(r => (
           <div key={r.id} className={`px-3 py-2 border-b border-line ${r.direction==='inbound' && !r.read ? 'bg-bg-2' : ''}`} data-testid={`sms-row-${r.id}`}>
             <div className="flex items-baseline justify-between gap-2 flex-wrap">
               <div className="text-[10px] uppercase tracking-widest">
@@ -130,15 +157,26 @@ export default function SmsInbox() {
               <div className="text-[9px] text-ink-3">{r.created_at ? new Date(r.created_at).toLocaleString() : ''}</div>
             </div>
             <div className="text-sm mt-1 whitespace-pre-wrap break-words">{r.body}</div>
-            {r.direction === 'inbound' && (
-              <button
-                onClick={() => setComposing({ to: r.from_number, body: '' })}
-                className="text-[10px] uppercase tracking-widest text-ink-3 hover:text-rust mt-1"
-                data-testid={`sms-reply-${r.id}`}
-              >
-                → REPLY
-              </button>
-            )}
+            <div className="flex items-center gap-3 mt-1 flex-wrap">
+              {r.direction === 'inbound' && (
+                <button
+                  onClick={() => setComposing({ to: r.from_number, body: '' })}
+                  className="text-[10px] uppercase tracking-widest text-ink-3 hover:text-rust"
+                  data-testid={`sms-reply-${r.id}`}
+                >
+                  → REPLY
+                </button>
+              )}
+              {(r.direction === 'inbound' ? r.from_number : r.to_number) && (
+                <Link
+                  to={`/leads?phone=${encodeURIComponent(r.direction === 'inbound' ? r.from_number : r.to_number)}`}
+                  className="text-[10px] uppercase tracking-widest text-ink-3 hover:text-amber2 flex items-center gap-1"
+                  data-testid={`sms-view-lead-${r.id}`}
+                >
+                  <User size={10}/>VIEW LEAD
+                </Link>
+              )}
+            </div>
           </div>
         ))}
       </div>
