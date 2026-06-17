@@ -1,5 +1,14 @@
 # Data Wrench — PRD (as of Mar 1, 2026)
 
+## Mar 1, 2026 - night (followup) — Legacy SMS schema bug FIXED
+- After redeploying threaded SMS view to prod, Doc reported "all the SMS text are gone."
+- Root cause: historical SMS rows on prod were stored with the LEGACY single-`phone` field (per earlier schema), but the new `/sms/threads` logic only looked at `from_number`/`to_number`. Old rows had no value to group on → invisible.
+- Fix: `sms_routes.py` `/sms/threads`, `/sms/threads/{key}/messages`, `/sms/threads/{key}/mark-read`, and `/sms/unread-count` now fall back to the `phone` field and treat missing `direction` as inbound. Verified with a synthetic legacy row in preview.
+- Doc to redeploy again. Historical threads should populate.
+- ✅ Google Play resubmission — Doc reports this is done (no longer blocking; remove from action list).
+- ✅ After-hours phone forwarding — Doc reports Dobson setup is complete.
+- 🔍 Pending: Doc reports "Leads is not right" but hasn't sent specifics — waiting on screenshot.
+
 ## Mar 1, 2026 - night — Threaded SMS Inbox + Sidebar Unread Badge SHIPPED
 - Complete rewrite of `SmsInbox.jsx` as an iMessage-style two-pane view: customer-grouped threads on the left, full conversation with selected customer on the right, message bubbles (outbound right/amber, inbound left/grey), pinned composer at bottom of conversation.
 - Mobile: collapses to single pane — list OR drilled-in conversation with a back chevron.

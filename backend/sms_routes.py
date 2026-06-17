@@ -291,10 +291,13 @@ def make_router(db, get_user):
     @router.get("/sms/unread-count")
     async def sms_unread_count(user=Depends(get_user)):
         """Lightweight count for the sidebar nav badge.
-        Counts inbound messages where read != True."""
+        Counts inbound messages where read != True. Legacy rows with no
+        `direction` field are treated as inbound (matches /sms/threads logic)."""
         n = await db.sms_messages.count_documents({
-            "direction": "inbound",
-            "$or": [{"read": {"$exists": False}}, {"read": {"$ne": True}}],
+            "$and": [
+                {"$or": [{"direction": "inbound"}, {"direction": {"$exists": False}}]},
+                {"$or": [{"read": {"$exists": False}}, {"read": {"$ne": True}}]},
+            ],
         })
         return {"unread": int(n)}
 
@@ -302,19 +305,31 @@ def make_router(db, get_user):
     async def sms_threads(user=Depends(get_user)):
         """Customer-grouped SMS threads with name/city lookups from leads.
         Each thread: { phone, name, lead_id, last_at, last_body, last_direction,
-        unread_count, total_count, city, state }. Sorted newest-first."""
-        # Last 500 messages — plenty for any active shop and keeps grouping cheap.
-        cur = db.sms_messages.find({}, {"_id": 0}).sort("created_at", -1).limit(500)
-        rows = await cur.to_list(500)
+        unread_count, total_count, city, state }. Sorted newest-first.
 
-        # Group by last-10-digits of the OTHER party (from for inbound, to for outbound).
-        def other_digits(r):
-            raw = r.get("from_number") if r.get("direction") == "inbound" else r.get("to_number")
-            return ("".join(c for c in (raw or "") if c.isdigit()))[-10:]
+        Handles BOTH the new schema (from_number/to_number) AND the legacy
+        schema where rows only had a single `phone` field — historical rows
+        from before the multi-field rewrite would otherwise be invisible."""
+        # Last 1000 messages — covers a long active shop history without
+        # making grouping expensive. Bump if Doc gets busier.
+        cur = db.sms_messages.find({}, {"_id": 0}).sort("created_at", -1).limit(1000)
+        rows = await cur.to_list(1000)
+
+        def other_raw(r):
+            # New schema: outbound has to_number set, inbound has from_number set.
+            # Legacy schema: rows just have a `phone` field with the customer number.
+            direction = r.get("direction", "inbound")
+            if direction == "outbound":
+                return r.get("to_number") or r.get("phone") or ""
+            return r.get("from_number") or r.get("phone") or ""
+
+        def last10(raw):
+            return "".join(c for c in (raw or "") if c.isdigit())[-10:]
 
         threads = {}
         for r in rows:
-            key = other_digits(r)
+            raw = other_raw(r)
+            key = last10(raw)
             if not key:
                 continue
             t = threads.get(key)
@@ -323,23 +338,23 @@ def make_router(db, get_user):
                 # customer is the most recent — use it for the preview fields.
                 t = {
                     "phone_key": key,
-                    "phone": r.get("from_number") if r.get("direction") == "inbound" else r.get("to_number"),
+                    "phone": raw,
                     "name": None,
                     "lead_id": None,
                     "last_at": r.get("created_at"),
                     "last_body": r.get("body") or "",
-                    "last_direction": r.get("direction"),
+                    "last_direction": r.get("direction") or "inbound",
                     "unread_count": 0,
                     "total_count": 0,
-                    "city": r.get("from_city") if r.get("direction") == "inbound" else None,
-                    "state": r.get("from_state") if r.get("direction") == "inbound" else None,
+                    "city": r.get("from_city") if (r.get("direction") or "inbound") == "inbound" else None,
+                    "state": r.get("from_state") if (r.get("direction") or "inbound") == "inbound" else None,
                 }
                 threads[key] = t
             t["total_count"] += 1
-            if r.get("direction") == "inbound" and not r.get("read"):
+            if (r.get("direction") or "inbound") == "inbound" and not r.get("read"):
                 t["unread_count"] += 1
             # Pick up city/state from any inbound message if we didn't have one
-            if not t["city"] and r.get("direction") == "inbound":
+            if not t["city"] and (r.get("direction") or "inbound") == "inbound":
                 t["city"] = r.get("from_city")
                 t["state"] = r.get("from_state")
 
@@ -368,36 +383,44 @@ def make_router(db, get_user):
     @router.get("/sms/threads/{phone_key}/messages")
     async def sms_thread_messages(phone_key: str, user=Depends(get_user)):
         """All messages for one customer thread (oldest → newest), matched by
-        last-10-digits so format variations don't fragment the conversation."""
+        last-10-digits so format variations and legacy `phone` rows still group."""
         key = "".join(c for c in (phone_key or "") if c.isdigit())[-10:]
         if not key:
             return []
-        # Pull recent messages then filter — keeps the query simple.
-        cur = db.sms_messages.find({}, {"_id": 0}).sort("created_at", -1).limit(500)
-        rows = await cur.to_list(500)
+        cur = db.sms_messages.find({}, {"_id": 0}).sort("created_at", -1).limit(1000)
+        rows = await cur.to_list(1000)
         def matches(r):
-            other = r.get("from_number") if r.get("direction") == "inbound" else r.get("to_number")
-            return ("".join(c for c in (other or "") if c.isdigit()))[-10:] == key
+            direction = r.get("direction") or "inbound"
+            if direction == "outbound":
+                other = r.get("to_number") or r.get("phone") or ""
+            else:
+                other = r.get("from_number") or r.get("phone") or ""
+            return ("".join(c for c in other if c.isdigit()))[-10:] == key
         msgs = [r for r in rows if matches(r)]
         msgs.sort(key=lambda r: r.get("created_at") or "")
         return msgs
 
     @router.post("/sms/threads/{phone_key}/mark-read")
     async def sms_thread_mark_read(phone_key: str, user=Depends(get_user)):
-        """Mark every inbound message in this customer's thread as read."""
+        """Mark every inbound message in this customer's thread as read.
+        Handles both new (from_number) and legacy (phone) schemas."""
         key = "".join(c for c in (phone_key or "") if c.isdigit())[-10:]
         if not key:
             return {"ok": True, "updated": 0}
-        # Find inbound rows whose from_number's last 10 digits match — use a
-        # broad query then filter in Python (mongo regex on stripped digits
-        # would be ugly).
         cur = db.sms_messages.find(
-            {"direction": "inbound", "$or": [{"read": {"$exists": False}}, {"read": {"$ne": True}}]},
-            {"_id": 1, "from_number": 1, "id": 1},
+            {
+                "$or": [
+                    {"direction": "inbound"},
+                    {"direction": {"$exists": False}},  # legacy rows with no direction default to inbound
+                ],
+                "$and": [{"$or": [{"read": {"$exists": False}}, {"read": {"$ne": True}}]}],
+            },
+            {"from_number": 1, "phone": 1, "id": 1},
         )
         to_update = []
         async for r in cur:
-            digits = ("".join(c for c in (r.get("from_number") or "") if c.isdigit()))[-10:]
+            raw = r.get("from_number") or r.get("phone") or ""
+            digits = ("".join(c for c in raw if c.isdigit()))[-10:]
             if digits == key:
                 to_update.append(r["id"])
         if not to_update:
