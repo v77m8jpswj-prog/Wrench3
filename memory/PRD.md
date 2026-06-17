@@ -1,5 +1,16 @@
 # Data Wrench — PRD (as of Mar 1, 2026)
 
+## Mar 1, 2026 - late night — Facebook Messenger → Lead Pipeline SHIPPED
+- New module `/app/backend/facebook_routes.py` with:
+  - `GET /api/fb/webhook` — Meta verification handshake (echoes hub.challenge)
+  - `POST /api/fb/webhook` — receives Messenger + Instagram DM events, validates X-Hub-Signature-256, creates a row in `db.leads` with `source="facebook_dm"` (or `"instagram_dm"`)
+  - `GET /api/fb/health` — diagnostic showing which env secrets are configured
+- `Leads.jsx` updated: FB MESSENGER + INSTAGRAM badges (with brand colors), inline rendering of customer-sent images, "REPLY ON FB"/"REPLY ON IG" buttons that deep-link to `facebook.com/messages/t/<PSID>` and `instagram.com/direct/t/<PSID>`.
+- PSID-to-name lookup via Graph API (using FB_PAGE_ACCESS_TOKEN).
+- Idempotent on `mid` so Meta retries don't dupe leads.
+- Env vars added to backend/.env (FB_VERIFY_TOKEN seeded, FB_APP_SECRET + FB_PAGE_ACCESS_TOKEN blank — Doc to fill in).
+- BLOCKED on Doc: needs to (a) create FB Developer App, (b) hand back App Secret + Page Access Token.
+
 ## Mar 1, 2026 - night (followup) — Legacy SMS schema bug FIXED
 - After redeploying threaded SMS view to prod, Doc reported "all the SMS text are gone."
 - Root cause: historical SMS rows on prod were stored with the LEGACY single-`phone` field (per earlier schema), but the new `/sms/threads` logic only looked at `from_number`/`to_number`. Old rows had no value to group on → invisible.

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { Phone, Mail, Truck, Clock, MessageSquare, Check, X as XIcon, RefreshCw, Send, Loader2, Copy, Voicemail } from "lucide-react";
+import { Phone, Mail, Truck, Clock, MessageSquare, Check, X as XIcon, RefreshCw, Send, Loader2, Copy, Voicemail, Facebook, Instagram } from "lucide-react";
 import api from "@/api";
 
 const STATUS_COLORS = {
@@ -291,6 +291,16 @@ export default function Leads() {
                         <Voicemail size={10}/>VOICEMAIL
                       </span>
                     )}
+                    {l.kind === "facebook_dm" && (
+                      <span className="text-[10px] uppercase tracking-widest font-bold border px-2 py-0.5 border-[#1877F2] text-[#1877F2] bg-[#1877F2]/10 flex items-center gap-1" data-testid={`lead-fb-badge-${l.id}`}>
+                        <Facebook size={10}/>FB MESSENGER
+                      </span>
+                    )}
+                    {l.kind === "instagram_dm" && (
+                      <span className="text-[10px] uppercase tracking-widest font-bold border px-2 py-0.5 border-pink-500 text-pink-500 bg-pink-500/10 flex items-center gap-1" data-testid={`lead-ig-badge-${l.id}`}>
+                        <Instagram size={10}/>INSTAGRAM
+                      </span>
+                    )}
                     <span className="text-[10px] text-ink-3 uppercase tracking-widest flex items-center gap-1"><Clock size={10}/>{timeAgo(l.created_at)}</span>
                   </div>
                   <div className="text-base font-bold text-amber2 mt-1">{l.name}</div>
@@ -305,6 +315,17 @@ export default function Leads() {
                   <audio controls src={l.recording_url} className="w-full h-8" preload="none">
                     Your browser does not support audio playback.
                   </audio>
+                </div>
+              )}
+              {l.fb_attachment_url && (l.kind === "facebook_dm" || l.kind === "instagram_dm") && (
+                <div className="mb-2" data-testid={`lead-fb-attach-${l.id}`}>
+                  {(l.fb_attachments_full?.[0]?.type === "image") ? (
+                    <a href={l.fb_attachment_url} target="_blank" rel="noopener noreferrer">
+                      <img src={l.fb_attachment_url} alt="customer attachment" className="max-h-48 border border-line" />
+                    </a>
+                  ) : (
+                    <a href={l.fb_attachment_url} target="_blank" rel="noopener noreferrer" className="text-xs text-amber2 underline">View attachment ↗</a>
+                  )}
                 </div>
               )}
               <div className="text-sm text-ink-2 whitespace-pre-wrap border-l-2 border-line pl-3 ml-1">
@@ -329,6 +350,28 @@ export default function Leads() {
                     >
                       <MessageSquare size={11}/>SMS THREAD
                     </Link>
+                  )}
+                  {l.kind === "facebook_dm" && l.fb_psid && (
+                    <a
+                      href={`https://www.facebook.com/messages/t/${l.fb_psid}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="btn-ghost text-xs flex items-center gap-1 border-[#1877F2] text-[#1877F2] hover:bg-[#1877F2] hover:text-white"
+                      data-testid={`lead-fb-reply-${l.id}`}
+                    >
+                      <Facebook size={11}/>REPLY ON FB
+                    </a>
+                  )}
+                  {l.kind === "instagram_dm" && l.fb_psid && (
+                    <a
+                      href={`https://www.instagram.com/direct/t/${l.fb_psid}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="btn-ghost text-xs flex items-center gap-1 border-pink-500 text-pink-500 hover:bg-pink-500 hover:text-white"
+                      data-testid={`lead-ig-reply-${l.id}`}
+                    >
+                      <Instagram size={11}/>REPLY ON IG
+                    </a>
                   )}
                   {!isPhone(l.contact) && emailingId !== l.id && (
                     <button
