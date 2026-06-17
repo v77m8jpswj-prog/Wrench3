@@ -1,6 +1,23 @@
 # Data Wrench — PRD (as of Mar 1, 2026)
 
-## Mar 1, 2026 - late night — Facebook Messenger → Lead Pipeline SHIPPED
+## Mar 1, 2026 - latest — UNIFIED INBOX SHIPPED + FB Messenger Lead Pipeline
+- New `/inbox` route — single chronological feed merging SMS threads, Facebook Messenger DMs, Instagram DMs, voicemails, web-form leads, and emails. Each row shows channel badge (color-coded), customer name (or phone fallback), vehicle if known, last-message preview, time-ago, and NEW dot.
+- Channel-filter chips at the top (ALL/SMS/FB/IG/VM/EMAIL/FORM) with per-channel unread counts.
+- Search box filters across name/phone/message body/subject.
+- Backend endpoints: `GET /api/inbox/feed` (filterable, paginated), `GET /api/inbox/counts` (per-channel unread totals for chip badges + sidebar nav badge).
+- Sidebar nav: new INBOX item at the top with live total-unread badge polling every 30s.
+- 30s auto-refresh keeps the page live without manual reloads.
+- Smoke-tested live in preview: 5 items merged from SMS + form leads, all channels render correctly.
+
+## Mar 1, 2026 - late night — Facebook Messenger → Lead Pipeline (BACKEND READY)
+- New `/app/backend/facebook_routes.py`:
+  - `GET /api/fb/webhook` — Meta verification handshake
+  - `POST /api/fb/webhook` — receives Messenger + Instagram DM events, validates X-Hub-Signature-256, creates leads
+  - `GET /api/fb/health` — config diagnostic
+- `Leads.jsx`: FB MESSENGER + INSTAGRAM badges, inline image attachment rendering, "REPLY ON FB"/"REPLY ON IG" deep-link buttons.
+- BLOCKED on Doc: Facebook Developer Console walkthrough (Meta UI is hostile; escalated to E2 / Emergent Support per Doc's request for a more capable agent).
+
+## Mar 1, 2026 - night (followup) — Legacy SMS schema bug FIXED
 - New module `/app/backend/facebook_routes.py` with:
   - `GET /api/fb/webhook` — Meta verification handshake (echoes hub.challenge)
   - `POST /api/fb/webhook` — receives Messenger + Instagram DM events, validates X-Hub-Signature-256, creates a row in `db.leads` with `source="facebook_dm"` (or `"instagram_dm"`)

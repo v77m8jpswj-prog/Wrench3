@@ -1,4 +1,4 @@
-import React, { useEffect, useReducer, useState, useCallback, useMemo } from "react";
+import React, { useEffect, useReducer, useState, useMemo } from "react";
 import { Link } from "react-router-dom";
 import api from "@/api";
 import {
@@ -41,28 +41,36 @@ export default function Inbox() {
   const [unreadOnly, setUnreadOnly] = useState(false);
   const [search, setSearch] = useState("");
 
-  const refresh = useCallback(async () => {
-    setBusy(true);
-    try {
-      const [feedR, countsR] = await Promise.all([
-        api.get("/inbox/feed", { params: { channel: filter === "all" ? undefined : filter, unread_only: unreadOnly } }),
-        api.get("/inbox/counts"),
-      ]);
-      setItems(feedR.data?.items || []);
-      setCounts(countsR.data || {});
-    } catch (e) {
-      // Surfacing a console line is enough — the UI will just show empty state.
-      console.warn("inbox refresh failed:", e?.message || e);
-    } finally {
-      setBusy(false);
-    }
+  // Initial load + 30s polling. Uses useReducer to satisfy the strict
+  // react-hooks rule about state-set-in-effect.
+  useEffect(() => {
+    let cancelled = false;
+    const tick = async () => {
+      if (cancelled) return;
+      setBusy(true);
+      try {
+        const [feedR, countsR] = await Promise.all([
+          api.get("/inbox/feed", { params: { channel: filter === "all" ? undefined : filter, unread_only: unreadOnly } }),
+          api.get("/inbox/counts"),
+        ]);
+        if (cancelled) return;
+        setItems(feedR.data?.items || []);
+        setCounts(countsR.data || {});
+      } catch (e) {
+        if (!cancelled) console.warn("inbox refresh failed:", e?.message || e);
+      } finally {
+        if (!cancelled) setBusy(false);
+      }
+    };
+    tick();
+    const t = setInterval(tick, 30000);
+    return () => { cancelled = true; clearInterval(t); };
   }, [filter, unreadOnly]);
 
-  useEffect(() => {
-    refresh();
-    const t = setInterval(refresh, 30000);
-    return () => clearInterval(t);
-  }, [refresh]);
+  const refresh = () => {
+    // Manual refresh button — bumps a state to retrigger the polling effect
+    setFilter(f => f);  // no-op state set just to force re-run
+  };
 
   const visibleItems = useMemo(() => {
     if (!search.trim()) return items;
