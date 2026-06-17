@@ -2358,6 +2358,59 @@ ul {{ padding-left: 22px; }}
             "open_leads": open_leads,
         }
 
+    # ============ PEER HEALTH PROBES ============
+    # Bud's daily briefing was reporting "Brain offline" because we don't
+    # expose any health endpoint for peer agents to probe — every existing
+    # peer route requires a token AND query params, so any naive ping 404s
+    # or 401s and gets logged as "offline". These two endpoints give peer
+    # agents an unambiguous way to verify (a) reachability and (b) token validity.
+
+    @router.get("/brain/peer/ping")
+    async def peer_ping():
+        """Public-no-auth liveness check. Use this from peer agents' daily
+        health probes — a 200 here means the Brain API is reachable. To verify
+        the peer token itself, call /brain/peer/whoami separately."""
+        from datetime import datetime as _dt, timezone as _tz
+        return {
+            "ok": True,
+            "brain": "wrench",
+            "shop_id": DEFAULT_SHOP_ID,
+            "time": _dt.now(_tz.utc).isoformat(),
+            "endpoints": [
+                "GET  /api/brain/peer/ping            (public)",
+                "GET  /api/brain/peer/whoami          (token)",
+                "GET  /api/brain/peer/lookup?q=...    (token)",
+                "GET  /api/brain/peer/open-work       (token)",
+            ],
+        }
+
+    @router.get("/brain/peer/whoami")
+    async def peer_whoami(authorization: Optional[str] = Header(None), _t: str = Depends(get_brain_token)):
+        """Authed health check. A 200 here confirms the peer's bearer token is
+        valid (token check is enforced by the get_brain_token dependency).
+        A 401 means the token is missing/revoked → peer needs Doc to re-issue.
+
+        Returns the human-readable peer name (looked up from peer_tokens)
+        WITHOUT echoing the token value back."""
+        from datetime import datetime as _dt, timezone as _tz
+        # Map the presented token to a peer label by re-hashing and looking
+        # it up in peer_tokens. If it was a master/env token, we don't expose
+        # which one — just say "master".
+        presented = (authorization or "").removeprefix("Bearer ").strip()
+        peer_label = "master"
+        if presented and presented != BRAIN_TOKEN:
+            h = _hashlib.sha256(presented.encode()).hexdigest()
+            row = await db.peer_tokens.find_one({"token_hash": h}, {"_id": 0, "peer_name": 1, "label": 1, "active": 1})
+            if row:
+                peer_label = row.get("peer_name") or row.get("label") or "peer"
+        return {
+            "ok": True,
+            "peer": peer_label,
+            "brain": "wrench",
+            "shop_id": DEFAULT_SHOP_ID,
+            "time": _dt.now(_tz.utc).isoformat(),
+        }
+
     # ============ PEER TOKENS — Doc-managed, DB-backed, revocable ============
     # Lets Doc issue/revoke peer-agent tokens from inside the foreman UI without
     # ever having to touch emergent environment-variable settings.
