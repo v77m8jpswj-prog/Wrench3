@@ -1,7 +1,8 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useReducer, useState } from "react";
 import { NavLink, useNavigate, useLocation } from "react-router-dom";
 import { MessageSquare, Grid3x3, BookOpen, Truck, Activity, Brain, Settings as Cog, LogOut, Wrench, Menu, X, Phone, PhoneOff, KeyRound, FolderArchive, Users, Mail, MicOff, Mic, Briefcase, Inbox, GitCompare, UserPlus, Home as HomeIcon } from "lucide-react";
 import { clearToken } from "@/api";
+import api from "@/api";
 import { useApp } from "@/AppContext";
 
 const NAV = [
@@ -32,6 +33,7 @@ export default function Shell({ user, setUser, children }) {
   const [status, setStatus] = useState({ label: "IDLE", color: "#52525B" });
   const [libCount, setLibCount] = useState(0);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [smsUnread, dispatchSmsUnread] = useReducer((_s, n) => Math.max(0, n|0), 0);
 
   useEffect(() => {
     const handler = (e) => setStatus(e.detail || { label: "IDLE", color: "#52525B" });
@@ -44,6 +46,23 @@ export default function Shell({ user, setUser, children }) {
     window.addEventListener("wrench-libcount", h);
     return () => window.removeEventListener("wrench-libcount", h);
   }, []);
+
+  // Poll the SMS unread count every 30s + listen for manual refresh
+  // events (fired by SmsInbox when threads are marked-read).
+  useEffect(() => {
+    let alive = true;
+    const fetchUnread = async () => {
+      try {
+        const r = await api.get("/sms/unread-count");
+        if (alive && r?.data) dispatchSmsUnread(r.data.unread || 0);
+      } catch {/* not logged in, or backend down — ignore */}
+    };
+    fetchUnread();
+    const t = setInterval(fetchUnread, 30000);
+    const onPing = () => fetchUnread();
+    window.addEventListener("wrench-sms-unread-refresh", onPing);
+    return () => { alive = false; clearInterval(t); window.removeEventListener("wrench-sms-unread-refresh", onPing); };
+  }, [loc.pathname]);
 
   // close drawer on route change
   useEffect(() => { setDrawerOpen(false); }, [loc.pathname]);
@@ -148,7 +167,9 @@ export default function Shell({ user, setUser, children }) {
           <nav className="flex-1 py-3">
             {NAV.map(n => {
               const Icon = n.icon;
-              const unread = (n.to === "/" && app?.callArtifacts) ? app.callArtifacts.filter(a => !a.seen).length : 0;
+              let unread = 0;
+              if (n.to === "/" && app?.callArtifacts) unread = app.callArtifacts.filter(a => !a.seen).length;
+              if (n.to === "/sms") unread = smsUnread;
               return (
                 <NavLink
                   key={n.to}
@@ -162,7 +183,7 @@ export default function Shell({ user, setUser, children }) {
                   <Icon size={16} strokeWidth={2} />
                   <span className="font-head font-bold flex-1">{n.label}</span>
                   {unread > 0 && (
-                    <span className="bg-rust text-black text-[10px] font-bold px-1.5 py-0.5 leading-none">{unread}</span>
+                    <span className="bg-rust text-black text-[10px] font-bold px-1.5 py-0.5 leading-none" data-testid={n.to === "/sms" ? "nav-sms-unread" : undefined}>{unread}</span>
                   )}
                 </NavLink>
               );
@@ -196,6 +217,7 @@ export default function Shell({ user, setUser, children }) {
               <nav className="flex-1 py-2 overflow-auto">
                 {NAV.map(n => {
                   const Icon = n.icon;
+                  const unread = n.to === "/sms" ? smsUnread : 0;
                   return (
                     <NavLink
                       key={n.to}
@@ -207,7 +229,10 @@ export default function Shell({ user, setUser, children }) {
                          ${isActive ? "border-rust bg-bg-3 text-white" : "border-transparent text-ink-2"}`}
                     >
                       <Icon size={18} strokeWidth={2} />
-                      <span className="font-head font-bold">{n.label}</span>
+                      <span className="font-head font-bold flex-1">{n.label}</span>
+                      {unread > 0 && (
+                        <span className="bg-rust text-black text-[11px] font-bold px-1.5 py-0.5 leading-none">{unread}</span>
+                      )}
                     </NavLink>
                   );
                 })}

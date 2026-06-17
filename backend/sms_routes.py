@@ -288,6 +288,125 @@ def make_router(db, get_user):
         rows = await cur.to_list(min(limit, 200))
         return rows
 
+    @router.get("/sms/unread-count")
+    async def sms_unread_count(user=Depends(get_user)):
+        """Lightweight count for the sidebar nav badge.
+        Counts inbound messages where read != True."""
+        n = await db.sms_messages.count_documents({
+            "direction": "inbound",
+            "$or": [{"read": {"$exists": False}}, {"read": {"$ne": True}}],
+        })
+        return {"unread": int(n)}
+
+    @router.get("/sms/threads")
+    async def sms_threads(user=Depends(get_user)):
+        """Customer-grouped SMS threads with name/city lookups from leads.
+        Each thread: { phone, name, lead_id, last_at, last_body, last_direction,
+        unread_count, total_count, city, state }. Sorted newest-first."""
+        # Last 500 messages — plenty for any active shop and keeps grouping cheap.
+        cur = db.sms_messages.find({}, {"_id": 0}).sort("created_at", -1).limit(500)
+        rows = await cur.to_list(500)
+
+        # Group by last-10-digits of the OTHER party (from for inbound, to for outbound).
+        def other_digits(r):
+            raw = r.get("from_number") if r.get("direction") == "inbound" else r.get("to_number")
+            return ("".join(c for c in (raw or "") if c.isdigit()))[-10:]
+
+        threads = {}
+        for r in rows:
+            key = other_digits(r)
+            if not key:
+                continue
+            t = threads.get(key)
+            if not t:
+                # rows are pre-sorted desc, so the first one we see for each
+                # customer is the most recent — use it for the preview fields.
+                t = {
+                    "phone_key": key,
+                    "phone": r.get("from_number") if r.get("direction") == "inbound" else r.get("to_number"),
+                    "name": None,
+                    "lead_id": None,
+                    "last_at": r.get("created_at"),
+                    "last_body": r.get("body") or "",
+                    "last_direction": r.get("direction"),
+                    "unread_count": 0,
+                    "total_count": 0,
+                    "city": r.get("from_city") if r.get("direction") == "inbound" else None,
+                    "state": r.get("from_state") if r.get("direction") == "inbound" else None,
+                }
+                threads[key] = t
+            t["total_count"] += 1
+            if r.get("direction") == "inbound" and not r.get("read"):
+                t["unread_count"] += 1
+            # Pick up city/state from any inbound message if we didn't have one
+            if not t["city"] and r.get("direction") == "inbound":
+                t["city"] = r.get("from_city")
+                t["state"] = r.get("from_state")
+
+        # Name lookup from leads: match on last-10-digits of contact field.
+        if threads:
+            leads_cur = db.leads.find(
+                {"contact": {"$exists": True, "$ne": ""}},
+                {"_id": 0, "id": 1, "name": 1, "contact": 1, "vehicle": 1, "status": 1, "created_at": 1}
+            ).sort("created_at", -1).limit(500)
+            for lead in await leads_cur.to_list(500):
+                digits = ("".join(c for c in (lead.get("contact") or "") if c.isdigit()))[-10:]
+                if digits and digits in threads and not threads[digits]["name"]:
+                    threads[digits]["name"] = lead.get("name")
+                    threads[digits]["lead_id"] = lead.get("id")
+                    if not threads[digits].get("vehicle"):
+                        threads[digits]["vehicle"] = lead.get("vehicle")
+
+        # Sort threads by last_at desc, unread first as a tie-breaker bonus.
+        result = sorted(
+            threads.values(),
+            key=lambda t: (t["unread_count"] > 0, t.get("last_at") or ""),
+            reverse=True,
+        )
+        return result
+
+    @router.get("/sms/threads/{phone_key}/messages")
+    async def sms_thread_messages(phone_key: str, user=Depends(get_user)):
+        """All messages for one customer thread (oldest → newest), matched by
+        last-10-digits so format variations don't fragment the conversation."""
+        key = "".join(c for c in (phone_key or "") if c.isdigit())[-10:]
+        if not key:
+            return []
+        # Pull recent messages then filter — keeps the query simple.
+        cur = db.sms_messages.find({}, {"_id": 0}).sort("created_at", -1).limit(500)
+        rows = await cur.to_list(500)
+        def matches(r):
+            other = r.get("from_number") if r.get("direction") == "inbound" else r.get("to_number")
+            return ("".join(c for c in (other or "") if c.isdigit()))[-10:] == key
+        msgs = [r for r in rows if matches(r)]
+        msgs.sort(key=lambda r: r.get("created_at") or "")
+        return msgs
+
+    @router.post("/sms/threads/{phone_key}/mark-read")
+    async def sms_thread_mark_read(phone_key: str, user=Depends(get_user)):
+        """Mark every inbound message in this customer's thread as read."""
+        key = "".join(c for c in (phone_key or "") if c.isdigit())[-10:]
+        if not key:
+            return {"ok": True, "updated": 0}
+        # Find inbound rows whose from_number's last 10 digits match — use a
+        # broad query then filter in Python (mongo regex on stripped digits
+        # would be ugly).
+        cur = db.sms_messages.find(
+            {"direction": "inbound", "$or": [{"read": {"$exists": False}}, {"read": {"$ne": True}}]},
+            {"_id": 1, "from_number": 1, "id": 1},
+        )
+        to_update = []
+        async for r in cur:
+            digits = ("".join(c for c in (r.get("from_number") or "") if c.isdigit()))[-10:]
+            if digits == key:
+                to_update.append(r["id"])
+        if not to_update:
+            return {"ok": True, "updated": 0}
+        res = await db.sms_messages.update_many(
+            {"id": {"$in": to_update}}, {"$set": {"read": True}}
+        )
+        return {"ok": True, "updated": res.modified_count}
+
     @router.post("/sms/mark-read")
     async def sms_mark_read(body: dict, user=Depends(get_user)):
         ids = body.get("ids") or []
