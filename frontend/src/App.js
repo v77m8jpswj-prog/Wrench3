@@ -31,6 +31,7 @@ import Snippets from "@/pages/Snippets";
 import ShopLanding from "@/pages/ShopLanding";
 import Settings from "@/pages/Settings";
 import SmsInbox from "@/pages/SmsInbox";
+import Inbox from "@/pages/Inbox";
 import Shell from "@/components/Shell";
 import ErrorBoundary from "@/components/ErrorBoundary";
 
@@ -89,6 +90,7 @@ function App() {
                 <Route path="/usage" element={<Protected>{guard("usage", <Suspense fallback={<div className="p-6 text-rust">Loading...</div>}><LlmUsageScreen /></Suspense>)}</Protected>} />
                 <Route path="/watchlist" element={<Protected>{guard("watchlist", <Watchlist />)}</Protected>} />
                 <Route path="/sms" element={<Protected>{guard("sms", <SmsInbox />)}</Protected>} />
+                <Route path="/inbox" element={<Protected>{guard("inbox", <Inbox />)}</Protected>} />
                 <Route path="/settings" element={<Protected>{guard("settings", <Settings />)}</Protected>} />
                 <Route path="*" element={<Navigate to="/" />} />
               </Routes>

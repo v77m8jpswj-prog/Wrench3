@@ -3572,6 +3572,7 @@ from agent_mail import make_agentmail_router  # noqa: E402
 from sms_routes import make_router as make_sms_router  # noqa: E402
 from voice_routes import get_voice_router  # noqa: E402
 from facebook_routes import get_facebook_router  # noqa: E402
+from inbox_routes import make_inbox_router  # noqa: E402
 from twilio_mod import send_sms as _twilio_send_sms  # noqa: E402
 brain_router = make_brain_router(db, get_user)
 api.include_router(brain_router)
@@ -3595,6 +3596,8 @@ voice_router = get_voice_router(db, _twilio_send_sms, _brain_token_dep)
 app.include_router(voice_router)
 fb_router = get_facebook_router(db, get_user)
 app.include_router(fb_router)
+inbox_router = make_inbox_router(db, get_user)
+app.include_router(inbox_router)
 
 
 # ============ Client error reporter (called by frontend ErrorBoundary) ============

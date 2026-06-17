@@ -7,6 +7,7 @@ import { useApp } from "@/AppContext";
 
 const NAV = [
   { to: "/", icon: HomeIcon, label: "HOME", id: "nav-home" },
+  { to: "/inbox", icon: Inbox, label: "INBOX", id: "nav-inbox" },
   { to: "/call", icon: Phone, label: "CALL", id: "nav-call" },
   { to: "/chat", icon: MessageSquare, label: "CHAT", id: "nav-chat" },
   { to: "/jobs", icon: Briefcase, label: "JOBS", id: "nav-jobs" },
@@ -34,6 +35,7 @@ export default function Shell({ user, setUser, children }) {
   const [libCount, setLibCount] = useState(0);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [smsUnread, dispatchSmsUnread] = useReducer((_s, n) => Math.max(0, n|0), 0);
+  const [inboxTotal, dispatchInboxTotal] = useReducer((_s, n) => Math.max(0, n|0), 0);
 
   useEffect(() => {
     const handler = (e) => setStatus(e.detail || { label: "IDLE", color: "#52525B" });
@@ -47,19 +49,29 @@ export default function Shell({ user, setUser, children }) {
     return () => window.removeEventListener("wrench-libcount", h);
   }, []);
 
-  // Poll the SMS unread count every 30s + listen for manual refresh
-  // events (fired by SmsInbox when threads are marked-read).
+  // Poll the SMS unread count + total inbox counts every 30s. Listens for
+  // 'wrench-sms-unread-refresh' so SmsInbox can ping us right after a
+  // thread is opened/marked-read for instant badge update.
   useEffect(() => {
     let alive = true;
-    const fetchUnread = async () => {
+    const fetchCounts = async () => {
       try {
-        const r = await api.get("/sms/unread-count");
-        if (alive && r?.data) dispatchSmsUnread(r.data.unread || 0);
+        const [smsR, inboxR] = await Promise.allSettled([
+          api.get("/sms/unread-count"),
+          api.get("/inbox/counts"),
+        ]);
+        if (!alive) return;
+        if (smsR.status === "fulfilled" && smsR.value?.data) {
+          dispatchSmsUnread(smsR.value.data.unread || 0);
+        }
+        if (inboxR.status === "fulfilled" && inboxR.value?.data) {
+          dispatchInboxTotal(inboxR.value.data.total || 0);
+        }
       } catch {/* not logged in, or backend down — ignore */}
     };
-    fetchUnread();
-    const t = setInterval(fetchUnread, 30000);
-    const onPing = () => fetchUnread();
+    fetchCounts();
+    const t = setInterval(fetchCounts, 30000);
+    const onPing = () => fetchCounts();
     window.addEventListener("wrench-sms-unread-refresh", onPing);
     return () => { alive = false; clearInterval(t); window.removeEventListener("wrench-sms-unread-refresh", onPing); };
   }, [loc.pathname]);
@@ -170,6 +182,7 @@ export default function Shell({ user, setUser, children }) {
               let unread = 0;
               if (n.to === "/" && app?.callArtifacts) unread = app.callArtifacts.filter(a => !a.seen).length;
               if (n.to === "/sms") unread = smsUnread;
+              if (n.to === "/inbox") unread = inboxTotal;
               return (
                 <NavLink
                   key={n.to}
@@ -217,7 +230,9 @@ export default function Shell({ user, setUser, children }) {
               <nav className="flex-1 py-2 overflow-auto">
                 {NAV.map(n => {
                   const Icon = n.icon;
-                  const unread = n.to === "/sms" ? smsUnread : 0;
+                  let unread = 0;
+                  if (n.to === "/sms") unread = smsUnread;
+                  if (n.to === "/inbox") unread = inboxTotal;
                   return (
                     <NavLink
                       key={n.to}
