@@ -1,6 +1,20 @@
 # Data Wrench — PRD (as of Mar 1, 2026)
 
-## Mar 1, 2026 - late afternoon — /sms ↔ /leads bridge SHIPPED
+## Mar 1, 2026 - night — Threaded SMS Inbox + Sidebar Unread Badge SHIPPED
+- Complete rewrite of `SmsInbox.jsx` as an iMessage-style two-pane view: customer-grouped threads on the left, full conversation with selected customer on the right, message bubbles (outbound right/amber, inbound left/grey), pinned composer at bottom of conversation.
+- Mobile: collapses to single pane — list OR drilled-in conversation with a back chevron.
+- Customer name pulled from leads collection by last-10-digits phone match. Falls back to formatted phone if no lead.
+- Search box at top of thread list filters by name/phone/last-body in real time.
+- New backend endpoints in `sms_routes.py`:
+  - `GET /api/sms/threads` — list of customer-grouped threads with name lookup
+  - `GET /api/sms/threads/{phone_key}/messages` — full conversation oldest→newest
+  - `POST /api/sms/threads/{phone_key}/mark-read` — mark all inbound from one customer as read
+  - `GET /api/sms/unread-count` — lightweight count for the nav badge
+- `Shell.jsx`: new red badge on the SMS sidebar nav (desktop + mobile drawer) showing total inbound unread count. Polls every 30s + listens for `wrench-sms-unread-refresh` event for instant updates when a thread is opened.
+- Tested via `testing_agent_v3_fork`: backend 12/12, frontend 13/14 (one MEDIUM fix shipped — deep-link `?phone=` was leaking in URL, now stripped on auto-select).
+- Regression suite: `/app/backend/tests/test_sms_threads.py`.
+
+## Mar 1, 2026 - late afternoon — Brain peer health endpoints + /sms ↔ /leads bridge
 - `/leads?phone=<number>` and `/sms?phone=<number>` are now filtered views; each shows a yellow banner with the active phone + SHOW ALL clear button.
 - Lead cards with a phone contact have a new "SMS THREAD" button → jumps to that customer's SMS history.
 - Every SMS row has a "VIEW LEAD" link → jumps to that customer's lead card.

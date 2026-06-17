@@ -102,7 +102,7 @@ export default function SmsInbox() {
     const want = phoneFromUrl ? digitsOnly(phoneFromUrl) : null;
     if (want) {
       const match = threads.find(t => digitsOnly(t.phone) === want);
-      if (match && match.phone_key !== selectedKey) setSelectedKey(match.phone_key);
+      if (match && match.phone_key !== selectedKey) selectThread(match.phone_key);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [threads, phoneFromUrl]);
