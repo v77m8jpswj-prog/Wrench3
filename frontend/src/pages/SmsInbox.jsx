@@ -3,7 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import api from "@/api";
 import {
   MessageSquare, Send, RefreshCw, ChevronLeft, User, Phone as PhoneIcon,
-  Truck, Search, X,
+  Truck, Search, X, Trash2,
 } from "lucide-react";
 
 /* ============================================================================
@@ -170,6 +170,32 @@ export default function SmsInbox() {
     } finally { setTesting(false); }
   };
 
+  const deleteThread = async () => {
+    if (!selectedThread) return;
+    const label = selectedThread.name || fmtPhone(selectedThread.phone);
+    if (!window.confirm(`Delete the entire conversation with ${label}? All ${selectedThread.total_count} messages will be permanently removed.`)) return;
+    try {
+      await api.delete(`/sms/threads/${encodeURIComponent(selectedKey)}`);
+      setSelectedKey(null);
+      setMessages([]);
+      loadThreads();
+      window.dispatchEvent(new CustomEvent("wrench-sms-unread-refresh"));
+    } catch (e) {
+      setToast(e?.response?.data?.detail || "Delete failed.");
+    }
+  };
+
+  const deleteMessage = async (msgId) => {
+    if (!window.confirm("Delete this one message?")) return;
+    try {
+      await api.delete(`/sms/messages/${msgId}`);
+      loadMessages(selectedKey);
+      loadThreads();
+    } catch (e) {
+      setToast(e?.response?.data?.detail || "Delete failed.");
+    }
+  };
+
   return (
     <div className="h-[calc(100vh-7rem)] flex flex-col text-ink" data-testid="sms-page">
       {/* Header */}
@@ -266,7 +292,7 @@ export default function SmsInbox() {
               <div>
                 <MessageSquare size={32} className="mx-auto mb-3 text-ink-3 opacity-40"/>
                 <div className="uppercase tracking-widest text-[11px]">PICK A CUSTOMER ON THE LEFT</div>
-                <div className="text-[10px] mt-1">Each customer's messages live in their own thread.</div>
+                <div className="text-[10px] mt-1">Each customer&apos;s messages live in their own thread.</div>
               </div>
             </div>
           ) : (
@@ -304,6 +330,14 @@ export default function SmsInbox() {
                 ) : (
                   <span className="text-[10px] uppercase tracking-widest text-ink-3 px-2 py-1 border border-line">NO LEAD</span>
                 )}
+                <button
+                  onClick={deleteThread}
+                  title="Delete this entire conversation"
+                  className="text-[10px] uppercase tracking-widest border border-rust text-rust px-2 py-1 hover:bg-rust hover:text-black flex items-center gap-1"
+                  data-testid="sms-convo-delete-thread"
+                >
+                  <Trash2 size={10}/>DELETE
+                </button>
               </div>
 
               {/* Messages */}
@@ -315,7 +349,14 @@ export default function SmsInbox() {
                 ) : messages.map(m => {
                   const out = m.direction === "outbound";
                   return (
-                    <div key={m.id} className={`flex ${out ? "justify-end" : "justify-start"}`} data-testid={`sms-msg-${m.id}`}>
+                    <div key={m.id} className={`group flex items-center gap-1 ${out ? "justify-end" : "justify-start"}`} data-testid={`sms-msg-${m.id}`}>
+                      {out && (
+                        <button onClick={() => deleteMessage(m.id)} title="Delete this message"
+                                className="opacity-0 group-hover:opacity-100 transition-opacity text-ink-3 hover:text-rust p-1"
+                                data-testid={`sms-msg-delete-${m.id}`}>
+                          <Trash2 size={11}/>
+                        </button>
+                      )}
                       <div className={`max-w-[78%] px-3 py-2 ${out ? "bg-amber2/15 border border-amber2/40 text-ink" : "bg-bg-2 border border-line text-ink"}`}>
                         <div className="text-sm whitespace-pre-wrap break-words">{m.body}</div>
                         <div className={`text-[9px] uppercase tracking-widest mt-1 ${out ? "text-amber2/70" : "text-ink-3"}`}>
@@ -323,6 +364,13 @@ export default function SmsInbox() {
                           {out && m.ok === false && <span className="text-rust ml-1">· FAILED</span>}
                         </div>
                       </div>
+                      {!out && (
+                        <button onClick={() => deleteMessage(m.id)} title="Delete this message"
+                                className="opacity-0 group-hover:opacity-100 transition-opacity text-ink-3 hover:text-rust p-1"
+                                data-testid={`sms-msg-delete-${m.id}`}>
+                          <Trash2 size={11}/>
+                        </button>
+                      )}
                     </div>
                   );
                 })}

@@ -443,6 +443,26 @@ def make_email_router(db, get_user):
                             acct["access_token"], json={"destinationId": dest})
         return {"ok": True, "moved_to": dest, "new_id": data.get("id")}
 
+    @router.delete("/email/messages/{message_id}")
+    async def delete_email(message_id: str, user=Depends(get_user)):
+        """Move the email to Deleted Items via Microsoft Graph. Doc uses this
+        to clear spam/yelp/junk. Not a permanent purge — recoverable from the
+        Outlook Deleted Items folder for 30 days."""
+        acct = await _get_account(user)
+        try:
+            await _graph("DELETE", f"/me/messages/{message_id}", acct["access_token"])
+        except Exception as e:
+            # Common failure: token expired/revoked, or message already deleted.
+            # Reraise with a clearer message so the UI can surface it.
+            raise HTTPException(502, f"outlook delete failed: {e}")
+        # Also remove the cached row in our DB if we have one, so it disappears
+        # from /email and the unified inbox immediately.
+        try:
+            await db.emails.delete_one({"id": message_id})
+        except Exception:
+            pass
+        return {"ok": True, "deleted": 1}
+
     # ----- Compose + send -----
     @router.post("/email/send")
     async def send(body: SendReq, user=Depends(get_user)):

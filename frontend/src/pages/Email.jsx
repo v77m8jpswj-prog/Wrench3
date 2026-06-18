@@ -113,6 +113,17 @@ export default function Email() {
     } catch (e) { setErr(e?.response?.data?.detail || "Move failed"); }
   };
 
+  const deleteEmail = async (m) => {
+    const label = m.subject || "(no subject)";
+    if (!window.confirm(`Delete "${label}"? Moves to Outlook Deleted Items (recoverable for 30 days).`)) return;
+    try {
+      await api.delete(`/email/messages/${m.id}`);
+      setMsgs(prev => prev.filter(x => x.id !== m.id));
+      if (selected?.id === m.id) setSelected(null);
+      setFlash("Deleted"); setTimeout(()=>setFlash(""), 1500);
+    } catch (e) { setErr(e?.response?.data?.detail || "Delete failed"); }
+  };
+
   const [ingesting, setIngesting] = useState(null); // message id being ingested
   const ingest = async (m) => {
     if (ingesting) return;
@@ -406,6 +417,7 @@ export default function Email() {
                     <BrainCircuit size={12}/>AUTO
                   </button>
                   <button onClick={()=>archive(selected)} className="btn-ghost text-xs flex items-center gap-1 px-3 py-1.5" data-testid="email-archive-btn"><Archive size={12}/>ARCHIVE</button>
+                  <button onClick={()=>deleteEmail(selected)} className="btn-ghost text-xs flex items-center gap-1 px-3 py-1.5 border-rust text-rust hover:bg-rust hover:text-black" data-testid="email-delete-btn" title="Move to Outlook Deleted Items"><Trash2 size={12}/>DELETE</button>
                 </div>
               </div>
               <div className="flex-1 overflow-auto p-3 md:p-4">

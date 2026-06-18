@@ -2129,6 +2129,17 @@ ul {{ padding-left: 22px; }}
             raise HTTPException(404, "Lead not found.")
         return {"ok": True, "status": body.status}
 
+    @router.delete("/leads/{lead_id}")
+    async def delete_lead(lead_id: str, user=Depends(get_user)):
+        """Hard-delete a single lead. Doc uses this to clear test rows, spam,
+        or wrong-number leads. Scoped to the user's shop_id so you can't nuke
+        another shop's data."""
+        sid = user.get("shop_id") or DEFAULT_SHOP_ID
+        r = await db.leads.delete_one({"id": lead_id, "shop_id": sid})
+        if r.deleted_count == 0:
+            raise HTTPException(404, "Lead not found.")
+        return {"ok": True, "deleted": 1}
+
     @router.post("/leads/{lead_id}/text")
     async def text_lead(lead_id: str, body: Dict[str, Any], user=Depends(get_user)):
         """Doc taps TEXT on a lead -> SMS the customer directly via Twilio.

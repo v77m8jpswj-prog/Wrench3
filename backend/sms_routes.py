@@ -430,6 +430,41 @@ def make_router(db, get_user):
         )
         return {"ok": True, "updated": res.modified_count}
 
+    @router.delete("/sms/messages/{message_id}")
+    async def sms_delete_message(message_id: str, user=Depends(get_user)):
+        """Hard-delete a single SMS row. Used for clearing test sends / spam."""
+        r = await db.sms_messages.delete_one({"id": message_id})
+        if r.deleted_count == 0:
+            raise HTTPException(404, "SMS not found.")
+        return {"ok": True, "deleted": 1}
+
+    @router.delete("/sms/threads/{phone_key}")
+    async def sms_delete_thread(phone_key: str, user=Depends(get_user)):
+        """Wipe an entire customer SMS thread (all inbound + outbound between
+        you and that number). Handles legacy `phone`-only rows too. Doc uses
+        this to clear spammers, telemarketers, dead leads."""
+        key = "".join(c for c in (phone_key or "") if c.isdigit())[-10:]
+        if not key:
+            return {"ok": True, "deleted": 0}
+        cur = db.sms_messages.find(
+            {},
+            {"id": 1, "from_number": 1, "to_number": 1, "phone": 1, "direction": 1},
+        )
+        to_delete = []
+        async for r in cur:
+            direction = r.get("direction") or "inbound"
+            if direction == "outbound":
+                other = r.get("to_number") or r.get("phone") or ""
+            else:
+                other = r.get("from_number") or r.get("phone") or ""
+            digits = ("".join(c for c in other if c.isdigit()))[-10:]
+            if digits == key:
+                to_delete.append(r["id"])
+        if not to_delete:
+            return {"ok": True, "deleted": 0}
+        res = await db.sms_messages.delete_many({"id": {"$in": to_delete}})
+        return {"ok": True, "deleted": res.deleted_count}
+
     @router.post("/sms/mark-read")
     async def sms_mark_read(body: dict, user=Depends(get_user)):
         ids = body.get("ids") or []

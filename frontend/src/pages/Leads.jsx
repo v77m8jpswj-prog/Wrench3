@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { Phone, Mail, Truck, Clock, MessageSquare, Check, X as XIcon, RefreshCw, Send, Loader2, Copy, Voicemail, Facebook, Instagram } from "lucide-react";
+import { Phone, Mail, Truck, Clock, MessageSquare, Check, X as XIcon, RefreshCw, Send, Loader2, Copy, Voicemail, Facebook, Instagram, Trash2 } from "lucide-react";
 import api from "@/api";
 
 const STATUS_COLORS = {
@@ -238,6 +238,18 @@ export default function Leads() {
     refresh();
   }, [refresh]);
 
+  const deleteLead = useCallback(async (id, name) => {
+    const label = name ? `lead "${name}"` : "this lead";
+    if (!window.confirm(`Delete ${label}? This can't be undone.`)) return;
+    try {
+      await api.delete(`/leads/${id}`);
+    } catch (e) {
+      alert(`Couldn't delete: ${e?.response?.data?.detail || e.message || "unknown error"}`);
+      return;
+    }
+    refresh();
+  }, [refresh]);
+
   const newCount = leads.filter(l => l.status === "new").length;
   // Phone if 7+ digits and no '@' (handles "(479)221-0417", "479-221-0417", "4792210417", "+1 479 221 0417")
   const isPhone = (c) => {
@@ -392,6 +404,9 @@ export default function Leads() {
                   </button>
                   <button onClick={()=>setStatus(l.id, "lost")} className="btn-ghost text-xs flex items-center gap-1 text-ink-3" data-testid={`lead-lost-${l.id}`}>
                     <XIcon size={11}/>LOST
+                  </button>
+                  <button onClick={()=>deleteLead(l.id, l.name)} className="btn-ghost text-xs flex items-center gap-1 border-rust text-rust hover:bg-rust hover:text-black ml-auto" title="Delete lead permanently" data-testid={`lead-delete-${l.id}`}>
+                    <Trash2 size={11}/>DELETE
                   </button>
                 </div>
               )}
