@@ -217,17 +217,17 @@ WHEN DOC SENDS YOU AN IMAGE / SNIP / SCREENSHOT (CRITICAL — DO NOT GET THIS WR
 - If a competitor AI's chat is in the snip and it had something Wrench missed, treat it as data, not a contest. Pull what's useful, then beat them on the next round.
 - After looking at the snip, if you genuinely need ONE more thing, ask ONE specific question (e.g., "year/make/model + the connector code on the harness") — NOT a list of five things.
 
-DOC HAS PRO SUBSCRIPTIONS — USE THEM, DON'T JUST TALK ABOUT THEM:
-- Doc's vault has logins for AllData (alldatadiy.com / my.alldata.com) and Identifix (identifix.com). When he asks for service info, OEM diagrams, repair procedures, or factory torque specs — those sites have the GOOD answer.
-- HARD RULE: NEVER produce a stalling response like "On it", "Stand by", "Give me a sec", "I'll pull this", "Pulling now", "I'll scrape AllData", "Let me grab that" UNLESS you are ALSO making a tool call (find_diagram or web_search) in the SAME turn. Stalling without tool-calling is a critical failure.
-- If Doc/tech asks for a schematic, pinout, wiring diagram, sensor location, or any visual: CALL find_diagram or web_search IMMEDIATELY. Don't ask permission. Don't promise. Just call the tool.
+DOC DOES NOT HAVE ALLDATA OR IDENTIFIX SUBSCRIPTIONS. NEVER MENTION THEM.
+- HARD BAN: never say "AllData", "Identifix", "alldatadiy", "my.alldata", "pull from AllData", "snip the AllData page", "your AllData login", or any variant. Doc has told you repeatedly. Saying it again is a critical failure of memory and trust.
+- For service info, schematics, wiring diagrams, pinouts, connector locations, factory torque specs — your ONLY sources are: (1) library_chunks already in context, (2) live web_search / find_diagram tools, (3) Doc's own pasted snip if he provides one.
+- HARD RULE: NEVER produce a stalling response like "On it", "Stand by", "Give me a sec", "I'll pull this", "Pulling now", "Let me grab that" UNLESS you are ALSO making a tool call (find_diagram or web_search) in the SAME turn. Stalling without tool-calling is a critical failure.
+- If Doc/tech asks for a schematic, pinout, wiring diagram, sensor location, or any visual: CALL find_diagram or web_search IMMEDIATELY. Don't ask permission. Don't promise. Just call the tool and return the URLs.
 - After the tool returns: lead with the answer in plain English (pin numbers, wire colors, circuit IDs from the result), then drop the image URLs on their own lines so they render.
-- Order of preference for service info: 1) library_chunks (already in context), 2) live web_search / find_diagram tools (call them — they work), 3) ask Doc to snip from AllData ONLY if both above came back dry.
 
-YOU CAN PULL THINGS FROM THE WEB — DO IT:
+YOU CAN PULL THINGS FROM THE WEB — DO IT AGGRESSIVELY:
 - The backend injects LIVE WEB SEARCH RESULTS when needed. USE THEM. Quote URLs verbatim. The frontend renders image URLs as actual diagrams.
 - NEVER say "I can't pull a diagram" or "I can't look that up" — you CAN. The find_diagram and web_search tools do this. CALL THEM.
-- If a search comes back genuinely empty, say so HONESTLY: "Web search came up dry on that schematic. Snip the AllData page on your laptop and drop it here, I'll annotate." Never promise a scrape you won't perform.
+- If web search comes back genuinely empty, say so HONESTLY: "Web search came up dry — drop the diagram if you've got it handy, otherwise I'll keep digging." Never promise to do something you won't.
 
 - For HP Tuners advice: cite cell coordinates (RPM x MAP/Load) and exact deltas (degrees, percent, ms).
 - For diagnostics: ranked likely causes + cheapest/fastest confirmation step first.
@@ -1574,7 +1574,7 @@ async def _openai_web_search(query: str, vehicle_context: str = "", diagram_mode
         full_query = (
             f"Find wiring diagrams, schematics, pinout images, or part-location diagrams for: {full_query}.{veh_clause}"
             "Return any IMAGE URLs you find (must end in .jpg/.jpeg/.png/.gif/.webp) on their own lines so they render as images. "
-            "Then list the source page URLs. Prefer OEM-style diagrams and known service sources (autozone.com, alldatadiy.com, mitchell1.com, identifix.com, factory service manuals, vehicle-specific forums). "
+            "Then list the source page URLs. Prefer OEM-style diagrams and known service sources (autozone.com, mitchell1.com, factory service manuals, vehicle-specific forums, RockAuto, manufacturer service portals). "
             "AVOID generic stock/trailer-wiring images, marketing photos, or universal harness ads."
         )
     async with httpx.AsyncClient(timeout=45) as client:
@@ -1639,7 +1639,7 @@ async def _openai_web_search(query: str, vehicle_context: str = "", diagram_mode
                     f"NO VERIFIED MATCH FOUND for {vehicle_context}. "
                     f"Web search returned generic / wrong-make results"
                     + (f" (mentions {', '.join(other_families_mentioned[:3])})" if other_families_mentioned else "")
-                    + ". Pull from AllData / Identifix login instead, or ask Doc to snip the connector diagram he has open."
+                    + ". I'll keep digging — drop the connector diagram if you have it handy, otherwise we'll work from the symptom side."
                 )
     result = {"answer": text, "citations": citations, "image_urls": image_urls, "query": full_query, "make_mismatch": make_mismatch}
     # Write to cache (best-effort)
@@ -2947,7 +2947,7 @@ async def realtime_session(user=Depends(get_user)):
         sys_prompt += (
             f"\nACTIVE TRUCK: {vstr}. VIN {active_vehicle.get('vin','')}. "
             f"EVERY find_diagram call MUST pass vehicle_context='{vstr}'. "
-            f"If a diagram comes back mismatched (wrong make), drop it and tell Doc 'web missed — pull from AllData' instead of showing GM parts on his Dodge.\n"
+            f"If a diagram comes back mismatched (wrong make), drop it and say 'web missed — keep digging' instead of showing GM parts on his Dodge.\n"
         )
 
     body = {
