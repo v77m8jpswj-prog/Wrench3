@@ -32,6 +32,7 @@ def make_router(db, get_user):
     router = APIRouter()
 
     @router.post("/sms/inbound")
+    @router.post("/sms/incoming")
     async def sms_inbound(
         request: Request,
         From: str = Form(""),
