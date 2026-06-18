@@ -1,0 +1,50 @@
+{
+  "summary": "First full backend validation pass on Data Wrench preview (https://wrench-tools-1.preview.emergentagent.com). Wrote /app/backend/tests/test_wrench_preview.py covering auth, chat (Claude via emergentintegrations), vehicles CRUD, memory, brain peer API (master token + 401 paths), agent-mail inbox (token + rejects), agent-mail peers (bud peer), SMS /inbound + /incoming alias, voice /incoming TwiML + /status, OpenAI embeddings via /brain/search, public shop landing, and public lead intake. 23/25 hard-passes; 2 xfailed flagging real preview-data gaps. No blocker bugs in the code — every critical pipeline (auth, chat, brain, agent-mail, SMS, voice, embeddings) is green.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "/api/public/shop/drunderhood-fortsmith",
+        "issue": "Returns 404 — shop_profile doc is missing in preview Mongo. Startup migration at server.py:3767 calls db.shop_profiles.update_one(..., upsert=False) so it only updates phone/address if the doc already exists; it never creates the base profile. Preview DB has no shop_profile -> landing page broken for marketing crawlers + SEO HTML page also 404s."
+      },
+      {
+        "endpoint": "/api/memory (locked rules seed)",
+        "issue": "Review request said GET /api/memory/facts returns 6 locked rules seeded at startup. (a) No such endpoint exists — only GET /api/memory. (b) No code in server.py seeds locked memory_facts at startup. GET /api/memory for doc@drunderhood.com returns []. Either the seed step was lost or the spec was aspirational."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_wrench_preview.py",
+    "/app/test_reports/pytest/wrench_preview.xml"
+  ],
+  "action_items": [
+    "Seed shop_profiles doc for 'drunderhood-fortsmith' in preview Mongo (or change startup migration upsert=True with a full default profile payload). Without this the /api/public/shop/{shop_id} and /public/shop-html/{shop_id} endpoints stay 404 in preview.",
+    "Decide locked-rules behavior: either (a) add a startup seed that inserts Doc's 6 standard locked rules into memory_facts with is_locked=True for the owner user, or (b) update the spec — there is currently no /api/memory/facts route and no seeding code. If keeping current shape, fix the review-request endpoint reference to /api/memory.",
+    "Existing /app/backend/tests/backend_test.py hardcodes the wrong password ('Wrench123!') and a stale default backend URL — clean up or delete (superseded by test_wrench_preview.py)."
+  ],
+  "critical_code_review_comments": [
+    "server.py is 3789 lines — well over the 700-line guideline. Worth splitting auth, chat, vehicles, memory, settings, public routes into separate modules (brain.py, agent_mail.py, sms_routes.py, voice_routes.py are already extracted — keep going).",
+    "Startup migration at server.py:3767 uses upsert=False on shop_profiles — silently no-ops if the doc doesn't exist. Either make it upsert=True with a sensible default doc, or log a warning so missing-shop in preview is visible.",
+    "Public lead intake schema (brain.py:1948) uses 'contact' + 'what_they_need' but the implicit contract from the landing form is 'phone' + 'message'. Either alias these in the model or update the landing page. The review request reflected the form-style field names, not the API.",
+    "Vehicle year is Optional[str] (server.py:84) — front-end devs sending int will get 422. Worth coercing in the Pydantic model (use Union[int,str] with validator).",
+    "/api/memory always returns ALL of a user's facts (limit 500) with no ?locked=true filter — when locked rules grow, the chat system prompt builder still grabs them all."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_wrench_preview.py (new)"
+  ],
+  "success_rate": {
+    "backend": "92% (23/25 hard pass, 2 xfail = preview seed gaps, 0 fail)",
+    "frontend": "not tested (backend-only request)"
+  },
+  "test_credentials": "Owner: doc@drunderhood.com / wrench123 (signs in successfully). QA users created on the fly via /api/auth/signup as qa-test-<rand>@drunderhood.com / wrench123.",
+  "seed_data_creation": "Each test run creates: one fresh QA signup user, one TEST_ vehicle (random plate/VIN), one agent-mail inbox letter, two SMS messages (one per alias), one public lead. No cleanup added — preview env is intended to accumulate test traffic.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Tests live at /app/backend/tests/test_wrench_preview.py. Run with: REACT_APP_BACKEND_URL=https://wrench-tools-1.preview.emergentagent.com python -m pytest backend/tests/test_wrench_preview.py -v. Critical pipelines (auth/chat/brain/agent-mail/SMS/voice/embeddings) are all green. The 2 xfails are NOT bugs in the test — they're real gaps: (1) shop_profile not seeded in preview Mongo; (2) locked-rules startup seed code does not exist anywhere in server.py. If main agent adds the seed, flip the xfail markers off and rerun.",
+  "rca_of_the_issue": "Public shop 404: server.py:3767 startup migration intentionally uses upsert=False (likely to avoid clobbering prod data on boot). In preview, the shop_profiles collection is empty for drunderhood-fortsmith so the .update_one() finds nothing and silently no-ops. Fix: separate the 'create-if-missing' (upsert=True with a sensible default doc) from the 'fix-stale-phone-only' update."
+}
