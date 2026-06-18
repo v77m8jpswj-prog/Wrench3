@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import api from "@/api";
 import {
   Inbox as InboxIcon, MessageSquare, Voicemail, Mail, Facebook, Instagram,
-  Globe, RefreshCw, Filter, Clock, Truck,
+  Globe, RefreshCw, Filter, Clock, Truck, Trash2,
 } from "lucide-react";
 
 /* ============================================================================
@@ -70,6 +70,28 @@ export default function Inbox() {
   const refresh = () => {
     // Manual refresh button — bumps a state to retrigger the polling effect
     setFilter(f => f);  // no-op state set just to force re-run
+  };
+
+  const deleteItem = async (e, item) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!window.confirm(`Delete this ${item.channel_label.toLowerCase()} from ${item.who}? This can't be undone.`)) return;
+    try {
+      // Route the delete to the right backend endpoint based on the channel.
+      if (item.channel === "sms") {
+        const phoneKey = (item.phone || "").replace(/\D/g, "").slice(-10);
+        await api.delete(`/sms/threads/${encodeURIComponent(phoneKey)}`);
+      } else if (item.channel === "email") {
+        await api.delete(`/email/messages/${item.email_id}`);
+      } else {
+        // FB, IG, voicemail, form — all backed by /leads rows
+        await api.delete(`/leads/${item.lead_id}`);
+      }
+      setItems(items.filter(it => it.id !== item.id));
+      refresh();
+    } catch (err) {
+      alert(`Couldn't delete: ${err?.response?.data?.detail || err.message || "unknown error"}`);
+    }
   };
 
   const visibleItems = useMemo(() => {
@@ -158,40 +180,55 @@ export default function Inbox() {
             const meta = CHANNEL_META[it.channel] || CHANNEL_META.form;
             const Icon = meta.icon;
             return (
-              <Link
+              <div
                 key={it.id}
-                to={it.deep_link || "/leads"}
                 data-testid={`inbox-item-${it.id}`}
-                className={`flex items-start gap-3 px-3 md:px-4 py-3 border-b border-line last:border-b-0 hover:bg-bg-3/60 transition-colors ${it.unread ? "bg-bg-3/30" : ""}`}
+                className={`group flex items-stretch border-b border-line last:border-b-0 hover:bg-bg-3/60 transition-colors ${it.unread ? "bg-bg-3/30" : ""}`}
               >
-                {/* Channel badge */}
-                <div className={`flex-shrink-0 w-10 h-10 flex items-center justify-center border ${meta.border} ${meta.bg} ${meta.color}`} title={meta.label}>
-                  <Icon size={16}/>
-                </div>
+                <Link
+                  to={it.deep_link || "/leads"}
+                  className="flex items-start gap-3 px-3 md:px-4 py-3 flex-1 min-w-0"
+                  data-testid={`inbox-item-link-${it.id}`}
+                >
+                  {/* Channel badge */}
+                  <div className={`flex-shrink-0 w-10 h-10 flex items-center justify-center border ${meta.border} ${meta.bg} ${meta.color}`} title={meta.label}>
+                    <Icon size={16}/>
+                  </div>
 
-                {/* Body */}
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-baseline justify-between gap-2">
-                    <div className={`text-sm truncate ${it.unread ? "font-bold text-white" : "text-ink"}`}>
-                      {it.who}
-                      {it.subject && <span className="ml-2 text-ink-3 font-normal">— {it.subject}</span>}
+                  {/* Body */}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-baseline justify-between gap-2">
+                      <div className={`text-sm truncate ${it.unread ? "font-bold text-white" : "text-ink"}`}>
+                        {it.who}
+                        {it.subject && <span className="ml-2 text-ink-3 font-normal">— {it.subject}</span>}
+                      </div>
+                      <div className="text-[10px] text-ink-3 flex-shrink-0 flex items-center gap-1 uppercase tracking-widest">
+                        <Clock size={10}/>{timeAgo(it.ts)}
+                      </div>
                     </div>
-                    <div className="text-[10px] text-ink-3 flex-shrink-0 flex items-center gap-1 uppercase tracking-widest">
-                      <Clock size={10}/>{timeAgo(it.ts)}
+                    <div className="flex items-center gap-2 text-[10px] uppercase tracking-widest text-ink-3 mt-0.5">
+                      <span className={`${meta.color}`}>{meta.label}</span>
+                      {it.phone && <span className="font-mono">{it.phone}</span>}
+                      {it.vehicle && <span className="flex items-center gap-0.5 text-amber2"><Truck size={9}/>{it.vehicle}</span>}
+                      {it.unread && <span className="text-rust">● NEW</span>}
+                    </div>
+                    <div className="text-xs text-ink-2 truncate mt-1">
+                      {it.direction === "outbound" && <span className="text-amber2">↗ </span>}
+                      {it.preview || "(no preview)"}
                     </div>
                   </div>
-                  <div className="flex items-center gap-2 text-[10px] uppercase tracking-widest text-ink-3 mt-0.5">
-                    <span className={`${meta.color}`}>{meta.label}</span>
-                    {it.phone && <span className="font-mono">{it.phone}</span>}
-                    {it.vehicle && <span className="flex items-center gap-0.5 text-amber2"><Truck size={9}/>{it.vehicle}</span>}
-                    {it.unread && <span className="text-rust">● NEW</span>}
-                  </div>
-                  <div className="text-xs text-ink-2 truncate mt-1">
-                    {it.direction === "outbound" && <span className="text-amber2">↗ </span>}
-                    {it.preview || "(no preview)"}
-                  </div>
-                </div>
-              </Link>
+                </Link>
+
+                {/* Per-row delete */}
+                <button
+                  onClick={(e) => deleteItem(e, it)}
+                  title="Delete this item"
+                  data-testid={`inbox-item-delete-${it.id}`}
+                  className="opacity-0 group-hover:opacity-100 transition-opacity px-3 text-ink-3 hover:text-rust hover:bg-rust/10 border-l border-line flex items-center justify-center"
+                >
+                  <Trash2 size={14}/>
+                </button>
+              </div>
             );
           })}
         </div>

@@ -211,6 +211,7 @@ export default function Leads() {
   const [textingId, setTextingId] = useState(null);
   const [emailingId, setEmailingId] = useState(null);
   const [search, setSearch] = useSearchParams();
+  const [showArchived, setShowArchived] = useState(false);
   // /leads?phone=+14794345852 narrows to one customer (clicked from SMS Inbox)
   const phoneFilter = (search.get("phone") || "").trim();
 
@@ -261,9 +262,15 @@ export default function Leads() {
   // Last-10 digits match — handles "+14794345852" vs "4794345852" vs "(479) 434-5852"
   const digitsOnly = (s) => (s || "").replace(/\D/g, "").slice(-10);
   const filterDigits = phoneFilter ? digitsOnly(phoneFilter) : "";
-  const visibleLeads = useMemo(() => (
-    filterDigits ? leads.filter(l => isPhone(l.contact) && digitsOnly(l.contact) === filterDigits) : leads
-  ), [leads, filterDigits]);
+  const visibleLeads = useMemo(() => {
+    let v = leads;
+    // Hide WON/LOST/DISMISSED by default — Doc wants them archived, not deleted,
+    // so they're still searchable when he flips the toggle.
+    if (!showArchived) v = v.filter(l => !["won", "lost", "dismissed"].includes((l.status || "").toLowerCase()));
+    if (filterDigits) v = v.filter(l => isPhone(l.contact) && digitsOnly(l.contact) === filterDigits);
+    return v;
+  }, [leads, filterDigits, showArchived]);
+  const archivedCount = leads.filter(l => ["won","lost","dismissed"].includes((l.status||"").toLowerCase())).length;
   const clearPhoneFilter = () => { const ns = new URLSearchParams(search); ns.delete("phone"); setSearch(ns, { replace: true }); };
 
   return (
@@ -273,7 +280,18 @@ export default function Leads() {
           <h1 className="heading text-3xl md:text-4xl">LEADS <span className="text-rust">// {newCount} NEW</span></h1>
           <p className="text-ink-2 text-xs mt-1 uppercase tracking-widest">PEOPLE FROM YOUR LANDING PAGE WHO ASKED FOR A QUOTE</p>
         </div>
-        <button onClick={refresh} disabled={busy} className="btn-ghost flex items-center gap-1 text-xs"><RefreshCw size={12} className={busy?"animate-spin":""}/>REFRESH</button>
+        <div className="flex items-center gap-2">
+          {archivedCount > 0 && (
+            <button
+              onClick={()=>setShowArchived(v=>!v)}
+              data-testid="leads-toggle-archived"
+              className={`text-[11px] uppercase tracking-widest px-2 py-1 border ${showArchived ? "border-amber2 text-amber2 bg-amber2/10" : "border-line text-ink-2 hover:text-white"}`}
+            >
+              {showArchived ? "HIDE" : "SHOW"} ARCHIVED ({archivedCount})
+            </button>
+          )}
+          <button onClick={refresh} disabled={busy} className="btn-ghost flex items-center gap-1 text-xs"><RefreshCw size={12} className={busy?"animate-spin":""}/>REFRESH</button>
+        </div>
       </div>
 
       {phoneFilter && (
