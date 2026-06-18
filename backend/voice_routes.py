@@ -39,10 +39,10 @@ def _twiml(xml: str) -> Response:
 
 GREETING_XML = """<?xml version="1.0" encoding="UTF-8"?>
 <Response>
+  <Dial timeout="20" callerId="{caller_id}" answerOnBridge="true">{shop_landline}</Dial>
   <Say voice="Polly.Matthew-Neural">
     You've reached Dr. Underhood Automotive in Fort Smith. We can't take your call right now.
     Leave your name, your vehicle, and what's going on after the beep, and Doc will text you back.
-    For emergencies, call the shop directly at 4-7-9, 4-3-4, 5-8-5-2.
   </Say>
   <Record action="{action_url}"
           transcribe="true"
@@ -157,7 +157,16 @@ def get_voice_router(db, send_sms, get_brain_token):
         # request.base_url would point at the internal kubernetes host on prod.
         action_url = f"{public_base}/api/voice/voicemail/done"
         transcribe_url = f"{public_base}/api/voice/voicemail/transcription"
-        xml = GREETING_XML.format(action_url=action_url, transcribe_url=transcribe_url)
+        # Dial the shop landline first (Option B). If no answer in 20s, TwiML
+        # falls through to the greeting + record block automatically.
+        shop_landline = os.environ.get("SHOP_LANDLINE", "+14794345852")
+        twilio_number = os.environ.get("TWILIO_FROM_NUMBER", "+18557711264")
+        xml = GREETING_XML.format(
+            action_url=action_url,
+            transcribe_url=transcribe_url,
+            shop_landline=shop_landline,
+            caller_id=twilio_number,
+        )
         return _twiml(xml)
 
     # ----------------------------------------------------------------
