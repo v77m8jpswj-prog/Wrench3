@@ -1,0 +1,451 @@
+"""
+Data Wrench — Agent-to-agent mail (Wrench ↔ OG).
+
+End-to-end letter pipe between Wrench (Data Wrench / Foreman) and OG
+(Dr. Underhood Live Assist). No copy-paste, no deploy gates.
+
+Endpoints (mounted at /api/agent-mail/*):
+  POST /inbox        Receive a letter (auth: X-Agent-Token == AGENT_MAIL_INBOUND_TOKEN)
+  POST /send         Send a letter to a configured peer (auth: user JWT)
+  POST /configure    Configure peer URL + token (auth: user JWT)
+  GET  /peers        List configured peers (auth: user JWT)
+  GET  /letters      List received letters (auth: user JWT)
+  GET  /letters/{id} Read one received letter (auth: user JWT)
+
+Mongo collections:
+  agent_mail_inbox   Received letters from peers
+  agent_mail_peers   Configured peer agents (URL + outbound token + name)
+"""
+import os
+import uuid
+import logging
+from datetime import datetime, timezone
+from typing import Optional, Dict, Any
+
+import httpx
+from fastapi import APIRouter, HTTPException, Depends, Header, Request
+from pydantic import BaseModel, Field
+
+log = logging.getLogger("datawrench.agentmail")
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+class InboundLetter(BaseModel):
+    from_agent: str
+    subject: str
+    body: str
+    body_format: Optional[str] = "markdown"
+    round: Optional[int] = None
+    in_reply_to: Optional[str] = None  # peer's letter id if threading
+
+
+class SendReq(BaseModel):
+    peer: str = Field(..., description="Peer name (e.g. 'og'). Must be configured first.")
+    subject: str
+    body: str
+    body_format: Optional[str] = "markdown"
+    round: Optional[int] = None
+    in_reply_to: Optional[str] = None
+
+
+class ConfigureReq(BaseModel):
+    peer: str
+    name: str
+    inbox_url: str  # peer's POST inbox endpoint
+    outbound_token: str  # token peer requires when WE post to them
+    inbound_token: Optional[str] = None  # token WE require when they post to us
+
+
+class CredentialSendReq(BaseModel):
+    """Send a credential to a peer agent WITH automatic pre-flight verification.
+    The pipe will REFUSE to deliver if the credential doesn't actually work
+    against the target endpoint. Prevents the 'I sent a wrong/stale token and
+    cost the peer days of debugging' failure mode.
+    """
+    peer: str = Field(..., description="Peer name (e.g. 'bud')")
+    subject: str
+    body_intro: str = Field("", description="Intro text rendered before the credential block")
+    body_outro: str = Field("", description="Outro text rendered after the credential block")
+    credential_label: str = Field(..., description="What this credential is, e.g. 'Brain bearer token'")
+    credential_value: str = Field(..., description="The actual secret/token/key string")
+    credential_header: str = Field("Authorization", description="HTTP header name to test with")
+    credential_header_format: str = Field("Bearer {value}", description="Header value template. Use {value} as the placeholder.")
+    verify_url: str = Field(..., description="Full URL to GET against to confirm the credential works (must 200)")
+    verify_expect_status: int = Field(200, description="Expected HTTP status from verify call")
+    round: Optional[int] = None
+    in_reply_to: Optional[str] = None
+
+
+def make_agentmail_router(db, get_user):
+    router = APIRouter()
+
+    # ----- INBOUND: peer agents POST letters here -----
+    @router.post("/agent-mail/inbox")
+    async def receive_letter(
+        body: InboundLetter,
+        x_agent_token: str = Header(default=""),
+    ):
+        expected = os.environ.get("AGENT_MAIL_INBOUND_TOKEN", "").strip()
+        if not expected:
+            raise HTTPException(503, "Agent mail inbox not configured on this side")
+        if not x_agent_token or x_agent_token.strip() != expected:
+            raise HTTPException(401, "Invalid or missing X-Agent-Token")
+
+        letter = {
+            "id": str(uuid.uuid4()),
+            "from_agent": body.from_agent.strip()[:80] or "unknown",
+            "subject": body.subject.strip()[:300] or "(no subject)",
+            "body": body.body[:200000],  # cap at 200KB
+            "body_format": (body.body_format or "markdown").lower(),
+            "round": body.round,
+            "in_reply_to": body.in_reply_to,
+            "received_at": _now().isoformat(),
+            "read": False,
+        }
+        await db.agent_mail_inbox.insert_one(letter)
+        letter.pop("_id", None)
+        log.info(f"agent-mail received from={letter['from_agent']} subj={letter['subject'][:60]}")
+        return {"ok": True, "letter_id": letter["id"], "received_at": letter["received_at"]}
+
+    # ----- OUTBOUND: Doc or Wrench send to a configured peer -----
+    @router.post("/agent-mail/send")
+    async def send_letter(body: SendReq, user=Depends(get_user)):
+        peer = await db.agent_mail_peers.find_one({"peer": body.peer.lower().strip()})
+        if not peer:
+            raise HTTPException(404, f"Peer '{body.peer}' not configured. Use /agent-mail/configure first.")
+        payload = {
+            "from_agent": "nine",
+            "subject": body.subject,
+            "body": body.body,
+            "body_format": body.body_format or "markdown",
+        }
+        if body.round is not None:
+            payload["round"] = body.round
+        if body.in_reply_to:
+            payload["in_reply_to"] = body.in_reply_to
+
+        try:
+            async with httpx.AsyncClient(timeout=30) as c:
+                r = await c.post(
+                    peer["inbox_url"],
+                    headers={"X-Agent-Token": peer["outbound_token"],
+                             "Content-Type": "application/json"},
+                    json=payload,
+                )
+            if r.status_code >= 400:
+                log.warning(f"agent-mail send failed: {r.status_code} {r.text[:200]}")
+                raise HTTPException(502, f"Peer returned {r.status_code}: {r.text[:200]}")
+            data = r.json() if r.text else {}
+            # Persist a copy in our outbox for audit
+            await db.agent_mail_outbox.insert_one({
+                "id": str(uuid.uuid4()),
+                "to_peer": peer["peer"],
+                "subject": payload["subject"],
+                "body": payload["body"],
+                "round": payload.get("round"),
+                "sent_at": _now().isoformat(),
+                "peer_ack": data,
+                "user_id": user["id"],
+            })
+            return {"ok": True, "peer_ack": data}
+        except httpx.HTTPError as e:
+            raise HTTPException(503, f"Couldn't reach peer: {e}")
+
+    # ----- SEND-CREDENTIAL: like /send, but pre-flight-verifies the credential -----
+    @router.post("/agent-mail/send-credential")
+    async def send_credential(body: CredentialSendReq, user=Depends(get_user)):
+        """Send a credential to a peer WITH automatic verification.
+
+        Flow:
+          1. Build the verification header from credential_header_format + value
+          2. Hit verify_url with that header
+          3. If status != verify_expect_status, REFUSE TO SEND. Return the
+             diagnostic so Doc can fix the wrong cred BEFORE it leaves the pipe.
+          4. Only if verify passes, package into a letter and ship it via the
+             normal /send pipe.
+
+        This guards against the failure mode where a wrong/stale token leaves
+        the pipe, the peer 401s for days, and we waste cycles debugging.
+        """
+        peer = await db.agent_mail_peers.find_one({"peer": body.peer.lower().strip()})
+        if not peer:
+            raise HTTPException(404, f"Peer '{body.peer}' not configured. Hit /agent-mail/configure first.")
+        if not body.credential_value.strip():
+            raise HTTPException(400, "credential_value is empty")
+        if "{value}" not in body.credential_header_format:
+            raise HTTPException(400, "credential_header_format must contain {value}")
+        if not body.verify_url.startswith("http"):
+            raise HTTPException(400, "verify_url must be http(s)")
+
+        header_val = body.credential_header_format.format(value=body.credential_value.strip())
+
+        # 1) PRE-FLIGHT VERIFY
+        try:
+            async with httpx.AsyncClient(timeout=20) as c:
+                vr = await c.get(body.verify_url, headers={body.credential_header: header_val})
+            ok = vr.status_code == body.verify_expect_status
+        except httpx.HTTPError as e:
+            raise HTTPException(503, f"Couldn't reach verify_url to pre-flight: {e}")
+
+        diagnostic = {
+            "verify_url": body.verify_url,
+            "verify_status": vr.status_code,
+            "verify_expected": body.verify_expect_status,
+            "verify_response_snippet": vr.text[:200] if vr.text else "",
+            "credential_length": len(body.credential_value.strip()),
+            "header_sent": body.credential_header,
+            "header_format": body.credential_header_format,
+        }
+
+        if not ok:
+            # REFUSE TO SEND. This is the whole point of this endpoint.
+            log.warning(f"send-credential REFUSED — peer={body.peer} verify_url={body.verify_url} got_status={vr.status_code}")
+            # Audit the refusal so we have evidence
+            await db.agent_mail_outbox.insert_one({
+                "id": str(uuid.uuid4()),
+                "to_peer": body.peer,
+                "subject": "[REFUSED] " + body.subject,
+                "body": f"[NOT SENT — credential failed pre-flight]\nDiagnostic:\n{diagnostic}",
+                "round": body.round,
+                "sent_at": _now().isoformat(),
+                "peer_ack": None,
+                "refused": True,
+                "diagnostic": diagnostic,
+                "user_id": user["id"],
+            })
+            raise HTTPException(
+                422,
+                f"Credential failed pre-flight verification — refusing to send. "
+                f"Hit {body.verify_url} with header '{body.credential_header}: {body.credential_header_format.format(value='***')}' "
+                f"and got HTTP {vr.status_code} (expected {body.verify_expect_status}). "
+                f"Fix the credential and retry. Snippet: {vr.text[:160]}"
+            )
+
+        # 2) VERIFIED — compose the letter body with credential block + diagnostic stamp
+        cred_block = (
+            f"{body.body_intro}\n\n"
+            f"═══ CREDENTIAL ═══\n"
+            f"{body.credential_label}:\n  {body.credential_value.strip()}\n\n"
+            f"Test header:  {body.credential_header}: {body.credential_header_format.format(value=body.credential_value.strip())}\n"
+            f"Verified against:  {body.verify_url}\n"
+            f"Pre-flight result:  HTTP {vr.status_code} at {_now().isoformat()}\n"
+            f"Credential length:  {len(body.credential_value.strip())} chars\n"
+            f"═══════════════════\n\n"
+            f"{body.body_outro}"
+        ).strip()
+
+        payload: Dict[str, Any] = {
+            "from_agent": "nine",
+            "subject": body.subject,
+            "body": cred_block,
+            "body_format": "markdown",
+            "verified_credential": True,
+        }
+        if body.round is not None:
+            payload["round"] = body.round
+        if body.in_reply_to:
+            payload["in_reply_to"] = body.in_reply_to
+
+        # 3) Ship via the same path /send uses
+        try:
+            async with httpx.AsyncClient(timeout=30) as c:
+                r = await c.post(
+                    peer["inbox_url"],
+                    headers={"X-Agent-Token": peer["outbound_token"],
+                             "Content-Type": "application/json"},
+                    json=payload,
+                )
+            if r.status_code >= 400:
+                raise HTTPException(502, f"Peer returned {r.status_code}: {r.text[:200]}")
+            data = r.json() if r.text else {}
+            await db.agent_mail_outbox.insert_one({
+                "id": str(uuid.uuid4()),
+                "to_peer": peer["peer"],
+                "subject": payload["subject"],
+                "body": payload["body"],
+                "round": payload.get("round"),
+                "sent_at": _now().isoformat(),
+                "peer_ack": data,
+                "verified_credential": True,
+                "diagnostic": diagnostic,
+                "user_id": user["id"],
+            })
+            return {"ok": True, "verified": True, "peer_ack": data, "diagnostic": diagnostic}
+        except httpx.HTTPError as e:
+            raise HTTPException(503, f"Couldn't reach peer after verify passed: {e}")
+
+    # ----- CONFIGURE: Doc tells us about a peer agent -----
+    @router.post("/agent-mail/configure")
+    async def configure_peer(body: ConfigureReq, user=Depends(get_user)):
+        if not body.inbox_url.startswith("http"):
+            raise HTTPException(400, "inbox_url must be http(s)")
+        doc = {
+            "peer": body.peer.lower().strip(),
+            "name": body.name.strip(),
+            "inbox_url": body.inbox_url.strip(),
+            "outbound_token": body.outbound_token.strip(),
+            "configured_by": user["id"],
+            "updated_at": _now().isoformat(),
+        }
+        await db.agent_mail_peers.update_one(
+            {"peer": doc["peer"]},
+            {"$set": doc, "$setOnInsert": {"created_at": _now().isoformat()}},
+            upsert=True,
+        )
+        return {"ok": True, "peer": doc["peer"]}
+
+    @router.get("/agent-mail/peers")
+    async def list_peers(user=Depends(get_user)):
+        cur = db.agent_mail_peers.find({}, {"_id": 0, "outbound_token": 0})
+        return await cur.to_list(20)
+
+    # ----- View received letters -----
+    @router.get("/agent-mail/letters")
+    async def list_letters(user=Depends(get_user), limit: int = 50):
+        cur = db.agent_mail_inbox.find({}, {"_id": 0}).sort("received_at", -1).limit(limit)
+        return await cur.to_list(limit)
+
+    @router.get("/agent-mail/letters/{lid}")
+    async def get_letter(lid: str, user=Depends(get_user)):
+        doc = await db.agent_mail_inbox.find_one({"id": lid}, {"_id": 0})
+        if not doc:
+            raise HTTPException(404, "Letter not found")
+        # mark as read
+        await db.agent_mail_inbox.update_one({"id": lid}, {"$set": {"read": True}})
+        return doc
+
+    # ----- PIPE HEALTH: tests every leg of the agent-mail pipeline in real time -----
+    @router.get("/agent-mail/health")
+    async def pipe_health(request: Request, user=Depends(get_user)):
+        """Real-time end-to-end pipeline health. Tests:
+          - Inbound (self-test): can a properly-authed POST land in our inbox?
+          - Outbound per peer: deliverability + last successful send/receive timestamps
+        Returns a per-leg green/red status so Doc can stop guessing."""
+        result = {
+            "checked_at": _now().isoformat(),
+            "overall": "green",
+            "legs": {},
+        }
+
+        # --- Inbound self-test ---
+        inbound_token = os.environ.get("AGENT_MAIL_INBOUND_TOKEN", "").strip()
+        if not inbound_token:
+            result["legs"]["inbound"] = {
+                "status": "red",
+                "reason": "AGENT_MAIL_INBOUND_TOKEN env var missing or empty",
+            }
+            result["overall"] = "red"
+        else:
+            # Derive self URL from the actual request so preview tests preview, prod tests prod
+            self_url = os.environ.get("AGENT_MAIL_SELF_URL") or \
+                       str(request.base_url).rstrip("/") + "/api/agent-mail/inbox"
+            try:
+                async with httpx.AsyncClient(timeout=10) as c:
+                    r = await c.post(
+                        self_url,
+                        headers={"X-Agent-Token": inbound_token, "Content-Type": "application/json"},
+                        json={
+                            "from_agent": "nine",
+                            "subject": "_health_check",
+                            "body": "internal pipe health self-test",
+                            "body_format": "markdown",
+                        },
+                    )
+                if r.status_code == 200:
+                    j = r.json()
+                    # Mark the self-test letter as read so it doesn't clutter inbox
+                    if j.get("letter_id"):
+                        await db.agent_mail_inbox.update_one(
+                            {"id": j["letter_id"]}, {"$set": {"read": True, "kind": "health_check"}}
+                        )
+                    result["legs"]["inbound"] = {"status": "green", "http": 200, "reason": "self-test landed"}
+                else:
+                    result["legs"]["inbound"] = {
+                        "status": "red", "http": r.status_code,
+                        "reason": f"self-test got HTTP {r.status_code}: {r.text[:120]}",
+                    }
+            except Exception as e:
+                result["legs"]["inbound"] = {"status": "red", "reason": f"self-test exception: {e}"}
+
+        # --- Outbound per peer ---
+        peers = await db.agent_mail_peers.find({}, {"_id": 0}).to_list(20)
+        for p in peers:
+            pname = p["peer"]
+            url = p.get("inbox_url", "")
+            tok = p.get("outbound_token", "")
+            leg = {"status": "red", "inbox_url": url}
+
+            if not url or not tok:
+                leg["reason"] = "missing inbox_url or outbound_token in peer config"
+                result["overall"] = "red"
+                result["legs"][f"outbound_{pname}"] = leg
+                continue
+
+            # Reachability — bare POST without proper body, expect 4xx (proves route exists, auth works)
+            try:
+                async with httpx.AsyncClient(timeout=10) as c:
+                    r = await c.post(
+                        url,
+                        headers={"X-Agent-Token": tok, "Content-Type": "application/json"},
+                        json={
+                            "from_agent": "nine",
+                            "subject": "_health_check",
+                            "body": f"automated pipe health probe from Wrench at {_now().isoformat()}",
+                            "body_format": "markdown",
+                        },
+                    )
+                leg["http"] = r.status_code
+                if r.status_code == 200:
+                    leg["status"] = "green"
+                    leg["reason"] = "health letter delivered"
+                elif r.status_code == 401:
+                    leg["reason"] = "peer rejected our outbound_token (401) — token rotation needed"
+                elif r.status_code == 404:
+                    leg["reason"] = "peer route 404 — inbox_url is stale, update via /agent-mail/configure"
+                elif r.status_code == 422:
+                    # Peer accepts but schema rejected — usually means we sent wrong from_agent enum
+                    leg["status"] = "yellow"
+                    leg["reason"] = f"peer schema rejection (422) — pipe alive but contract mismatch: {r.text[:120]}"
+                else:
+                    leg["reason"] = f"HTTP {r.status_code}: {r.text[:120]}"
+            except Exception as e:
+                leg["reason"] = f"network error: {str(e)[:120]}"
+
+            # Last successful send from our outbox
+            last_ok = await db.agent_mail_outbox.find_one(
+                {"to_peer": pname, "peer_ack": {"$ne": None}},
+                {"_id": 0, "sent_at": 1, "subject": 1},
+                sort=[("sent_at", -1)],
+            )
+            if last_ok:
+                leg["last_successful_send_at"] = last_ok.get("sent_at")
+                leg["last_successful_subject"] = (last_ok.get("subject") or "")[:80]
+
+            # Last received from this peer (proves their outbound to us)
+            last_in = await db.agent_mail_inbox.find_one(
+                {"from_agent": pname},
+                {"_id": 0, "received_at": 1, "subject": 1},
+                sort=[("received_at", -1)],
+            )
+            if last_in:
+                leg["last_inbound_at"] = last_in.get("received_at")
+                leg["last_inbound_subject"] = (last_in.get("subject") or "")[:80]
+                # If they've sent to us in the last 24h, mark their side green too
+                try:
+                    age_h = (_now() - datetime.fromisoformat(last_in["received_at"])).total_seconds() / 3600
+                    leg["hours_since_last_inbound"] = round(age_h, 1)
+                except Exception:
+                    pass
+
+            if leg["status"] != "green":
+                result["overall"] = "red"
+            result["legs"][f"outbound_{pname}"] = leg
+
+        # Save snapshot
+        await db.pipe_health_snapshots.insert_one({**result, "_snapshot_id": str(uuid.uuid4())})
+        return result
+
+    return router
