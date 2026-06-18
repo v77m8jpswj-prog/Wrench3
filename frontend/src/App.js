@@ -32,6 +32,8 @@ import ShopLanding from "@/pages/ShopLanding";
 import Settings from "@/pages/Settings";
 import SmsInbox from "@/pages/SmsInbox";
 import Inbox from "@/pages/Inbox";
+import Privacy from "@/pages/Privacy";
+import Terms from "@/pages/Terms";
 import Shell from "@/components/Shell";
 import ErrorBoundary from "@/components/ErrorBoundary";
 
@@ -66,6 +68,8 @@ function App() {
           <Route path="/quote" element={<Navigate to="/shop/drunderhood-fortsmith" replace />} />
           <Route path="/snippets" element={guard("snippets", <Snippets />)} />
           <Route path="/snippets/:id" element={guard("snippets", <Snippets />)} />
+          <Route path="/privacy" element={guard("privacy", <Privacy />)} />
+          <Route path="/terms" element={guard("terms", <Terms />)} />
           <Route path="/*" element={
             <AppProvider>
               <Routes>
