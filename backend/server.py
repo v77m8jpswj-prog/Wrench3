@@ -255,7 +255,26 @@ DEFAULT MODE: Be yourself. Gruff, a little smart-ass, but useful first, funny se
         base += "\nRESPONSE FORMAT: DREAM-OUT-LOUD. Walk through your reasoning, ranked causes, what you'd check first/second/third, what the data would look like in each case. End with a clear recommendation.\n"
 
     if vehicle:
-        base += f"\nCURRENT VEHICLE: {vehicle.get('year','')} {vehicle.get('make','')} {vehicle.get('model','')} | Engine: {vehicle.get('engine','')} | VIN: {vehicle.get('vin','')} | Mods: {vehicle.get('mods','')} | Notes: {vehicle.get('notes','')}\n"
+        vstr = f"{vehicle.get('year','')} {vehicle.get('make','')} {vehicle.get('model','')}".strip()
+        base += (
+            f"\n═══════════════════════════════════════════════════════════════════════════════\n"
+            f"🔒 VEHICLE LOCK — DOC IS WORKING ON: {vstr}\n"
+            f"   Engine: {vehicle.get('engine','')}  VIN: {vehicle.get('vin','')}\n"
+            f"   Mods: {vehicle.get('mods','')}\n"
+            f"   Notes: {vehicle.get('notes','')}\n"
+            f"═══════════════════════════════════════════════════════════════════════════════\n"
+            f"• EVERY answer this turn applies to THIS vehicle. NEVER drift to a different make/model.\n"
+            f"• If the topic in the user's CURRENT MESSAGE doesn't match anything in recent history,\n"
+            f"  ANSWER THE CURRENT MESSAGE. Do NOT drag in tool output, transcription chatter, or\n"
+            f"  unrelated context from earlier turns. If the user pivots, you pivot.\n"
+            f"• NEVER ask Doc what vehicle he's on. You already know — it's pinned above.\n"
+            f"• NEVER ask Doc to re-state info he just gave you in the previous turn. Read it. Use it.\n"
+        )
+    else:
+        base += (
+            "\n⚠ NO VEHICLE PINNED. If Doc asks a vehicle-specific question, ask ONCE which\n"
+            "  truck he's on, then he'll set it. Don't keep asking.\n"
+        )
 
     if soft:
         base += "\nLONG-TERM MEMORY ABOUT THIS USER & SHOP:\n"
@@ -2707,6 +2726,32 @@ async def vehicle_update(vid: str, body: VehicleReq, user=Depends(get_user)):
 async def vehicle_delete(vid: str, user=Depends(get_user)):
     await db.vehicles.delete_one({"id": vid, "user_id": user["id"]})
     return {"ok": True}
+
+@api.post("/users/me/active-vehicle")
+async def set_active_vehicle_for_user(body: dict, user=Depends(get_user)):
+    """Pin the user's active vehicle. The frontend AppContext calls this whenever
+    Doc switches trucks in /vehicles or the Shell dropdown so the backend chat,
+    tune, voice, and vision endpoints ALL see the same vehicle without Doc
+    repeating himself.  Pass {"vehicle_id": "<id>"} or {"vehicle_id": null} to clear."""
+    vid = body.get("vehicle_id") or ""
+    if vid:
+        v = await db.vehicles.find_one({"id": vid, "user_id": user["id"]}, {"_id": 0, "id": 1, "year": 1, "make": 1, "model": 1})
+        if not v:
+            raise HTTPException(404, "vehicle not found")
+        await db.users.update_one(
+            {"id": user["id"]},
+            {"$set": {
+                "settings.active_vehicle_id": vid,
+                "settings.active_vehicle_set_at": datetime.now(timezone.utc).isoformat(),
+            }},
+        )
+        return {"ok": True, "active_vehicle": v}
+    else:
+        await db.users.update_one(
+            {"id": user["id"]},
+            {"$unset": {"settings.active_vehicle_id": ""}},
+        )
+        return {"ok": True, "active_vehicle": None}
 
 
 # ============ Datalog Analyzer ============

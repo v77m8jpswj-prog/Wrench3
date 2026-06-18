@@ -16,6 +16,12 @@ export function AppProvider({ children }) {
     setActiveVehicleIdRaw(id || "");
     if (id) localStorage.setItem("dw_active_vehicle", id);
     else localStorage.removeItem("dw_active_vehicle");
+    // Persist to backend so /chat, /tune, /voice all see the same vehicle
+    // without Doc having to repeat himself. Fire-and-forget — UI doesn't
+    // wait, and a backend hiccup falls back to frontend-only behavior.
+    import("@/api").then(m => {
+      m.default.post("/users/me/active-vehicle", { vehicle_id: id || null }).catch(() => {});
+    });
   };
 
   const refreshVehicles = useCallback(async () => {
