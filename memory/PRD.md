@@ -1,6 +1,26 @@
 # Data Wrench — PRD (as of Mar 1, 2026)
 
-## Mar 1, 2026 - latest — UNIFIED INBOX SHIPPED + FB Messenger Lead Pipeline
+## 🔴 OPEN P0 ISSUES — DOC'S WORDS, FOR NEXT AGENT FORK
+
+These are blocking Doc from selling/using Wrench day-to-day. Need a fresh agent fork with full context window to fix properly.
+
+1. **Wrench cross-conversation bleed / hallucination** — Doc was diagnosing an ABS module C2200 code; Wrench responded with "text='' and segments[] despite 36s on the clock... audio file... codec/bitrate" — that's another session's transcription-debug context leaking in. Either session_id mix-up or system prompt grabbing wrong history. Screenshot saved in last message of prior session.
+
+2. **AllData hallucination came back** — Wrench keeps offering to "snip the C2200 connector/PCM page from AllData" even though we explicitly fixed this in prior fork and Doc has told him 100x he doesn't have AllData. Prompt-level guard needs to be hardened to NEVER mention AllData under any circumstance.
+
+3. **Repeating already-answered questions** — Doc said "FROM ABS MODULE" → Wrench asked again "which module logged C2200?" — not reading conversation state at all. Need to investigate what messages are actually being sent to the LLM (debug panel idea below would catch this fast).
+
+4. **Active vehicle doesn't flow to /chat** — Doc loads vehicle in /vehicles → /charts page sees it (per-vehicle data renders) but /chat doesn't (Wrench has no idea what vehicle he's working on). Plumbing inconsistent across pages. Find: AppContext active_vehicle wiring + Tune.jsx vs Chat.jsx session resolution.
+
+5. **Wrench "jumps off" the vehicle mid-diag** — loses lock on what truck he's working on as the conversation evolves. Need to either (a) re-inject the active vehicle context into every LLM call, or (b) pin a "VEHICLE LOCK" banner that's always part of system prompt as long as session is open.
+
+6. **Wrench needs internet schematic lookup** — Doc cannot upload every wiring diagram. Wrench should search the open web for wiring schematics by DTC code + year/make/model and surface the URL inline. OpenAI web search is already wired per prior handoff — need to verify it's being invoked aggressively for "find me the schematic" intents and not just DTC code lookups.
+
+7. **Generally smarter / more adaptive** — answers shouldn't regurgitate basics Doc obviously knows. Need persona prompt tuning to acknowledge Doc's expertise level (master tech, not beginner) and skip the 101 stuff.
+
+**Suggested next-agent dev tool:** add a tiny `data-testid` "wrench debug" panel in dev that shows the actual session_id, the full message history being sent, byte count, the exact system prompt, and the LLM model + token budget on every /chat call. Would catch session bleed in 30 seconds and AllData mentions instantly.
+
+## Mar 1, 2026 - night final — Voice "Ring Shop First" + Delete UI + Privacy/Terms + FB Pipeline Live
 - New `/inbox` route — single chronological feed merging SMS threads, Facebook Messenger DMs, Instagram DMs, voicemails, web-form leads, and emails. Each row shows channel badge (color-coded), customer name (or phone fallback), vehicle if known, last-message preview, time-ago, and NEW dot.
 - Channel-filter chips at the top (ALL/SMS/FB/IG/VM/EMAIL/FORM) with per-channel unread counts.
 - Search box filters across name/phone/message body/subject.
