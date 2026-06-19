@@ -933,10 +933,10 @@ async def me(user=Depends(get_user)):
 
 # ============ One-shot migration bootstrap (used right after prod deploy) ============
 @api.post("/admin/bootstrap-restore")
-async def bootstrap_restore(authorization: Optional[str] = Header(None)):
+async def bootstrap_restore(authorization: Optional[str] = Header(None), force: int = 0):
     """
     One-shot: mongorestore the migration dump committed at /app/memory/migration/mongo_dump.
-    Gated by BRAIN_INGRESS_TOKEN. Refuses to run if DB already has user records.
+    Gated by BRAIN_INGRESS_TOKEN. Refuses to run if DB already has user records UNLESS ?force=1.
     Used immediately after a fresh-pod deploy to seed Doc's real data.
     """
     expected = os.environ.get("BRAIN_INGRESS_TOKEN", "")
@@ -944,16 +944,17 @@ async def bootstrap_restore(authorization: Optional[str] = Header(None)):
     if not expected or token != expected:
         raise HTTPException(401, "Bad bootstrap token")
 
-    existing_users = await db.users.count_documents({})
-    existing_brain = await db.brain_cases.count_documents({})
-    if existing_users > 0 or existing_brain > 0:
-        return {
-            "ok": False,
-            "skipped": True,
-            "reason": "DB already populated; refusing to drop. Manual cleanup required if re-run intended.",
-            "users": existing_users,
-            "brain_cases": existing_brain,
-        }
+    if not force:
+        existing_users = await db.users.count_documents({})
+        existing_brain = await db.brain_cases.count_documents({})
+        if existing_users > 0 or existing_brain > 0:
+            return {
+                "ok": False,
+                "skipped": True,
+                "reason": "DB already populated; refusing to drop. Pass ?force=1 to override.",
+                "users": existing_users,
+                "brain_cases": existing_brain,
+            }
 
     dump_dir = "/app/memory/migration/mongo_dump"
     if not os.path.isdir(dump_dir):
@@ -1033,8 +1034,9 @@ async def seed_env(body: Dict[str, str]):
     backend must be restarted (or os.environ is patched in-process for the calling agent).
     """
     marker = Path("/app/.env_seeded")
-    if marker.exists():
-        raise HTTPException(403, "Already seeded; refusing to overwrite. Delete /app/.env_seeded to re-run.")
+    force_param = body.pop("_force", "0") if isinstance(body, dict) else "0"
+    if marker.exists() and str(force_param) != "1":
+        raise HTTPException(403, "Already seeded; pass _force=1 in body to override. Or delete /app/.env_seeded to re-run.")
     env_path = ROOT_DIR / ".env"
     existing_text = env_path.read_text() if env_path.exists() else ""
     lines = [l for l in existing_text.splitlines() if l.strip()]
