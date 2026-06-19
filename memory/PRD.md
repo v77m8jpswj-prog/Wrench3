@@ -1,4 +1,32 @@
-# Data Wrench — PRD (as of Mar 1, 2026)
+# Data Wrench — PRD (as of Jun 19, 2026)
+
+## ✅ Jun 19, 2026 (DAY 2) — morning while Doc was on break
+
+### Fixes shipped
+- **OPENAI_API_KEY .env parse bug** — closing quote was missing on the line, so python-dotenv silently failed and the env var was empty. `/api/voice/ephemeral-token` was returning 503. Bud caught it in R3 reply. Rewrote .env, restarted backend, live-verified the endpoint returns client_secret against gpt-realtime / voice "ash". Voice handoff unlocked.
+- **Leads collection drift** — `db.leads` dropped from 4 → 1 overnight (root cause unclear, possibly hot-reload race during bootstrap-restore smoke test). Re-restored just leads namespace from the dump. 4/4 visible via /api/leads.
+
+### Build shipped
+- **Chat debug panel + `?debug=1` on /api/chat** — biggest morning win. Toggle a DEBUG button on the Chat page; subsequent /chat calls include a `debug` field in the response with: session_id, vehicle_resolved (id + year/make/model + source: passed_in/inferred_from_message/sticky_active/none), mode, heat, model, system_prompt_chars + first 2500-char preview, memory_facts list, library chunks + sources, prior_history_count, search use, character counts. UI renders this in a fixed amber panel under the chat header with collapsible details. This is the diagnostic surface for all 7 open P0 bugs (cross-convo bleed / AllData hallucination / repeated questions / vehicle drift / etc.) — once Doc repros a bug with DEBUG ON, the exact LLM input is visible.
+
+### Peer ops
+- Bud R4 delivered (peer_ack 1bf51551). Bud now has voice-503 fix notice + the migration letter he missed.
+- OG R34 sent (peer_ack 2873a94d). Awaiting his migration-complete ack.
+
+### Commits sitting locally (still no GitHub push — Doc's OAuth blocked)
+- de3f8f5  /api/admin/bootstrap-restore + /api/admin/set-env-urls
+- 5bd8424  defensive env loads + /api/admin/seed-env one-shot
+- 4362b5b  /api/chat debug mode + Chat DEBUG toggle
+- + merge commits
+
+### Open items
+- ⚠️ GitHub OAuth — Doc still hasn't cleared Apple Hide-My-Email verify. 4 local commits can't push → no deploy → no prod cutover.
+- ⚠️ Bud's pod (savings-app-44.preview.emergentagent.com) flapping 200/502/404 — his operator's infra issue.
+- ⚠️ Bud may still be on wrong scaffold (BUD-SAVE-6-18 is a budget-app template, not peer-agent codebase). Diagnosis sent last night, awaiting reply.
+- ⏳ OG R34 ack, Bud R4-followup ack — waiting.
+- ⏳ Twilio SMS smoke test — needs Doc's 2nd phone.
+- ⏳ "Missing leads info" — Doc said leads page missing info but didn't specify. Investigation found 4 leads all have `source: "landing"`, no `kind` field, so no voicemail-audio / FB/IG-DM badges show. If Doc was expecting voicemail leads or DM leads in the listing, those collections (`voicemails`, `fb_messages`) didn't carry over in the dump. Need Doc to specify.
+- ⏳ All 7 prior P0 bugs — awaiting Doc's repro with DEBUG ON.
 
 ## 🔴 OPEN P0 ISSUES — DOC'S WORDS, FOR NEXT AGENT FORK
 
