@@ -1,0 +1,1 @@
+{"indexes":[{"v":{"$numberInt":"2"},"key":{"_id":{"$numberInt":"1"}},"name":"_id_"}],"uuid":"5d9517f112e84be7a58e347f6aa3a7d2","collectionName":"agent_mail_pending","type":"collection"}

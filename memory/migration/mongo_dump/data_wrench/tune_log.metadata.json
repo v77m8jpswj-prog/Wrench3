@@ -1,0 +1,1 @@
+{"indexes":[{"v":{"$numberInt":"2"},"key":{"_id":{"$numberInt":"1"}},"name":"_id_"}],"uuid":"0374268affee403996aad051d567e38c","collectionName":"tune_log","type":"collection"}

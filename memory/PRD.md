@@ -113,7 +113,7 @@ Phases 1, 2, 2.5 shipped. See CHANGELOG section below.
 - `MONGO_URL`, `DB_NAME` (protected)
 - `OPENAI_API_KEY` (Doc's — needed for embeddings + WebRTC realtime + vision OCR fallback)
 - `EMERGENT_LLM_KEY` (auto, for chat + Wrench draft)
-- `BRAIN_INGRESS_TOKEN` (partner bearer — `a1680ebe47a8b56801b44a478a0b40655c128ab424ce8035e11df89cb310558d`)
+- `BRAIN_INGRESS_TOKEN` (partner bearer — `<REDACTED_BRAIN_INGRESS_TOKEN>`)
 - `MS_CLIENT_ID`, `MS_CLIENT_SECRET`, `MS_REDIRECT_URI`, `MS_AUTHORITY`, `FRONTEND_BASE_URL` (Outlook OAuth)
 - `PLAYWRIGHT_CHROME_EXECUTABLE_PATH=/usr/bin/chromium` (for the scraper)
 
