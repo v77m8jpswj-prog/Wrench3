@@ -960,37 +960,41 @@ async def bootstrap_restore(authorization: Optional[str] = Header(None), force: 
     if not os.path.isdir(dump_dir):
         raise HTTPException(500, f"Migration dump folder missing at {dump_dir}")
 
-    import subprocess
-    db_name = os.environ.get("DB_NAME", "test_database")
-    cmd = [
-        "mongorestore",
-        f"--uri={MONGO_URL}",
-        "--drop",
-        "--nsFrom=data_wrench.*",
-        f"--nsTo={db_name}.*",
-        dump_dir,
-    ]
-    log.info("bootstrap_restore: running %s", " ".join(cmd))
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-    if proc.returncode != 0:
-        return {
-            "ok": False,
-            "returncode": proc.returncode,
-            "stderr_tail": (proc.stderr or "")[-2000:],
-            "stdout_tail": (proc.stdout or "")[-2000:],
-        }
+    # Find the source DB folder inside the dump (e.g., /app/memory/migration/mongo_dump/data_wrench)
+    src_db_dir = None
+    for entry in os.listdir(dump_dir):
+        full = os.path.join(dump_dir, entry)
+        if os.path.isdir(full):
+            src_db_dir = full
+            break
+    if not src_db_dir:
+        raise HTTPException(500, f"No DB subfolder under {dump_dir}")
 
-    counts = {}
-    for c in ["users", "brain_cases", "leads", "library_items", "library_chunks",
-              "vehicles", "chat_messages", "chat_sessions", "memory_facts",
-              "candidate_facts", "agent_mail_peers", "agent_mail_inbox", "voice_sessions"]:
-        counts[c] = await db[c].count_documents({})
+    import bson as _bson
+    counts: Dict[str, int] = {}
+    errors: List[str] = []
+    files = sorted([f for f in os.listdir(src_db_dir) if f.endswith(".bson")])
+    for fname in files:
+        coll = fname[:-5]
+        path = os.path.join(src_db_dir, fname)
+        try:
+            with open(path, "rb") as fh:
+                raw = fh.read()
+            docs = _bson.decode_all(raw)
+            # Drop existing then bulk insert
+            await db[coll].drop()
+            if docs:
+                await db[coll].insert_many(docs)
+            counts[coll] = len(docs)
+        except Exception as e:
+            errors.append(f"{coll}: {type(e).__name__}: {e}")
 
     return {
-        "ok": True,
+        "ok": len(errors) == 0,
         "restored_at": datetime.now(timezone.utc).isoformat(),
         "counts": counts,
-        "stderr_tail": (proc.stderr or "")[-400:],
+        "total_docs": sum(counts.values()),
+        "errors": errors,
     }
 
 
