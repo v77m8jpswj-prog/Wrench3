@@ -84,19 +84,15 @@ def make_router(db, get_user):
             if NumMedia and NumMedia > 0 and MediaUrl0 and (MediaContentType0 or "").startswith("image/"):
                 try:
                     from vin_capture import (
-                        ocr_vin_from_image, decode_vin,
+                        ocr_vin_from_twilio_media, decode_vin,
                         upsert_vehicle_for_owner, set_active_vehicle,
                     )
                     openai_key = os.environ.get("OPENAI_API_KEY", "")
-                    # Twilio media URLs require basic auth with Twilio creds to fetch
                     twilio_sid = os.environ.get("TWILIO_ACCOUNT_SID", "")
                     twilio_tok = os.environ.get("TWILIO_AUTH_TOKEN", "")
-                    fetch_url = MediaUrl0
-                    if twilio_sid and twilio_tok and "api.twilio.com" in MediaUrl0:
-                        fetch_url = MediaUrl0.replace(
-                            "https://", f"https://{twilio_sid}:{twilio_tok}@", 1
-                        )
-                    vin = await ocr_vin_from_image(fetch_url, openai_key)
+                    vin = await ocr_vin_from_twilio_media(
+                        MediaUrl0, MediaContentType0, openai_key, twilio_sid, twilio_tok,
+                    )
                     owner_doc = matched_owner or (
                         await db.users.find_one({"role": "owner"}, {"_id": 0}) or {}
                     )
@@ -112,9 +108,8 @@ def make_router(db, get_user):
                         if eng_bits:
                             reply_lines.append(eng_bits)
                         reply_lines.append("Active in /chat. Diag ready.")
-                        reply_text = "\n".join([l for l in reply_lines if l])
+                        reply_text = "\n".join([line for line in reply_lines if line])
                         try:
-                            from twilio_mod import send_sms
                             await send_sms(owner_cell, reply_text)
                         except Exception as e:
                             log.warning("VIN reply SMS failed: %s", e)
@@ -135,7 +130,6 @@ def make_router(db, get_user):
                     elif owner_doc.get("id") and not vin:
                         # photo sent but no VIN detected — short reply so Doc knows
                         try:
-                            from twilio_mod import send_sms
                             await send_sms(owner_cell, "Got the pic but I couldn't read a VIN out of it. Try again closer / better lit.")
                         except Exception:
                             pass

@@ -1,5 +1,27 @@
 # Data Wrench — PRD (as of Jun 19, 2026)
 
+## ✅ Jun 19, 2026 (DAY 2 — afternoon, fork session)
+
+### VIN-snap fully wired (photo → text → VIN → vehicle → active)
+- **Bug #1 fixed: `send_sms` UnboundLocalError in `sms_routes.py`** — two inline `from twilio_mod import send_sms` statements inside the VIN-snap intercept made `send_sms` a function-local across ALL paths of `sms_inbound`. Any non-MMS owner-reply path crashed with "cannot access local variable 'send_sms'". Removed both redundant imports; relied on the top-of-file import. Verified via simulated text-only owner reply — no more UnboundLocalError.
+- **Bug #2 fixed: OpenAI vision couldn't fetch Twilio media URLs** (basic-auth + presigned-S3 redirect chain). Rewrote `vin_capture.py` to download the media ourselves with Twilio creds, follow the 302 to S3 *without* re-sending auth, then ship the bytes to OpenAI as a base64 data URL.
+- **OCR upgraded**: gpt-4o-mini → **gpt-4o** with `detail: "high"`. Mini was dropping characters on synthetic stickers. Full 4o reads cleanly. Added a relaxed prompt (no confusing I/O/Q letter description) + alphanumeric strip before regex.
+- **Verified end-to-end** with a synthetic VIN sticker (`2HGFC2F69KH123456`):
+  - OCR → correct 17-char VIN ✅
+  - NHTSA decode → 2019 HONDA Civic, 2.0L 4cyl Gasoline ✅
+  - DB upsert → vehicle row created ✅
+  - Owner's `active_vehicle_id` set ✅
+  - SMS confirmation queued via Twilio ✅
+  - `sms_messages` row written with `kind: vin_snap_loaded` ✅
+
+### Still pending (next priorities)
+- ⏳ Push fix to GitHub + deploy to Production (4+ unpushed commits sitting).
+- ⏳ Twilio Toll-Free Verification: until TFV passes, MMS (photos) get dropped by carriers BEFORE Twilio receives them. Backend is now bulletproof; carrier path needs TFV approval before Doc can actually MMS a VIN sticker from his phone.
+- ⏳ "Missing leads info" UI gap.
+- ⏳ All 7 prior P0 chat bugs — awaiting Doc's DEBUG-ON repro.
+
+---
+
 ## ✅ Jun 19, 2026 (DAY 2) — morning while Doc was on break
 
 ### Fixes shipped
