@@ -1,0 +1,117 @@
+{
+  "project_name": "Data Wrench",
+  "theme": "dark",
+  "archetype": "Archetype 2: The Performance Pro",
+  "mood": "Industrial, Rugged, Tactical, Functional, Slightly Aggressive",
+  "design_philosophy": "Dashboard of a real diagnostic tool (Snap-on, HP Tuners), not a SaaS app. Legible from a distance, heavy industrial aesthetics, strictly functional. No rounded pills, no soft pastels, no generic chat UI.",
+  "colors": {
+    "background_primary": "#0A0A0A",
+    "background_secondary": "#171717",
+    "background_tertiary": "#262626",
+    "surface_panel": "#121212",
+    "border_default": "#333333",
+    "border_focus": "#FF5722",
+    "primary_accent": "#FF5722",
+    "secondary_accent": "#FFC107",
+    "danger_error": "#D32F2F",
+    "success_ok": "#2E7D32",
+    "text_primary": "#FFFFFF",
+    "text_secondary": "#A1A1AA",
+    "text_muted": "#52525B",
+    "text_on_accent": "#000000"
+  },
+  "typography": {
+    "fonts": {
+      "headings": "'Barlow Condensed', sans-serif",
+      "body": "'JetBrains Mono', monospace",
+      "data": "'JetBrains Mono', monospace"
+    },
+    "scales": {
+      "h1": "text-5xl lg:text-6xl tracking-tighter uppercase font-black",
+      "h2": "text-3xl lg:text-4xl tracking-tight uppercase font-bold",
+      "h3": "text-2xl uppercase font-bold tracking-wide",
+      "h4": "text-xl uppercase font-semibold",
+      "body": "text-base tracking-normal",
+      "data_table": "text-sm tracking-tight",
+      "labels": "text-xs uppercase tracking-[0.15em] text-secondary font-bold"
+    },
+    "rules": [
+      "Headings MUST use Barlow Condensed and be strictly uppercase for that heavy-weight automotive shop feel.",
+      "ALL user data, tables, charts, logs, and system responses must use JetBrains Mono to mimic VCM Scanner and diagnostic readouts.",
+      "Never use Inter, Roboto, or generic sans-serif fonts. No rounded fonts."
+    ]
+  },
+  "spacing_and_layout": {
+    "grid_system": "Mode B: The Control Room Grid (Density, Data Correlation, Scanability).",
+    "containers": "Sharp edges only. Use 'rounded-none' universally. No pill-shaped buttons. Hard corners everywhere.",
+    "borders": "1px solid borders globally for structural definition. Panels should be clearly outlined using border_default (#333333).",
+    "padding": "Dense but clear. Standard container padding: p-4 or p-6. For massive focus sections like the voice button, use generous negative space.",
+    "page_structure": "Left rail (darkest background) for navigation with Lucide icons. Center area for main workspace (Chart Edit / Chat). Right rail (collapsible) for session context/vehicle data. Status bar at bottom like an oscilloscope interface."
+  },
+  "components": {
+    "voice_button": {
+      "description": "Massive, dominant central button on main view.",
+      "styles": "bg-transparent border-2 border-primary_accent text-primary_accent hover:bg-primary_accent/10 transition-colors w-32 h-32 flex items-center justify-center rounded-none relative overflow-hidden",
+      "interaction": "Pulses intensely with amber/orange glow when listening. Waveform visualization (bars) animates rapidly while Wrench speaks back."
+    },
+    "chart_workspace": {
+      "description": "THE killer feature. A tab-separated numeric grid for pasting and editing HP Tuners tables.",
+      "styles": "border-collapse border border-border_default bg-background_secondary w-full",
+      "cells": "border border-border_default p-1 text-right tabular-nums text-data_table text-text_primary hover:bg-background_tertiary",
+      "modified_cells": "bg-secondary_accent/20 text-secondary_accent border-secondary_accent font-bold"
+    },
+    "chat_interface": {
+      "description": "Functional text thread, not iMessage.",
+      "styles": "No floating chat bubbles. Use full-width log rows. Left-aligned text. User messages identified by a bracketed label [TECH], AI by [WRENCH] in primary_accent color.",
+      "background": "Alternating row colors (zebra striping) for readability: bg-background_secondary then bg-background_primary."
+    },
+    "buttons": {
+      "primary": "bg-primary_accent text-text_on_accent font-bold uppercase tracking-widest px-6 py-3 rounded-none hover:bg-white hover:text-black transition-all border border-transparent hover:border-white shadow-[4px_4px_0px_#A1A1AA]",
+      "secondary": "bg-transparent border border-border_default text-text_secondary uppercase px-4 py-2 hover:border-text_secondary hover:text-white transition-all rounded-none",
+      "danger": "bg-transparent border border-danger_error text-danger_error hover:bg-danger_error/10"
+    },
+    "status_bar": {
+      "description": "Diagnostic-tool readout style footer.",
+      "styles": "h-8 bg-background_tertiary border-t border-border_default flex items-center px-4 justify-between text-xs font-data text-text_secondary uppercase tracking-widest"
+    }
+  },
+  "animations": {
+    "rules": [
+      "Rigid, fast, mechanical. No bouncy spring animations.",
+      "Voice waveform: Sharp, high-frequency bar scales matching the 'gruff/loud' personality.",
+      "Loading states: Terminal-style blinking cursors, raw percentage counters, or scrolling hexadecimal blocks instead of spinning circles."
+    ]
+  },
+  "media": {
+    "image_urls": [
+      {
+        "url": "https://images.pexels.com/photos/4489765/pexels-photo-4489765.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "category": "login_background",
+        "description": "Close-up of a mechanic repairing a car engine. Use with heavy black/dark overlay (bg-black/80) so only the gritty texture shows through."
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1666555038185-8323c553de64?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxODh8MHwxfHNlYXJjaHwxfHxkYXJrJTIwYnJ1c2hlZCUyMGd1bm1ldGFsJTIwdGV4dHVyZXxlbnwwfHx8fDE3NzkyNDk5ODh8MA&ixlib=rb-4.1.0&q=85",
+        "category": "texture_overlay",
+        "description": "Dark brushed gunmetal texture. Use sparingly as a background texture for sidebar or header areas with low opacity."
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1510416096143-b3f355567e3d?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2MDV8MHwxfHNlYXJjaHwxfHxpbmR1c3RyaWFsJTIwaGF6YXJkJTIwd2FybmluZyUyMHN0cmlwZXMlMjBkYXJrfGVufDB8fHx8MTc3OTI0OTk4OHww&ixlib=rb-4.1.0&q=85",
+        "category": "hazard_stripes",
+        "description": "Industrial hazard warning stripes. Use as a thin decorative border line (e.g., top of the main window or as a divider for active alerts) by using an image-border or masked background."
+      }
+    ]
+  },
+  "accessibility": {
+    "contrast": "Ensure pure white (#FFFFFF) or warning amber (#FFC107) text against #121212 background passes AA/AAA standard.",
+    "testing_attributes": "Add data-testid attributes to ALL interactive elements. Use format: data-testid='voice-record-btn', data-testid='chart-paste-area', etc."
+  },
+  "instructions_to_main_agent": [
+    "Install and use 'lucide-react' for all icons. Make them sharp and un-rounded.",
+    "Install Google Fonts 'Barlow Condensed' and 'JetBrains Mono' and apply to Tailwind config.",
+    "DO NOT USE shadcn's default Card component if it introduces rounded corners or soft shadows. Build custom raw div structures with border-collapse and flat backgrounds.",
+    "The Chart Paste feature is paramount: Implement a real table grid layout that can handle copy/pasting from Excel/HP Tuners. Highlight changed values explicitly.",
+    "Do NOT add generic chat bubbles. Think 'terminal log' or 'VCM scanner history view' instead of WhatsApp.",
+    "Apply 'data-testid' to every interactive UI node.",
+    "For the Voice button, implement Framer Motion animations to simulate 'listening' and 'speaking' waveforms. Remember the user yells at this AI, so make the listening state look attentive and robust."
+  ]
+}

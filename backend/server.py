@@ -930,22 +930,6 @@ async def me(user=Depends(get_user)):
     return user
 
 
-class ChangePwReq(BaseModel):
-    current_password: str
-    new_password: str
-
-@api.post("/auth/change-password")
-async def change_password(body: ChangePwReq, user=Depends(get_user)):
-    """Allow logged-in user to rotate their own password. Verifies current_password matches."""
-    if len(body.new_password) < 4:
-        raise HTTPException(400, "New password must be at least 4 characters")
-    u = await db.users.find_one({"id": user["id"]})
-    if not u or not verify_pw(body.current_password, u["password"]):
-        raise HTTPException(401, "Current password is wrong")
-    await db.users.update_one({"id": user["id"]}, {"$set": {"password": hash_pw(body.new_password)}})
-    return {"ok": True, "rotated_at": datetime.now(timezone.utc).isoformat()}
-
-
 # ============ Routes: Chat ============
 LOCK_PATTERNS = [
     "lock this in:",

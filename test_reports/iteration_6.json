@@ -1,0 +1,46 @@
+{
+  "summary": "Iteration 6 — Tested SMS unread-count + threaded inbox endpoints AND new SmsInbox.jsx two-pane UI + sidebar unread badge on Shell.jsx. Backend: 12/12 pytest cases pass (auth gating, unread-count integer, thread grouping with phone-format collapse to last-10-digits, name lookup via leads.contact, mark-read with idempotency, message ordering, normalization of formatted phone_key in URL). Frontend: layout, search filter, thread selection→mark-read→badge-decrement, conversation rendering, composer, mobile single-pane + back chevron, deep-link auto-select — all work, EXCEPT the deep-link query-param strip is broken.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "SmsInbox.jsx (deep-link auto-select effect)",
+        "issue": "When opening /sms?phone=+1XXXXXXXXXX, the matching thread IS auto-selected, but the ?phone= query param is NOT stripped from the URL. The strip logic lives only in selectThread(), but the auto-select effect (lines 100-108) calls setSelectedKey() directly, bypassing it.",
+        "selector": "URL bar (window.location.search retains 'phone=...')",
+        "priority": "MEDIUM"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_sms_threads.py",
+    "/app/test_reports/pytest/sms_threads_results.xml"
+  ],
+  "action_items": [
+    "Fix deep-link param strip in /app/frontend/src/pages/SmsInbox.jsx — in the auto-select useEffect (~line 105), call selectThread(match.phone_key) instead of setSelectedKey(match.phone_key) so the URL param is cleaned up the same way as a manual click. Two-line change."
+  ],
+  "critical_code_review_comments": [
+    "SmsInbox.jsx loadMessages() unconditionally POSTs /threads/{key}/mark-read on every selection — fine, but the api.post().catch(()=>{}) silently swallows ALL errors including network failures. If mark-read silently fails, the badge will never decrement and the user has no clue. Consider surfacing a toast on persistent failure.",
+    "sms_routes.py /sms/threads pulls only the most recent 500 messages and groups in Python — for an active shop this is fine, but threads whose latest message is older than the 500th row will simply disappear from the list. Consider a mongo aggregation pipeline (group by digits) or paginate-by-thread.",
+    "sms_routes.py /sms/threads/{phone_key}/messages also caps at 500 messages — a long-running customer thread will lose history silently. Either bump the cap (1k-2k is still cheap) or document/paginate.",
+    "sms_routes.py /sms/threads/{phone_key}/mark-read pulls cursor with {_id:1, ...} then collects ids — the {_id:1} projection is harmless because the code never returns ObjectIds, but it's inconsistent with the rest of the file which exclude _id. Drop _id to keep things consistent.",
+    "Shell.jsx polls /sms/unread-count every 30s for every authenticated route — fine for a single-user app, but on logout the polling continues until route change. Consider gating the interval on user being non-null."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_sms_threads.py (new)"
+  ],
+  "success_rate": {
+    "backend": "100% (12/12)",
+    "frontend": "~93% (13/14 listed scenarios verified; deep-link URL strip fails)"
+  },
+  "test_credentials": "doc@drunderhood.com / wrench (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "Seeded 3 inbound rows via /api/sms/inbound webhook tagged TEST_SMS_THREAD_<random8>: two for +14794345852 (E.164 + formatted forms, must collapse to same thread) and one for +13105550199. Created/deleted a lead (name='TEST_John Threadtest', contact='4794345852') via /api/leads to verify name lookup. SMS rows are tagged TEST_SMS_THREAD_* in body for grepping; they remain in db.sms_messages — not auto-cleaned (matches voice_routes test convention).",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "The 4794345852 thread has unread=0 after pytest mark-read; if you want to see the badge again, seed another inbound via POST /api/sms/inbound (form-encoded From, To, Body, MessageSid). Phone +13105550199 is NOT the owner cell — safe to use; do NOT seed +14798064398 because it appears to be the owner's TWILIO_OWNER_CELL (or env phone), inbounds from it get treated as is_owner_reply and inserted with read=True (which is correct prod behavior but confuses test setup). data-testids on tiles use sms-thread-{phone_key} where phone_key is the last-10-digit form (no '+', no '1' prefix). The query selector ^=\"sms-thread-\" will also match the unread badge child element sms-thread-unread-{key} — filter explicitly if counting tiles.",
+  "rca of the issue": "Deep-link strip bug — SmsInbox.jsx line 105 sets selectedKey directly. The selectThread() helper that strips ?phone= is only invoked on click. Fix: replace setSelectedKey(match.phone_key) with selectThread(match.phone_key) inside the auto-select useEffect, OR add the strip logic to the effect itself. Reproduction: navigate to /sms?phone=+13105550199 → matching thread auto-loads but URL still contains ?phone= after navigation completes."
+}

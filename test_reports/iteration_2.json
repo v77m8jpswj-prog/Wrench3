@@ -1,0 +1,38 @@
+{
+  "summary": "Tested the three P1 features end-to-end (Close→Brain automation, /brain/team-conversations, Shop Profile multi-tenant) plus the pre-existing search-cache. 17/17 pytest assertions passed against /app/backend/tests/test_p1_features.py. Playwright UI smoke covered Jobs (CLOSE → modal → outcome buttons → CLOSE+SAVE TO BRAIN → /api/cases/from-chat 200; JUST CLOSE → PATCH /api/chat/sessions 200) and Settings (SHOP PROFILE editor renders for owner, PUT /api/shop/profile 200, fields persist).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/chat/sessions/{id}", "issue": "Returns only {session_id, messages} — strips the session document's status/linked_brain_case_id/close_outcome/pinned/title fields. Frontend currently lists sessions via /chat/sessions (which DOES include these), so it's not a user-facing bug, but the single-session GET is asymmetric and surprised the test. Either include the session doc fields or document the divergence."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_p1_features.py",
+    "/app/test_reports/pytest/p1_results.xml"
+  ],
+  "action_items": [
+    "(Optional, minor) Make GET /api/chat/sessions/{id} include the full session document (status, linked_brain_case_id, close_outcome, pinned, title, vehicle_id) instead of only messages — would keep single-session and list endpoints symmetric.",
+    "(Optional) /api/chat does not persist vehicle_id on the chat_sessions record even though ChatReq accepts it; Close→Brain reads sess.vehicle_id, so vehicle context only flows through if the session is first PATCHed with vehicle_id. Consider writing vehicle_id into the session doc inside the chat endpoint upsert."
+  ],
+  "critical_code_review_comments": [
+    "brain.py is now 836 lines — above the 700-line soft cap from iteration 1's review. Consider splitting into routers/brain_partner.py (bearer-token routes), routers/cases.py (user-JWT cases CRUD + from-chat), and routers/shop_profile.py.",
+    "POST /api/cases/from-chat/{session_id} does not validate that the chat session actually belongs to the user before reading messages. It does scope by user_id in the chat_messages query so it can't leak across users, but the 404 message is misleading if the user simply sends someone else's session id (returns 'Chat session not found' even though the session may exist for another user). Acceptable but worth a comment.",
+    "Search cache /api/brain/search-web accepts mode='web'|'diagram' (literal). The auto-trigger in /api/chat (server.py ~line 665) calls _openai_web_search internally and bypasses the same Pydantic model, so 'mode' isn't required there — fine, but worth keeping in mind that the partner-facing model and the internal call differ.",
+    "Shop-profile auto-seed (DEFAULT_PROFILE) writes a hard-coded 'Dr. Underhood' name + 5 default capabilities even for a brand-new shop_id. For true multi-tenant onboarding, seed an empty profile and let the owner fill it in via UI."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_p1_features.py (new)"
+  ],
+  "success_rate": {"backend": "100% (17/17)", "frontend": "100% (all UI flows passed; CLOSE→Brain modal opens, outcome buttons render, save POSTs to /api/cases/from-chat 200, JUST CLOSE PATCHes /api/chat/sessions, Shop Profile editor PUTs /api/shop/profile 200)"},
+  "test_credentials": "Owner doc@drunderhood.com / wrench works. Brain bearer token a1680ebe... works. Tech testtech_p1@drunderhood.com / wrench was created during the 403 test and is now seeded.",
+  "seed_data_creation": "Brain cases: ~5 created from chat-close tests (all prefixed TEST_p1 in root_cause/repair_summary). Vehicle 2014 Silverado was created and deleted within the vehicle-context test. Tech account testtech_p1@drunderhood.com left in the system (re-usable). At least one OPEN chat session ('2015 Mustang GT Fuel Table Lean') was deliberately left open via the TestLeaveOpenSession fixture so the Jobs page UI has something to click.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "New regression suite is /app/backend/tests/test_p1_features.py (17 tests, ~70s). Existing suite /app/backend/tests/backend_test.py uses an outdated 'Wrench123!' password — should be updated to 'wrench'. To re-run the close-to-brain UI flow, ensure at least one chat session is in status=open (run TestLeaveOpenSession::test_seed_open_session_for_frontend if needed). Brain bearer token + shop_id are constants at top of test file.",
+  "rca of the issue": "No real bug found. Initial test failures during this iteration were all test-script issues: (1) GET /chat/sessions/{id} only returns messages, fixed by checking via list endpoint; (2) ChatReq.vehicle_id is not persisted onto the session record, fixed by adding a PATCH /chat/sessions/{id} call before close-from-chat; (3) /brain/search-web rejects mode='direct' — literal accepts only 'web'|'diagram', fixed in test."
+}

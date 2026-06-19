@@ -1,35 +1,6 @@
-# Data Wrench — PRD (as of Jun 18, 2026)
+# Data Wrench — PRD (as of Mar 1, 2026)
 
-## ✅ Jun 18, 2026 — fresh agent fork: codebase re-cloned to preview + wired end-to-end
-
-### What landed THIS session
-- **Preview from scratch:** Wrench3 repo cloned to /app, backend deps + frontend deps reinstalled, supervisor restarted clean. Preview now lives at `https://wrench-tools-1.preview.emergentagent.com`.
-- **Twilio live + verified:** AC SID + Auth Token + From (+18557711264) + Owner Cell (+14798064398) + Shop Landline wired into preview `.env`. Twilio account-info ping returns HTTP 200 (Active, Full account, balance $16.61). Webhook URLs on the Twilio console were already pointing at `/api/sms/incoming` — added a router alias `@router.post("/sms/incoming")` in `sms_routes.py` next to the existing `/sms/inbound` so the in-the-wild webhook URL keeps working without forcing Doc to edit Twilio again (he later DID switch it to `/sms/inbound` on prod manually).
-- **OpenAI key:** Doc created a fresh project key (`wrench-preview` in OpenAI console) and wired it into preview only. Verified live with embeddings call (1536-dim vector). Prod's existing "DATE WRENCH" key was LEFT IN PLACE per Doc's call.
-- **BRAIN + agent-mail token pair generated for preview:** `BRAIN_INGRESS_TOKEN` and `AGENT_MAIL_INBOUND_TOKEN` minted fresh (see /app/memory/test_credentials.md). Prod tokens UNCHANGED — Bud + OG keep using their existing prod tokens.
-- **Bud's new URL pushed to prod:** Bud moved to `https://savings-app-44.preview.emergentagent.com/api/agent-mail/inbox` with token `khREo5QomL5w0TdmkTGGqb7xeD345xS7O-4WdUs6nJg`. Updated on BOTH preview (direct mongo write) AND prod (via Doc's JWT calling `/api/agent-mail/configure`). OG's URL untouched.
-- **Shop_profile seed:** preview's `shop_profiles.drunderhood-fortsmith` was missing (startup migration uses `upsert=False`). Seeded the doc directly in mongo with name/phone/address/hours/specialties/bio. `/api/public/shop/drunderhood-fortsmith` now returns 200 with full profile.
-- **Locked memory facts seed:** Doc's 6 standard rules (HP Tuners chart output / never guess OS / no scavenger hunt / one paste / never drift / RPM × MAP) seeded into preview's `memory_facts` for the owner user as `[LOCKED]` entries.
-- **End-to-end smoke pass:** 15/15 endpoints green on preview (auth, vehicles, memory, inbox, sms, sms threads, brain, agent-mail, sms/inbound, sms/incoming alias, voice webhooks, public shop, public lead). PROD `/api/` also confirmed online.
-- **Backend test suite:** `/app/backend/tests/test_wrench_preview.py` written by testing-agent; 23 hard-pass + 2 xfail (now resolved by seeds above). Run with `python -m pytest backend/tests/test_wrench_preview.py -v`.
-
-### What did NOT change
-- Prod (foreman.drunderhood.com) source code: untouched. No deploy was triggered this session. The /sms/incoming alias is preview-only — prod still has only /sms/inbound which is what Doc's updated Twilio webhook now uses.
-- Prod env vars: untouched. Brain + agent-mail + OpenAI + Twilio creds on prod are all still the originals from prior sessions.
-- Prod password: stays as `wrench` (lowercase) per Doc's explicit "LEAVE PASSWORD" decision. No /auth/change-password endpoint exists in the codebase; would require a deploy to add.
-
-### Items still open from prior session (P0)
-1. Wrench cross-conversation bleed / hallucination (session_id or history leak)
-2. AllData hallucination came back (prompt-level guard hardening)
-3. Repeating already-answered questions (conversation state not read)
-4. Active vehicle doesn't flow to /chat (AppContext wiring inconsistent across pages)
-5. Wrench "jumps off" the vehicle mid-diag (VEHICLE LOCK banner / re-inject context)
-6. Wrench needs internet schematic lookup (DTC + year/make/model -> URL inline)
-7. Generally smarter / more adaptive (persona tuning to skip the 101)
-
-**Suggested next-agent dev tool:** `data-testid="wrench-debug-panel"` showing session_id, full message history, byte count, system prompt, model + token budget on every /chat call. Would diagnose bleed + AllData mentions in 30s.
-
-## 🔴 OPEN P0 ISSUES — original notes from prior fork (still valid)
+## 🔴 OPEN P0 ISSUES — DOC'S WORDS, FOR NEXT AGENT FORK
 
 These are blocking Doc from selling/using Wrench day-to-day. Need a fresh agent fork with full context window to fix properly.
 
