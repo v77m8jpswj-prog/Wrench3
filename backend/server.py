@@ -930,6 +930,99 @@ async def me(user=Depends(get_user)):
     return user
 
 
+# ============ One-shot migration bootstrap (used right after prod deploy) ============
+@api.post("/admin/bootstrap-restore")
+async def bootstrap_restore(authorization: Optional[str] = Header(None)):
+    """
+    One-shot: mongorestore the migration dump committed at /app/memory/migration/mongo_dump.
+    Gated by BRAIN_INGRESS_TOKEN. Refuses to run if DB already has user records.
+    Used immediately after a fresh-pod deploy to seed Doc's real data.
+    """
+    expected = os.environ.get("BRAIN_INGRESS_TOKEN", "")
+    token = (authorization or "").replace("Bearer ", "").strip()
+    if not expected or token != expected:
+        raise HTTPException(401, "Bad bootstrap token")
+
+    existing_users = await db.users.count_documents({})
+    existing_brain = await db.brain_cases.count_documents({})
+    if existing_users > 0 or existing_brain > 0:
+        return {
+            "ok": False,
+            "skipped": True,
+            "reason": "DB already populated; refusing to drop. Manual cleanup required if re-run intended.",
+            "users": existing_users,
+            "brain_cases": existing_brain,
+        }
+
+    dump_dir = "/app/memory/migration/mongo_dump"
+    if not os.path.isdir(dump_dir):
+        raise HTTPException(500, f"Migration dump folder missing at {dump_dir}")
+
+    import subprocess
+    db_name = os.environ.get("DB_NAME", "test_database")
+    cmd = [
+        "mongorestore",
+        f"--uri={MONGO_URL}",
+        "--drop",
+        "--nsFrom=data_wrench.*",
+        f"--nsTo={db_name}.*",
+        dump_dir,
+    ]
+    log.info("bootstrap_restore: running %s", " ".join(cmd))
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    if proc.returncode != 0:
+        return {
+            "ok": False,
+            "returncode": proc.returncode,
+            "stderr_tail": (proc.stderr or "")[-2000:],
+            "stdout_tail": (proc.stdout or "")[-2000:],
+        }
+
+    counts = {}
+    for c in ["users", "brain_cases", "leads", "library_items", "library_chunks",
+              "vehicles", "chat_messages", "chat_sessions", "memory_facts",
+              "candidate_facts", "agent_mail_peers", "agent_mail_inbox", "voice_sessions"]:
+        counts[c] = await db[c].count_documents({})
+
+    return {
+        "ok": True,
+        "restored_at": datetime.now(timezone.utc).isoformat(),
+        "counts": counts,
+        "stderr_tail": (proc.stderr or "")[-400:],
+    }
+
+
+@api.post("/admin/set-env-urls")
+async def set_env_urls(authorization: Optional[str] = Header(None)):
+    """
+    One-shot: writes MS_REDIRECT_URI and FRONTEND_BASE_URL into /app/backend/.env on this pod,
+    derived from PUBLIC_BASE_URL. Used right after prod deploy when dashboard env edits are
+    not exposed to the agent. Gated by BRAIN_INGRESS_TOKEN.
+    """
+    expected = os.environ.get("BRAIN_INGRESS_TOKEN", "")
+    token = (authorization or "").replace("Bearer ", "").strip()
+    if not expected or token != expected:
+        raise HTTPException(401, "Bad bootstrap token")
+    base = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
+    if not base:
+        raise HTTPException(400, "PUBLIC_BASE_URL not set; cannot derive URLs")
+    env_path = ROOT_DIR / ".env"
+    try:
+        text = env_path.read_text() if env_path.exists() else ""
+    except Exception as e:
+        raise HTTPException(500, f"Cannot read .env: {e}")
+    lines = [l for l in text.splitlines()
+             if not l.startswith("MS_REDIRECT_URI=") and not l.startswith("FRONTEND_BASE_URL=")]
+    lines.append(f'MS_REDIRECT_URI="{base}/api/email/oauth/callback"')
+    lines.append(f'FRONTEND_BASE_URL="{base}"')
+    env_path.write_text("\n".join(lines) + "\n")
+    os.environ["MS_REDIRECT_URI"] = f"{base}/api/email/oauth/callback"
+    os.environ["FRONTEND_BASE_URL"] = base
+    return {"ok": True,
+            "MS_REDIRECT_URI": os.environ["MS_REDIRECT_URI"],
+            "FRONTEND_BASE_URL": os.environ["FRONTEND_BASE_URL"]}
+
+
 # ============ Routes: Chat ============
 LOCK_PATTERNS = [
     "lock this in:",
