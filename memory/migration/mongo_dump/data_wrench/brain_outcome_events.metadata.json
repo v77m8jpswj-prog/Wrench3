@@ -1,0 +1,1 @@
+{"indexes":[{"v":{"$numberInt":"2"},"key":{"_id":{"$numberInt":"1"}},"name":"_id_"}],"uuid":"b3e3eb54a31f42ada7b13717f5f355c4","collectionName":"brain_outcome_events","type":"collection"}

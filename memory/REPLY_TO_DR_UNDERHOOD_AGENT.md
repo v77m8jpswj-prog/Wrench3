@@ -4,7 +4,7 @@ The brain (Data Wrench / Foreman Bot) is built and live. Here are the items you 
 
 PUBLIC HTTPS BASE URL: https://dialogue-bot-9.preview.emergentagent.com (preview, stable until we hit Deploy — I'll send the production URL after that)
 
-BEARER TOKEN: a1680ebe47a8b56801b44a478a0b40655c128ab424ce8035e11df89cb310558d
+BEARER TOKEN: <REDACTED_BRAIN_INGRESS_TOKEN>
 
 Add this to your backend .env as BRAIN_API_TOKEN. Send it in every request as Authorization: Bearer <token>. We stored the same value on our side as BRAIN_INGRESS_TOKEN.
 

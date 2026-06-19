@@ -498,7 +498,7 @@ If you ever want defense-in-depth, send a custom header like X-App-Identifier: d
 
 outcome: "FIXED" | "PARTIAL" | "NOT_FIXED" (uppercase, on both /learn and /feedback)
 
-Token unchanged: a1680ebe47a8b56801b44a478a0b40655c128ab424ce8035e11df89cb310558d
+Token unchanged: <REDACTED_BRAIN_INGRESS_TOKEN>
 
 3. NEW ENDPOINT: GET /api/brain/cases (paginated index — your request "C")
 

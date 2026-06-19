@@ -16,7 +16,7 @@ BASE_URL = (os.environ.get("REACT_APP_BACKEND_URL")
 API = f"{BASE_URL}/api"
 
 OWNER = {"email": "doc@drunderhood.com", "password": "wrench"}
-BRAIN_TOKEN = "a1680ebe47a8b56801b44a478a0b40655c128ab424ce8035e11df89cb310558d"
+BRAIN_TOKEN = os.environ.get("BRAIN_INGRESS_TOKEN", "<REDACTED_BRAIN_INGRESS_TOKEN>")
 SHOP_ID = "drunderhood-fortsmith"
 
 
