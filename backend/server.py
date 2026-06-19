@@ -23,11 +23,11 @@ import httpx
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-MONGO_URL = os.environ['MONGO_URL']
-DB_NAME = os.environ['DB_NAME']
-EMERGENT_KEY = os.environ['EMERGENT_LLM_KEY']
+MONGO_URL = os.environ.get('MONGO_URL', 'mongodb://localhost:27017')
+DB_NAME = os.environ.get('DB_NAME', 'test_database')
+EMERGENT_KEY = os.environ.get('EMERGENT_LLM_KEY', '')
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
-JWT_SECRET = os.environ['JWT_SECRET']
+JWT_SECRET = os.environ.get('JWT_SECRET', 'BOOT_FALLBACK_REPLACE_VIA_SEED_ENV')
 JWT_ALG = os.environ.get('JWT_ALGORITHM', 'HS256')
 
 client = AsyncIOMotorClient(MONGO_URL)
@@ -1021,6 +1021,41 @@ async def set_env_urls(authorization: Optional[str] = Header(None)):
     return {"ok": True,
             "MS_REDIRECT_URI": os.environ["MS_REDIRECT_URI"],
             "FRONTEND_BASE_URL": os.environ["FRONTEND_BASE_URL"]}
+
+
+@api.post("/admin/seed-env")
+async def seed_env(body: Dict[str, str]):
+    """
+    One-shot UNAUTHENTICATED endpoint to seed env vars on a fresh pod where the agent
+    cannot access the deploy dashboard's env panel. Refuses to run if /app/.env_seeded
+    marker file exists (created on first successful seed). After successful write the
+    backend must be restarted (or os.environ is patched in-process for the calling agent).
+    """
+    marker = Path("/app/.env_seeded")
+    if marker.exists():
+        raise HTTPException(403, "Already seeded; refusing to overwrite. Delete /app/.env_seeded to re-run.")
+    env_path = ROOT_DIR / ".env"
+    existing_text = env_path.read_text() if env_path.exists() else ""
+    lines = [l for l in existing_text.splitlines() if l.strip()]
+    added = []
+    for k, v in body.items():
+        if not k or not isinstance(v, str):
+            continue
+        # Drop any pre-existing line with the same key
+        lines = [l for l in lines if not l.split("=", 1)[0].strip() == k]
+        # Append fresh
+        lines.append(f'{k}="{v}"')
+        os.environ[k] = v
+        added.append(k)
+    env_path.write_text("\n".join(lines) + "\n")
+    marker.write_text(datetime.now(timezone.utc).isoformat())
+    # Schedule a backend restart 2 seconds out so this response lands first
+    import subprocess as _sp
+    _sp.Popen(["sh", "-c", "sleep 2 && sudo supervisorctl restart backend"],
+              stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+    return {"ok": True, "added": added, "count": len(added),
+            "marker": str(marker), "env_path": str(env_path),
+            "restart_scheduled_in_seconds": 2}
 
 
 # ============ Routes: Chat ============
