@@ -26,6 +26,13 @@ export default function Chat() {
   const [showSessions, setShowSessions] = useState(false);
   const [showOptions, setShowOptions] = useState(false);
   const [copiedNoteId, setCopiedNoteId] = useState("");
+  const [debugMode, setDebugMode] = useState(() => localStorage.getItem("dw_debug") === "1");
+  const [lastDebug, setLastDebug] = useState(null);
+  const toggleDebug = () => {
+    const next = !debugMode;
+    setDebugMode(next);
+    localStorage.setItem("dw_debug", next ? "1" : "0");
+  };
 
   // Mark artifacts as seen when chat opens
   useEffect(() => {
@@ -335,8 +342,9 @@ export default function Chat() {
     } catch (e) {
       // Fallback to non-streaming if stream chokes
       try {
-        const r = await api.post("/chat", { message: finalText, session_id: sessionId, mode, vehicle_id: vehicleId || null });
+        const r = await api.post("/chat", { message: finalText, session_id: sessionId, mode, vehicle_id: vehicleId || null }, { params: debugMode ? { debug: 1 } : {} });
         setSessionId(r.data.session_id);
+        if (r.data.debug) setLastDebug(r.data.debug);
         const reply = r.data.reply || "";
         setMessages(m => {
           const copy = [...m];
@@ -852,8 +860,45 @@ export default function Chat() {
           <button data-testid="sessions-toggle" onClick={()=>setShowSessions(s=>!s)} className="btn-ghost text-xs flex items-center gap-2"><History size={14}/>HISTORY</button>
           <button data-testid="save-as-case" onClick={saveAsCase} className="btn-ghost text-xs flex items-center gap-2" title="Drop this chat into the BRAIN as a case Wrench can recall later"><FolderPlus size={14}/>SAVE AS CASE</button>
           <button data-testid="new-session" onClick={newSession} className="btn-ghost text-xs">+ NEW</button>
+          <button
+            data-testid="debug-toggle"
+            onClick={toggleDebug}
+            className={`btn-ghost text-xs ${debugMode ? "border-amber2 text-amber2" : ""}`}
+            title="Debug mode: shows session_id, vehicle resolved, system prompt, model, etc. under each reply"
+          >
+            {debugMode ? "DEBUG ON" : "DEBUG"}
+          </button>
         </div>
       </div>
+      {debugMode && lastDebug && (
+        <div data-testid="debug-panel" className="mt-3 border border-amber2/40 bg-amber2/5 p-3 text-[11px] font-mono text-ink-2 whitespace-pre-wrap break-all">
+          <div className="text-amber2 font-bold uppercase tracking-widest mb-2">DEBUG · LAST REPLY</div>
+          <div>session_id: {lastDebug.session_id}</div>
+          <div>vehicle: {lastDebug.vehicle_resolved?.id ? `${lastDebug.vehicle_resolved.year||""} ${lastDebug.vehicle_resolved.make||""} ${lastDebug.vehicle_resolved.model||""} (id ${(lastDebug.vehicle_resolved.id||"").slice(0,8)}) [${lastDebug.vehicle_resolved.source}]` : `NONE [${lastDebug.vehicle_resolved?.source}]`}</div>
+          <div>mode: {lastDebug.mode} · heat: {String(lastDebug.heat_detected)} · model: {lastDebug.model_provider}/{lastDebug.model_name}</div>
+          <div>history_turns_sent: {lastDebug.prior_history_count} · system_prompt: {lastDebug.system_prompt_chars} chars · user_msg: {lastDebug.user_message_chars} chars · reply: {lastDebug.reply_chars} chars</div>
+          <div>memory_facts: {lastDebug.memory_facts_count} loaded · library_chunks: {lastDebug.library_chunks_count} retrieved</div>
+          <div>search_used: {String(lastDebug.search_block_used)} · images_appended: {lastDebug.search_images_appended}</div>
+          <details className="mt-2">
+            <summary className="cursor-pointer text-amber2">System prompt preview (first 2500 chars)</summary>
+            <pre className="mt-2 text-[10px] text-ink-3 whitespace-pre-wrap">{lastDebug.system_prompt_preview}</pre>
+          </details>
+          {lastDebug.memory_facts?.length > 0 && (
+            <details className="mt-1"><summary className="cursor-pointer text-amber2">Memory facts ({lastDebug.memory_facts.length})</summary>
+              <ul className="mt-1 text-[10px] text-ink-3 list-disc list-inside">
+                {lastDebug.memory_facts.map((f,i)=><li key={i}>{f}</li>)}
+              </ul>
+            </details>
+          )}
+          {lastDebug.library_sources?.length > 0 && (
+            <details className="mt-1"><summary className="cursor-pointer text-amber2">Library sources hit</summary>
+              <ul className="mt-1 text-[10px] text-ink-3 list-disc list-inside">
+                {lastDebug.library_sources.map((s,i)=><li key={i}>{s}</li>)}
+              </ul>
+            </details>
+          )}
+        </div>
+      )}
 
       {/* Mobile chat header strip — order-1 on mobile */}
       <div className="md:hidden order-1 px-3 py-2 border-b border-line bg-bg-2 flex items-center justify-between gap-2">

@@ -67,6 +67,7 @@ class ChatResp(BaseModel):
     reply: str
     citations: List[Dict[str, Any]] = []
     heat_detected: bool = False
+    debug: Optional[Dict[str, Any]] = None
 
 class ChartEditReq(BaseModel):
     table_text: str  # tab-separated grid pasted from HP Tuners
@@ -1082,7 +1083,7 @@ def _extract_lock_request(msg: str) -> Optional[str]:
 
 
 @api.post("/chat", response_model=ChatResp)
-async def chat(body: ChatReq, user=Depends(get_user)):
+async def chat(body: ChatReq, user=Depends(get_user), debug: int = 0):
     session_id = body.session_id or str(uuid.uuid4())
     heat = detect_heat(body.message)
 
@@ -1366,7 +1367,36 @@ async def chat(body: ChatReq, user=Depends(get_user)):
     )
 
     citations = [{"source": c.get("source"), "snippet": c.get("text","")[:240]} for c in lib_chunks]
-    return ChatResp(session_id=session_id, reply=reply_text, citations=citations, heat_detected=heat)
+    debug_info = None
+    if debug:
+        final_sys = chat_obj.system_message if hasattr(chat_obj, "system_message") else (sys_prompt + search_block)
+        debug_info = {
+            "session_id": session_id,
+            "vehicle_resolved": {
+                "id": (vehicle or {}).get("id"),
+                "year": (vehicle or {}).get("year"),
+                "make": (vehicle or {}).get("make"),
+                "model": (vehicle or {}).get("model"),
+                "vin": (vehicle or {}).get("vin"),
+                "source": "passed_in" if body.vehicle_id else ("inferred_from_message" if inferred_from_message else ("sticky_active" if vehicle else "none")),
+            },
+            "mode": body.mode,
+            "heat_detected": heat,
+            "memory_facts_count": len(memory_facts),
+            "memory_facts": memory_facts[:5],
+            "library_chunks_count": len(lib_chunks),
+            "library_sources": [c.get("source") for c in lib_chunks],
+            "prior_history_count": len(prior) if 'prior' in dir() else 0,
+            "system_prompt_chars": len(final_sys),
+            "system_prompt_preview": final_sys[:2500] + ("\n...[truncated]" if len(final_sys) > 2500 else ""),
+            "model_provider": model_provider,
+            "model_name": model_name,
+            "user_message_chars": len(body.message),
+            "reply_chars": len(reply_text),
+            "search_block_used": bool(search_block),
+            "search_images_appended": len(search_images) if 'search_images' in dir() else 0,
+        }
+    return ChatResp(session_id=session_id, reply=reply_text, citations=citations, heat_detected=heat, debug=debug_info)
 
 
 @api.post("/chat/stream")
