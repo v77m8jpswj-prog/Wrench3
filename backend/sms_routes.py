@@ -32,6 +32,7 @@ def make_router(db, get_user):
     router = APIRouter()
 
     @router.post("/sms/inbound")
+    @router.post("/sms/incoming")
     async def sms_inbound(
         request: Request,
         From: str = Form(""),
@@ -41,6 +42,8 @@ def make_router(db, get_user):
         NumMedia: int = Form(0),
         FromCity: str = Form(""),
         FromState: str = Form(""),
+        MediaUrl0: str = Form(""),
+        MediaContentType0: str = Form(""),
     ):
         """Twilio webhook. Validates only on production via signature optional check.
         We keep this permissive so dev/preview testing works without ngrok.
@@ -76,6 +79,81 @@ def make_router(db, get_user):
                     break
 
         if is_owner_reply:
+            # === VIN-snap intercept: if Doc sent a photo, OCR it for a VIN before
+            # falling into the customer-forward logic. ===
+            if NumMedia and NumMedia > 0 and MediaUrl0 and (MediaContentType0 or "").startswith("image/"):
+                try:
+                    from vin_capture import (
+                        ocr_vin_from_image, decode_vin,
+                        upsert_vehicle_for_owner, set_active_vehicle,
+                    )
+                    openai_key = os.environ.get("OPENAI_API_KEY", "")
+                    # Twilio media URLs require basic auth with Twilio creds to fetch
+                    twilio_sid = os.environ.get("TWILIO_ACCOUNT_SID", "")
+                    twilio_tok = os.environ.get("TWILIO_AUTH_TOKEN", "")
+                    fetch_url = MediaUrl0
+                    if twilio_sid and twilio_tok and "api.twilio.com" in MediaUrl0:
+                        fetch_url = MediaUrl0.replace(
+                            "https://", f"https://{twilio_sid}:{twilio_tok}@", 1
+                        )
+                    vin = await ocr_vin_from_image(fetch_url, openai_key)
+                    owner_doc = matched_owner or (
+                        await db.users.find_one({"role": "owner"}, {"_id": 0}) or {}
+                    )
+                    if vin and owner_doc.get("id"):
+                        decoded = await decode_vin(vin)
+                        veh = await upsert_vehicle_for_owner(db, owner_doc, decoded)
+                        await set_active_vehicle(db, owner_doc["id"], veh["id"])
+                        reply_lines = [
+                            f"VIN {vin} loaded.",
+                            f"{decoded.get('year','')} {decoded.get('make','')} {decoded.get('model','')} {decoded.get('trim','')}".strip(),
+                        ]
+                        eng_bits = veh.get("engine", "").strip()
+                        if eng_bits:
+                            reply_lines.append(eng_bits)
+                        reply_lines.append("Active in /chat. Diag ready.")
+                        reply_text = "\n".join([l for l in reply_lines if l])
+                        try:
+                            from twilio_mod import send_sms
+                            await send_sms(owner_cell, reply_text)
+                        except Exception as e:
+                            log.warning("VIN reply SMS failed: %s", e)
+                        await db.sms_messages.insert_one({
+                            "id": str(uuid.uuid4()),
+                            "direction": "inbound",
+                            "kind": "vin_snap_loaded",
+                            "from_number": From,
+                            "to_number": To,
+                            "body": Body or "(vin photo)",
+                            "vin": vin,
+                            "vehicle_id": veh["id"],
+                            "media_url": MediaUrl0,
+                            "twilio_sid": MessageSid,
+                            "created_at": ts,
+                        })
+                        return Response(content="<Response/>", media_type="application/xml")
+                    elif owner_doc.get("id") and not vin:
+                        # photo sent but no VIN detected — short reply so Doc knows
+                        try:
+                            from twilio_mod import send_sms
+                            await send_sms(owner_cell, "Got the pic but I couldn't read a VIN out of it. Try again closer / better lit.")
+                        except Exception:
+                            pass
+                        await db.sms_messages.insert_one({
+                            "id": str(uuid.uuid4()),
+                            "direction": "inbound",
+                            "kind": "vin_snap_no_vin",
+                            "from_number": From,
+                            "to_number": To,
+                            "body": Body or "(photo, no VIN)",
+                            "media_url": MediaUrl0,
+                            "twilio_sid": MessageSid,
+                            "created_at": ts,
+                        })
+                        return Response(content="<Response/>", media_type="application/xml")
+                except Exception as e:
+                    log.warning("VIN-snap intercept error (continuing to fallback): %s", e)
+            # === end VIN-snap intercept ===
             # Find the most recent inbound from a non-owner number (the customer)
             last_cust = await db.sms_messages.find_one(
                 {"direction": "inbound", "from_number": {"$ne": owner_cell}},
